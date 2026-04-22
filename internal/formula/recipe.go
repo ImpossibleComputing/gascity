@@ -37,6 +37,16 @@ type Recipe struct {
 	// without materializing child steps. This is the default for
 	// vapor-phase formulas (patrol wisps).
 	RootOnly bool
+
+	// ContentHash is the SHA-256 hex digest of the source formula file.
+	// Propagated from Formula.ContentHash during compilation.
+	ContentHash string
+
+	// FormulaVersion is the semantic version from the formula definition.
+	FormulaVersion int
+
+	// FormulaSource is the file path from which the formula was loaded.
+	FormulaSource string
 }
 
 // RecipeStep represents a single step in a compiled recipe.

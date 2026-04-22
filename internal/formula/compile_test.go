@@ -2226,3 +2226,42 @@ description = "Review the {{feature}} implementation."
 		}
 	})
 }
+
+func TestCompile_PropagatesContentHash(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+formula = "mol-hash-prop"
+description = "Hash propagation test"
+version = 7
+
+[[steps]]
+id = "work"
+title = "Do work"
+type = "task"
+`
+	path := filepath.Join(dir, "mol-hash-prop.toml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recipe, err := Compile(context.Background(), "mol-hash-prop", []string{dir}, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if recipe.ContentHash == "" {
+		t.Fatal("ContentHash should propagate from Formula to Recipe")
+	}
+	if recipe.FormulaVersion != 7 {
+		t.Errorf("FormulaVersion = %d, want 7", recipe.FormulaVersion)
+	}
+	if recipe.FormulaSource == "" {
+		t.Fatal("FormulaSource should propagate from Formula to Recipe")
+	}
+
+	// Verify hash matches direct computation
+	want := ContentHash([]byte(content))
+	if recipe.ContentHash != want {
+		t.Errorf("ContentHash = %q, want %q", recipe.ContentHash, want)
+	}
+}

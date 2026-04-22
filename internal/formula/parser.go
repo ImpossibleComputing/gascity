@@ -1,6 +1,8 @@
 package formula
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -138,6 +140,7 @@ func (p *Parser) ParseFile(path string) (*Formula, error) {
 	}
 
 	formula.Source = absPath
+	formula.ContentHash = contentHash(data)
 
 	// Set source tracing info on all steps (gt-8tmz.18)
 	SetSourceInfo(formula)
@@ -684,4 +687,16 @@ func setSourceInfoRecursive(steps []*Step, formulaName, pathPrefix string) {
 			setSourceInfoRecursive(step.Loop.Body, formulaName, bodyPath)
 		}
 	}
+}
+
+func contentHash(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// ContentHash returns the SHA-256 hex digest of arbitrary bytes. Useful for
+// callers that need to compute a formula content hash from raw file data
+// outside the parser.
+func ContentHash(data []byte) string {
+	return contentHash(data)
 }

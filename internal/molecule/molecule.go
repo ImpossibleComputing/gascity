@@ -541,10 +541,19 @@ func Instantiate(ctx context.Context, store beads.Store, recipe *formula.Recipe,
 			if opts.ParentID != "" && step.Metadata["gc.kind"] != "workflow" {
 				b.ParentID = opts.ParentID
 			}
+			if b.Metadata == nil {
+				b.Metadata = make(map[string]string, 4)
+			}
+			if recipe.ContentHash != "" {
+				b.Metadata["gc.formula_hash"] = recipe.ContentHash
+			}
+			if recipe.FormulaVersion > 0 {
+				b.Metadata["gc.formula_version"] = strconv.Itoa(recipe.FormulaVersion)
+			}
+			if recipe.FormulaSource != "" {
+				b.Metadata["gc.formula_source"] = recipe.FormulaSource
+			}
 			if opts.IdempotencyKey != "" {
-				if b.Metadata == nil {
-					b.Metadata = make(map[string]string, 1)
-				}
 				b.Metadata["idempotency_key"] = opts.IdempotencyKey
 			}
 		} else {

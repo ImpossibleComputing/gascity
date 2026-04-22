@@ -2440,6 +2440,20 @@ func TestInstantiate_NonRootStepsGetStepType(t *testing.T) {
 			{StepID: "mol-demo.step-a", DependsOnID: "mol-demo", Type: "parent-child"},
 			{StepID: "mol-demo.step-b", DependsOnID: "mol-demo", Type: "parent-child"},
 			{StepID: "mol-demo.step-c", DependsOnID: "mol-demo", Type: "parent-child"},
+func TestInstantiateStampsFormulaHash(t *testing.T) {
+	store := beads.NewMemStore()
+	recipe := &formula.Recipe{
+		Name:           "mol-hash-check",
+		Description:    "Test hash stamping",
+		ContentHash:    "abc123def456",
+		FormulaVersion: 5,
+		FormulaSource:  "/path/to/mol-hash-check.toml",
+		Steps: []formula.RecipeStep{
+			{ID: "mol-hash-check", Title: "Root", Type: "molecule", IsRoot: true},
+			{ID: "mol-hash-check.step-a", Title: "Step A", Type: "task"},
+		},
+		Deps: []formula.RecipeDep{
+			{StepID: "mol-hash-check.step-a", DependsOnID: "mol-hash-check", Type: "parent-child"},
 		},
 	}
 
@@ -2569,6 +2583,38 @@ func TestInstantiate_GraphWorkflowSkipsStepCoercion(t *testing.T) {
 		},
 		Deps: []formula.RecipeDep{
 			{StepID: "wf.body", DependsOnID: "wf", Type: "parent-child"},
+	root, err := store.Get(result.RootID)
+	if err != nil {
+		t.Fatalf("Get root: %v", err)
+	}
+
+	if got := root.Metadata["gc.formula_hash"]; got != "abc123def456" {
+		t.Errorf("gc.formula_hash = %q, want %q", got, "abc123def456")
+	}
+	if got := root.Metadata["gc.formula_version"]; got != "5" {
+		t.Errorf("gc.formula_version = %q, want %q", got, "5")
+	}
+	if got := root.Metadata["gc.formula_source"]; got != "/path/to/mol-hash-check.toml" {
+		t.Errorf("gc.formula_source = %q, want %q", got, "/path/to/mol-hash-check.toml")
+	}
+
+	// Non-root beads should NOT have formula hash metadata
+	stepAID := result.IDMapping["mol-hash-check.step-a"]
+	stepA, err := store.Get(stepAID)
+	if err != nil {
+		t.Fatalf("Get step-a: %v", err)
+	}
+	if _, ok := stepA.Metadata["gc.formula_hash"]; ok {
+		t.Error("non-root bead should not have gc.formula_hash")
+	}
+}
+
+func TestInstantiateNoHashWhenEmpty(t *testing.T) {
+	store := beads.NewMemStore()
+	recipe := &formula.Recipe{
+		Name: "mol-no-hash",
+		Steps: []formula.RecipeStep{
+			{ID: "mol-no-hash", Title: "Root", Type: "molecule", IsRoot: true},
 		},
 	}
 
@@ -2728,5 +2774,15 @@ func TestInstantiate_DeferredStepsStayGate(t *testing.T) {
 	}
 	if b.Type != "gate" {
 		t.Errorf("deferred step.Type = %q, want %q", b.Type, "gate")
+	root, err := store.Get(result.RootID)
+	if err != nil {
+		t.Fatalf("Get root: %v", err)
+	}
+
+	if _, ok := root.Metadata["gc.formula_hash"]; ok {
+		t.Error("gc.formula_hash should not be set when ContentHash is empty")
+	}
+	if _, ok := root.Metadata["gc.formula_version"]; ok {
+		t.Error("gc.formula_version should not be set when FormulaVersion is 0")
 	}
 }
