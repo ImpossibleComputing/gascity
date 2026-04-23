@@ -125,6 +125,7 @@ func routeBeadsList(cityPath string, c *api.Client, nilReason, format string, fi
 		cr, err := c.ListBeads(api.ListBeadsOpts{
 			Label:  filters.label,
 			Status: filters.status,
+			All:    filters.all,
 		})
 		if err == nil {
 			logRoute(stderr, cmdName, "api", "")
@@ -268,13 +269,15 @@ func doBeadsShowFallback(cityPath, beadID, format string, stdout, stderr io.Writ
 
 // collectBeadsAcrossStores iterates every opened bead store, applies the
 // CLI-side filters, and returns a merged slice. The caller is responsible
-// for sorting.
+// for sorting. --all maps to IncludeClosed (matching `bd list --all`); the
+// CLI always opts into AllowScan because an unfiltered list is a valid
+// default UX.
 func collectBeadsAcrossStores(stores []convoyStoreView, filters beadFilters) ([]beads.Bead, error) {
-	var q beads.ListQuery
-	q.Label = filters.label
-	q.Status = filters.status
-	if !filters.all {
-		q.AllowScan = true
+	q := beads.ListQuery{
+		Label:         filters.label,
+		Status:        filters.status,
+		IncludeClosed: filters.all,
+		AllowScan:     true,
 	}
 	all := make([]beads.Bead, 0)
 	for _, candidate := range stores {

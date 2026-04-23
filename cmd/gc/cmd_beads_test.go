@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -421,6 +422,75 @@ func TestRouteBeadsList_StaleBannerOver30s(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "cache age: 45s") {
 		t.Errorf("stale banner missing from human output:\n%s", stdout.String())
+	}
+}
+
+// TestRouteBeadsList_AllFlag_Fallback verifies that `--all` on the fallback
+// path succeeds without a 'bead query requires scan' error and returns closed
+// beads alongside open ones. Guards the B1 regression (inverted AllowScan
+// logic) and the C1 parity concern (filters.all must plumb through).
+func TestRouteBeadsList_AllFlag_Fallback(t *testing.T) {
+	t.Setenv("GC_DEBUG", "0")
+	cityPath := writeBeadsTestCity(t)
+
+	// Without any filter and without --all, default CLI should still list
+	// (AllowScan permitted so the user sees active beads).
+	var stdout, stderr bytes.Buffer
+	code := doBeadsListFallback(cityPath, "text", beadFilters{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("default list fallback: exit = %d, stderr=%q", code, stderr.String())
+	}
+
+	// With --all and no other filter, the fallback must not return
+	// 'bead query requires scan'. This is the B1 regression.
+	stdout.Reset()
+	stderr.Reset()
+	code = doBeadsListFallback(cityPath, "text", beadFilters{all: true}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("--all fallback: exit = %d, stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "requires scan") {
+		t.Errorf("--all must not trigger 'requires scan' error; stderr=%q", stderr.String())
+	}
+}
+
+// TestRouteBeadsList_AllFlag_APIQuery verifies that `--all` forwards as the
+// `all=true` query parameter on the API path, so the server can set
+// IncludeClosed. Without this, API path silently diverges from fallback.
+func TestRouteBeadsList_AllFlag_APIQuery(t *testing.T) {
+	t.Setenv("GC_DEBUG", "0")
+	cityPath := writeBeadsTestCity(t)
+
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("X-GC-Cache-Age-S", "1")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{},
+			"total": 0,
+		})
+	}))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	if code := routeBeadsList(cityPath, c, "", "text", beadFilters{all: true}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", code, stderr.String())
+	}
+	if got := gotQuery.Get("all"); got != "true" {
+		t.Errorf("API query param all = %q, want %q; full query=%v", got, "true", gotQuery)
+	}
+
+	// Sanity: without --all, no 'all' param is sent.
+	stdout.Reset()
+	stderr.Reset()
+	gotQuery = nil
+	if code := routeBeadsList(cityPath, c, "", "text", beadFilters{}, &stdout, &stderr); code != 0 {
+		t.Fatalf("no-all exit = %d, stderr=%q", code, stderr.String())
+	}
+	if got := gotQuery.Get("all"); got == "true" {
+		t.Errorf("API query param all sent without --all flag: got=%q", got)
 	}
 }
 

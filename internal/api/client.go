@@ -625,7 +625,8 @@ func (c *Client) CheckConvoy(id string) (CachedRead[ConvoyCheckView], error) {
 
 // ListBeadsOpts is the optional filter set for ListBeads. All fields are
 // zero-valued by default; the server falls back to its own defaults when a
-// field is empty.
+// field is empty. All mirrors the CLI --all flag and maps to the server's
+// IncludeClosed query semantic.
 type ListBeadsOpts struct {
 	Status   string
 	Type     string
@@ -633,6 +634,7 @@ type ListBeadsOpts struct {
 	Assignee string
 	Rig      string
 	Limit    int
+	All      bool
 }
 
 // ListBeads fetches beads across all rigs via
@@ -664,6 +666,10 @@ func (c *Client) ListBeads(opts ListBeadsOpts) (CachedRead[[]beads.Bead], error)
 	if opts.Limit > 0 {
 		lim := int64(opts.Limit)
 		params.Limit = &lim
+	}
+	if opts.All {
+		t := true
+		params.All = &t
 	}
 	resp, err := c.cw.GetV0CityByCityNameBeadsWithResponse(context.Background(), c.cityName, params)
 	if err != nil {

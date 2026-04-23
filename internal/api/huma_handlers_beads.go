@@ -51,11 +51,12 @@ func (s *Server) humaHandleBeadList(ctx context.Context, input *BeadListInput) (
 		store := stores[rigName]
 		for _, assignee := range assigneeTerms {
 			query := beads.ListQuery{
-				Status:   input.Status,
-				Type:     input.Type,
-				Label:    input.Label,
-				Assignee: assignee,
-				Live:     input.Status == "in_progress",
+				Status:        input.Status,
+				Type:          input.Type,
+				Label:         input.Label,
+				Assignee:      assignee,
+				IncludeClosed: input.All,
+				Live:          input.Status == "in_progress",
 			}
 			if !query.HasFilter() {
 				query.AllowScan = true
