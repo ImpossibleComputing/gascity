@@ -277,6 +277,7 @@ func (cs *controllerState) startMaintenanceLoop(ctx context.Context) {
 	cfg := cs.cfg
 	store := cs.cityBeadStore
 	cityPath := cs.cityPath
+	mailProv := cs.cityMailProv
 	cs.mu.RUnlock()
 	if cfg == nil || !cfg.Maintenance.Dolt.Enabled {
 		return
@@ -287,6 +288,7 @@ func (cs *controllerState) startMaintenanceLoop(ctx context.Context) {
 		CityPath:  cityPath,
 		Recorder:  cs.eventProv,
 		Stderr:    os.Stderr,
+		Mail:      mailProv,
 		LastRunAt: supervisor.SeedLastRunAt(cs.eventProv),
 	})
 	go loop.Run(ctx)
