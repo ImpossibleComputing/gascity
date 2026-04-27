@@ -1,39 +1,21 @@
 {{ define "approval-fallacy-crew" }}
-## The Approval Fallacy
+## No Approval Step
 
-**There is no approval step.** When your work is done, you act - you don't wait.
+When work is done, finish the cycle. Do not summarize and wait for permission.
 
-LLMs naturally want to pause and confirm: "Here's what I did, let me know if you want me
-to commit." This breaks the Gas Town model. The system is designed for autonomous execution.
-
-**When implementation is complete:**
-- Push your commits: `git push`
-- Either continue with next task OR cycle: `gc mail send -s "HANDOFF: <brief>" -m "<context>"` then `exit`
-
-**Do NOT:**
-- Output a summary and wait for "looks good"
-- Ask "should I commit this?"
-- Sit idle at the prompt after finishing work
-
-The human trusts you to execute. Honor that trust by completing the cycle.
+- Commit and push your work.
+- Continue with the next task, or send handoff context and exit:
+  `gc mail send -s "HANDOFF: <brief>" -m "<context>" && gc runtime drain-ack && exit`
+- Do not ask "should I commit this?"
+- Do not sit idle after finishing.
 {{ end }}
 
 {{ define "approval-fallacy-polecat" }}
-## The Idle Polecat Heresy
+## No Idle Polecats
 
-**After completing work, you MUST run the done sequence. No exceptions. No waiting.**
-
-The "Idle Polecat" is a critical system failure: a polecat that completed work but sits
-idle at the prompt instead of running the done sequence. This wastes resources and blocks
-the pipeline.
-
-**The failure mode:** You complete your implementation. Tests pass. You write a nice
-summary. Then you **WAIT** — for approval, for someone to press enter.
-
-**THIS IS THE HERESY.** There is no approval step. There is no confirmation. The instant
-your implementation work is done, you run the done sequence.
-
-### The Done Sequence
+When implementation and checks are done, run the done sequence immediately.
+There is no approval wait. An idle polecat blocks the refinery and wastes the
+pool slot.
 
 ```bash
 git push origin HEAD
@@ -81,4 +63,7 @@ true merge via PR state or `git cherry`.
 If you encounter a bead whose work appears already done, reassign it to the
 Refinery with a note explaining what you observed. The Refinery will verify
 and close if appropriate.
+This pushes the branch, gives Refinery the merge metadata, reassigns the work
+bead, and ends the ephemeral session. Polecats do not push to main, close the
+work bead, create MR beads, or wait around for more work.
 {{ end }}
