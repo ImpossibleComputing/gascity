@@ -21,6 +21,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/progname"
 	"github.com/gastownhall/gascity/internal/supervisor"
 	"github.com/gastownhall/gascity/internal/telemetry"
 	"github.com/spf13/cobra"
@@ -130,6 +131,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		cityFlag = prevCityFlag
 		rigFlag = prevRigFlag
 	}()
+
+	// Publish the runtime binary name so internal/ packages can reference it
+	// in error messages and log output without importing cmd/gc.
+	progname.Set(prog())
 
 	// Initialize OTel telemetry (opt-in via GC_OTEL_METRICS_URL / GC_OTEL_LOGS_URL).
 	provider, err := telemetry.Init(context.Background(), "gascity", version)
