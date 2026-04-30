@@ -72,8 +72,20 @@ type CleanupDropFailure struct {
 
 // CleanupPurgeReport summarises the purge step.
 type CleanupPurgeReport struct {
-	OK             bool  `json:"ok"`
-	BytesReclaimed int64 `json:"bytes_reclaimed"`
+	OK             bool                    `json:"ok"`
+	BytesReclaimed int64                   `json:"bytes_reclaimed"`
+	// Directories enumerates the per-rig .dolt_dropped_databases entries
+	// the purge step would (or did) reclaim. One row per rig with at
+	// least one dropped-database dir.
+	Directories []CleanupPurgeDirectory `json:"directories"`
+}
+
+// CleanupPurgeDirectory describes one rig's .dolt_dropped_databases tree.
+type CleanupPurgeDirectory struct {
+	Rig   string `json:"rig"`
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes"`
+	Count int    `json:"count"`
 }
 
 // CleanupReapedReport summarises the orphan-process reap step.
@@ -130,6 +142,9 @@ func (r CleanupReport) MarshalJSON() ([]byte, error) {
 	}
 	if r.Dropped.Names == nil {
 		r.Dropped.Names = []string{}
+	}
+	if r.Purge.Directories == nil {
+		r.Purge.Directories = []CleanupPurgeDirectory{}
 	}
 	if r.Errors == nil {
 		r.Errors = []CleanupError{}
@@ -326,7 +341,8 @@ func emitHumanReport(report CleanupReport, resolution PortResolution, opts clean
 		fmt.Fprintf(stdout, "Dolt server: %s:%d (resolved from %s)\n", host, resolution.Port, resolution.Source) //nolint:errcheck
 	}
 
-	emitDroppedSection(report, stdout)
+	emitDroppedDirsSection(report, stdout)
+	emitStaleDatabasesSection(report, stdout)
 	emitOrphansSection(report, stdout)
 	emitProtectedSection(report, stdout)
 	emitErrorsOrSummary(report, opts, stdout)
@@ -336,10 +352,34 @@ func emitHumanReport(report CleanupReport, resolution PortResolution, opts clean
 	}
 }
 
-func emitDroppedSection(report CleanupReport, stdout io.Writer) {
-	fmt.Fprintln(stdout, "")                                                                                  //nolint:errcheck
-	fmt.Fprintf(stdout, "DROPPED-DATABASE DIRECTORIES (%d)\n", report.Dropped.Count)                         //nolint:errcheck
-	if len(report.Dropped.Names) == 0 {
+// emitDroppedDirsSection lists the per-rig .dolt_dropped_databases
+// entries the purge step would (or did) reclaim. This section answers
+// "how much disk would DOLT_PURGE_DROPPED_DATABASES free?" — it is NOT
+// the stale-DB drop list (those come from SHOW DATABASES filtering and
+// are rendered by emitStaleDatabasesSection).
+func emitDroppedDirsSection(report CleanupReport, stdout io.Writer) {
+	totalCount := 0
+	for _, d := range report.Purge.Directories {
+		totalCount += d.Count
+	}
+	fmt.Fprintln(stdout, "")                                                                  //nolint:errcheck
+	fmt.Fprintf(stdout, "DROPPED-DATABASE DIRECTORIES (%d, %s)\n", totalCount, formatBytes(report.Purge.BytesReclaimed)) //nolint:errcheck
+	if len(report.Purge.Directories) == 0 {
+		fmt.Fprintln(stdout, "  (none)") //nolint:errcheck
+		return
+	}
+	for _, d := range report.Purge.Directories {
+		fmt.Fprintf(stdout, "  rig %q  %d dirs  %s  %s\n", d.Rig, d.Count, formatBytes(d.Bytes), d.Path) //nolint:errcheck
+	}
+}
+
+// emitStaleDatabasesSection lists the active databases the drop step
+// targets — names from SHOW DATABASES that match a stale prefix and are
+// not protected by the rig registry.
+func emitStaleDatabasesSection(report CleanupReport, stdout io.Writer) {
+	fmt.Fprintln(stdout, "")                                                  //nolint:errcheck
+	fmt.Fprintf(stdout, "STALE DATABASES (%d)\n", report.Dropped.Count)       //nolint:errcheck
+	if len(report.Dropped.Names) == 0 && len(report.Dropped.Failed) == 0 {
 		fmt.Fprintln(stdout, "  (none)") //nolint:errcheck
 		return
 	}

@@ -34,13 +34,22 @@ func runPurgeStage(report *CleanupReport, opts cleanupOptions) {
 	var totalBytes int64
 	for _, rig := range opts.Rigs {
 		root := filepath.Join(rig.Path, droppedDatabasesDir)
-		bytes, err := sumBytesUnder(opts.FS, root)
+		bytes, count, err := summariseDroppedDir(opts.FS, root)
 		if err != nil {
 			// Missing directory is normal (no drops to reclaim) — only
 			// surface unexpected errors.
 			continue
 		}
+		if count == 0 && bytes == 0 {
+			continue
+		}
 		totalBytes += bytes
+		report.Purge.Directories = append(report.Purge.Directories, CleanupPurgeDirectory{
+			Rig:   rig.Name,
+			Path:  root,
+			Bytes: bytes,
+			Count: count,
+		})
 	}
 	report.Purge.BytesReclaimed = totalBytes
 
@@ -66,24 +75,24 @@ func runPurgeStage(report *CleanupReport, opts cleanupOptions) {
 	report.Purge.OK = allOK
 }
 
-// sumBytesUnder walks the given root recursively and returns the total
-// bytes of every regular file underneath. Returns 0, nil when the root
-// doesn't exist (callers treat this as "nothing to reclaim"). Symlinks
-// are followed via Stat (the dolt dropped-databases directory does not
-// contain symlinks in normal operation).
-func sumBytesUnder(fs fsys.FS, root string) (int64, error) {
+// summariseDroppedDir reads the root of a rig's
+// .dolt_dropped_databases/ directory and returns the total bytes
+// underneath plus the count of top-level entries (one per dropped DB).
+// Returns an error when the root doesn't exist (callers treat this as
+// "nothing to reclaim").
+func summariseDroppedDir(fs fsys.FS, root string) (int64, int, error) {
 	entries, err := fs.ReadDir(root)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var total int64
+	count := 0
 	for _, e := range entries {
 		full := filepath.Join(root, e.Name())
 		if e.IsDir() {
-			sub, err := sumBytesUnder(fs, full)
-			if err == nil {
-				total += sub
-			}
+			count++
+			sub := sumBytesUnder(fs, full)
+			total += sub
 			continue
 		}
 		info, err := fs.Stat(full)
@@ -92,5 +101,30 @@ func sumBytesUnder(fs fsys.FS, root string) (int64, error) {
 		}
 		total += info.Size()
 	}
-	return total, nil
+	return total, count, nil
+}
+
+// sumBytesUnder walks the given root recursively and returns the total
+// bytes of every regular file underneath. Symlinks are followed via Stat
+// (the dolt dropped-databases directory does not contain symlinks in
+// normal operation).
+func sumBytesUnder(fs fsys.FS, root string) int64 {
+	entries, err := fs.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		full := filepath.Join(root, e.Name())
+		if e.IsDir() {
+			total += sumBytesUnder(fs, full)
+			continue
+		}
+		info, err := fs.Stat(full)
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+	}
+	return total
 }
