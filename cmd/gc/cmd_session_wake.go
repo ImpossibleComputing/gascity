@@ -88,7 +88,7 @@ func cmdSessionWake(args []string, stdout, stderr io.Writer, jsonOutput ...bool)
 			"wake_request":              "",
 			"wake_requested_at":         "",
 		}); err != nil {
-			fmt.Fprintf(stderr, "gc session wake: updating metadata: %v\n", err) //nolint:errcheck
+			fmt.Fprintf(stderr, "%s: updating metadata: %v\n", cmdName("session wake"), err) //nolint:errcheck
 			return 1
 		}
 	}

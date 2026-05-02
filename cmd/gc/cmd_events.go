@@ -637,8 +637,11 @@ func shouldUseLocalCityEventsFallback(scope eventsAPIScope, apiErr error) bool {
 func printStreamingCityAPIRequirement(mode string, stderr io.Writer) {
 	_, _ = fmt.Fprintf(
 		stderr,
-		"gc events: %s requires a running city API; local fallback only supports `gc events` and `gc events --seq` when the city is stopped\n",
+		"%s: %s requires a running city API; local fallback only supports `%s events` and `%s events --seq` when the city is stopped\n",
+		cmdName("events"),
 		mode,
+		prog(),
+		prog(),
 	)
 }
 
