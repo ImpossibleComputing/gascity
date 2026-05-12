@@ -140,6 +140,7 @@ func doDoctor(fix, verbose, jsonOut bool, stdout, stderr io.Writer) int {
 	d.Register(&doctor.CityConfigCheck{})
 	registerV2DeprecationChecks(d)
 	d.Register(expandedConfigLoadCheck{})
+	d.Register(newBuiltinPackRegistryMigrationCheck(cityPath))
 	d.Register(&doctor.ImplicitImportCacheCheck{})
 	d.Register(&doctor.DeprecatedAttachmentFieldsCheck{})
 
