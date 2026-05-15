@@ -7,6 +7,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/mail"
+	_ "github.com/gastownhall/gascity/internal/pgauth" // register pgauth event payloads.
 )
 
 // API-layer event payload types. Every API emitter takes one of these

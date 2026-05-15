@@ -96,6 +96,7 @@ const (
 	WorkerOperation                 = "worker.operation"
 	ProjectIdentityStamped          = "project.identity.stamped"
 	SupervisorFSPressureSkippedTick = "supervisor.fs_pressure.skipped_tick"
+	PostgresCredentialResolved      = "pg.credential_resolved"
 
 	// External messaging events.
 	ExtMsgBound          = "extmsg.bound"
@@ -143,6 +144,7 @@ var KnownEventTypes = []string{
 	OrderFired, OrderCompleted, OrderFailed,
 	ProviderSwapped, WorkerOperation, ProjectIdentityStamped, SupervisorFSPressureSkippedTick,
 	SupervisorShutdownRequested,
+	PostgresCredentialResolved,
 	ExtMsgBound, ExtMsgUnbound, ExtMsgGroupCreated,
 	ExtMsgAdapterAdded, ExtMsgAdapterRemoved,
 	ExtMsgInbound, ExtMsgOutbound,

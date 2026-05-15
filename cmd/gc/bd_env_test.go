@@ -3524,7 +3524,7 @@ func TestApplyResolvedScopePostgresEnv_HappyPath(t *testing.T) {
 		PostgresUser:     "bd",
 		PostgresDatabase: "beads",
 	}
-	if err := applyResolvedScopePostgresEnv(env, scopeRoot, meta); err != nil {
+	if err := applyResolvedScopePostgresEnv(env, scopeRoot, scopeRoot, meta); err != nil {
 		t.Fatalf("applyResolvedScopePostgresEnv: %v", err)
 	}
 	want := map[string]string{
@@ -4032,7 +4032,7 @@ func TestApplyResolvedScopePostgresEnv_NoPasswordResolvable(t *testing.T) {
 		PostgresUser:     "bd",
 		PostgresDatabase: "beads",
 	}
-	err := applyResolvedScopePostgresEnv(env, scopeRoot, meta)
+	err := applyResolvedScopePostgresEnv(env, scopeRoot, scopeRoot, meta)
 	if err == nil {
 		t.Fatal("applyResolvedScopePostgresEnv = nil error, want resolver exhaustion")
 	}

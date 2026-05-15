@@ -72,6 +72,18 @@ func TestDoctorSkipsDoltChecksTreatsExecGcBeadsBdAsBdContract(t *testing.T) {
 	}
 }
 
+func TestDoctorCommandHasExplainPostgresAuthFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := newDoctorCmd(&stdout, &stderr)
+	flag := cmd.Flags().Lookup("explain-postgres-auth")
+	if flag == nil {
+		t.Fatal("doctor command missing --explain-postgres-auth flag")
+	}
+	if got, want := flag.Usage, "after running checks, print per-scope Postgres credential resolution table (no values printed)"; got != want {
+		t.Fatalf("flag usage = %q, want %q", got, want)
+	}
+}
+
 func TestDoctorSkipsDoltChecksDetectsBdRigUnderFileBackedCity(t *testing.T) {
 	cityDir := t.TempDir()
 	rigDir := filepath.Join(cityDir, "frontend")
@@ -222,7 +234,7 @@ prefix = "fe"
 	})
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, false, false, &stdout, &stderr)
+	_ = doDoctor(false, false, false, false, &stdout, &stderr)
 
 	if citySkip == nil || *citySkip {
 		t.Fatalf("city dolt check skip = %v, want false when a bd-backed rig inherits the city endpoint", citySkip)
@@ -310,7 +322,7 @@ suspended = true
 	})
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, false, false, &stdout, &stderr)
+	_ = doDoctor(false, false, false, false, &stdout, &stderr)
 
 	if len(registered) != 1 {
 		t.Fatalf("registered dolt-backup checks = %#v, want only active managed rig", registered)
@@ -388,7 +400,7 @@ prefix = "ma"
 	})
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, false, false, &stdout, &stderr)
+	_ = doDoctor(false, false, false, false, &stdout, &stderr)
 
 	if registered != 0 {
 		t.Fatalf("registered %d dolt-backup checks, want 0 when GC_DOLT=skip", registered)
@@ -448,7 +460,7 @@ dolt_port = "3308"
 	})
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, false, false, &stdout, &stderr)
+	_ = doDoctor(false, false, false, false, &stdout, &stderr)
 
 	if !strings.Contains(stdout.String(), "canonical/compat Dolt drift") {
 		t.Fatalf("doctor output missing Dolt topology drift:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
@@ -479,7 +491,7 @@ source = "https://github.com/gastownhall/gc-actual-packs"
 	cleanupManagedDoltTestCity(t, cityDir)
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, true, false, &stdout, &stderr)
+	_ = doDoctor(false, true, false, false, &stdout, &stderr)
 	out := stdout.String() + stderr.String()
 	if !strings.Contains(out, "stale-local-pack-dirs") {
 		t.Fatalf("doctor output missing stale-local-pack-dirs check:\n%s", out)
@@ -656,7 +668,7 @@ func runDoctorForStaleLocalPackDirTest(t *testing.T, cityDir string) string {
 	cleanupManagedDoltTestCity(t, cityDir)
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, true, false, &stdout, &stderr)
+	_ = doDoctor(false, true, false, false, &stdout, &stderr)
 	return stdout.String() + stderr.String()
 }
 
@@ -684,7 +696,7 @@ func TestDoDoctorReportsLegacyBDSplitStore(t *testing.T) {
 	t.Cleanup(func() { cityFlag = origCityFlag })
 
 	var stdout, stderr bytes.Buffer
-	_ = doDoctor(false, false, false, &stdout, &stderr)
+	_ = doDoctor(false, false, false, false, &stdout, &stderr)
 	out := stdout.String() + stderr.String()
 	if !strings.Contains(out, "bd-split-store") {
 		t.Fatalf("doctor output missing bd-split-store check:\n%s", out)

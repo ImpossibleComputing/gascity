@@ -37,6 +37,12 @@ type Check interface {
 	WarmupEligible() bool
 }
 
+// ExtraRenderer is implemented by checks that can print optional output after
+// the normal check summary. Callers gate rendering through CheckContext flags.
+type ExtraRenderer interface {
+	RenderExtras(ctx *CheckContext, w io.Writer)
+}
+
 // CheckContext carries shared state for all checks during a doctor run.
 type CheckContext struct {
 	// CityPath is the absolute path to the city root directory.
@@ -47,6 +53,8 @@ type CheckContext struct {
 	// Checks that need to surface fix-time diagnostics should use this
 	// writer so captured doctor output includes the diagnostics.
 	Output io.Writer
+	// ExplainPostgresAuth prints per-scope Postgres credential tier diagnostics.
+	ExplainPostgresAuth bool
 }
 
 // CheckResult holds the outcome of a single check execution.

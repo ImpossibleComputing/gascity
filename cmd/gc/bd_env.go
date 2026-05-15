@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doltauth"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/execenv"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/pgauth"
@@ -316,7 +318,7 @@ func applyCanonicalScopeBackendEnv(env map[string]string, cityPath, scopeRoot st
 		mirrorBeadsDoltEnv(env)
 		return true, nil
 	case "postgres":
-		if err := applyResolvedScopePostgresEnv(env, scopeRoot, meta); err != nil {
+		if err := applyResolvedScopePostgresEnv(env, cityPath, scopeRoot, meta); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -339,7 +341,7 @@ func applyCityPostgresBackendEnv(env map[string]string, cityPath string) (bool, 
 	}
 	switch meta.Backend {
 	case "postgres":
-		if err := applyResolvedScopePostgresEnv(env, cityPath, meta); err != nil {
+		if err := applyResolvedScopePostgresEnv(env, cityPath, cityPath, meta); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -364,7 +366,7 @@ func scopeMetadataJSONPath(scopeRoot string) string {
 //
 // On resolver exhaustion returns an error wrapping
 // pgauth.ErrNoPasswordResolvable; callers can match with errors.Is.
-func applyResolvedScopePostgresEnv(env map[string]string, scopeRoot string, meta contract.MetadataState) error {
+func applyResolvedScopePostgresEnv(env map[string]string, cityPath, scopeRoot string, meta contract.MetadataState) error {
 	if env == nil {
 		return nil
 	}
@@ -382,6 +384,7 @@ func applyResolvedScopePostgresEnv(env map[string]string, scopeRoot string, meta
 	if err != nil {
 		return fmt.Errorf("resolving postgres credentials for %s: %w", scopeRoot, err)
 	}
+	emitPostgresCredentialResolved(env, cityPath, scopeRoot, meta, resolved.Source)
 	env["GC_POSTGRES_PASSWORD"] = resolved.Password
 	env["BEADS_POSTGRES_PASSWORD"] = resolved.Password
 	env["BEADS_POSTGRES_HOST"] = meta.PostgresHost
@@ -390,6 +393,72 @@ func applyResolvedScopePostgresEnv(env map[string]string, scopeRoot string, meta
 	env["BEADS_POSTGRES_DATABASE"] = meta.PostgresDatabase
 	mirrorBeadsPostgresEnv(env)
 	return nil
+}
+
+func emitPostgresCredentialResolved(env map[string]string, cityPath, scopeRoot string, meta contract.MetadataState, source pgauth.Source) {
+	payload, subject := postgresCredentialResolvedPayload(cityPath, scopeRoot, meta, source)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	openCityRecorderAt(cityPath, io.Discard).Record(events.Event{
+		Type:    events.PostgresCredentialResolved,
+		Actor:   postgresCredentialEventActor(env),
+		Subject: subject,
+		Payload: data,
+	})
+}
+
+func postgresCredentialResolvedPayload(cityPath, scopeRoot string, meta contract.MetadataState, source pgauth.Source) (pgauth.PostgresCredentialResolvedPayload, string) {
+	scopeKind, scopeName, subject := postgresCredentialScopeIdentity(cityPath, scopeRoot)
+	return pgauth.PostgresCredentialResolvedPayload{
+		ScopeKind: scopeKind,
+		ScopeName: scopeName,
+		Source:    source.String(),
+		Host:      meta.PostgresHost,
+		Port:      meta.PostgresPort,
+		User:      meta.PostgresUser,
+	}, subject
+}
+
+func postgresCredentialScopeIdentity(cityPath, scopeRoot string) (string, string, string) {
+	cityPath = filepath.Clean(cityPath)
+	scopeRoot = filepath.Clean(scopeRoot)
+	cfg, err := loadCityConfig(cityPath, io.Discard)
+	if samePath(cityPath, scopeRoot) {
+		name := filepath.Base(cityPath)
+		if err == nil {
+			name = loadedCityName(cfg, cityPath)
+		}
+		return "city", name, "city/" + name
+	}
+	if err == nil {
+		resolveRigPaths(cityPath, cfg.Rigs)
+		for _, rig := range cfg.Rigs {
+			if samePath(scopeRoot, rig.Path) {
+				name := strings.TrimSpace(rig.Name)
+				if name == "" {
+					name = filepath.Base(scopeRoot)
+				}
+				return "rig", name, "rigs/" + name
+			}
+		}
+	}
+	name := filepath.Base(scopeRoot)
+	return "rig", name, "rigs/" + name
+}
+
+func postgresCredentialEventActor(env map[string]string) string {
+	if env != nil {
+		if actor := strings.TrimSpace(env["BEADS_ACTOR"]); actor != "" {
+			return actor
+		}
+	}
+	actor := eventActor()
+	if actor == "" || actor == "human" {
+		return "controller"
+	}
+	return actor
 }
 
 // mirrorBeadsPostgresEnv copies canonical (GC_*) PG env keys to their

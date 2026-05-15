@@ -101,6 +101,20 @@ func (d *Doctor) run(ctx *CheckContext, w io.Writer, fix, stream bool) *Report {
 	return r
 }
 
+// RenderExtras invokes optional post-run renderers registered by checks.
+func (d *Doctor) RenderExtras(ctx *CheckContext, w io.Writer) {
+	if ctx == nil {
+		ctx = &CheckContext{}
+	}
+	for _, c := range d.checks {
+		renderer, ok := c.(ExtraRenderer)
+		if !ok {
+			continue
+		}
+		renderer.RenderExtras(ctx, w)
+	}
+}
+
 // printResult writes a single check result line to w.
 func printResult(w io.Writer, r *CheckResult, verbose bool) {
 	var icon string
