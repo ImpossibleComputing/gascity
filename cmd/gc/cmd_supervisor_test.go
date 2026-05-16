@@ -82,10 +82,7 @@ func stubSupervisorSystemctlUserAvailable(t *testing.T, available bool) {
 
 func stubSupervisorExecutable(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp(".", ".gc-supervisor-test-")
-	if err != nil {
-		t.Fatalf("mkdir stable supervisor executable dir: %v", err)
-	}
+	dir := newStableSupervisorTestDir(t, ".gc-supervisor-test-")
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	path, err := filepath.Abs(filepath.Join(dir, "gc"))
 	if err != nil {
@@ -98,6 +95,30 @@ func stubSupervisorExecutable(t *testing.T) string {
 	supervisorExecutable = func() (string, error) { return path, nil }
 	t.Cleanup(func() { supervisorExecutable = old })
 	return path
+}
+
+func newStableSupervisorTestDir(t *testing.T, pattern string) string {
+	t.Helper()
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Skipf("no user cache dir for stable supervisor test fixture: %v", err)
+	}
+	cacheDir, err = filepath.Abs(cacheDir)
+	if err != nil {
+		t.Fatalf("abs user cache dir: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir user cache dir: %v", err)
+	}
+	dir, err := os.MkdirTemp(cacheDir, pattern)
+	if err != nil {
+		t.Fatalf("mkdir stable supervisor test dir: %v", err)
+	}
+	if isUnstableSupervisorExecPath(filepath.Join(dir, "gc")) {
+		_ = os.RemoveAll(dir)
+		t.Skipf("user cache dir %q is classified as an unstable supervisor executable location", cacheDir)
+	}
+	return dir
 }
 
 func startWorkspaceServiceSentinel(t *testing.T, gcHome, cityPath, serviceName string) workspaceServiceSentinel {
@@ -4805,10 +4826,7 @@ func TestStopSupervisorWithWaitTimesOutWhenSocketKeepsAnswering(t *testing.T) {
 func TestResolveStableSupervisorBinaryPath(t *testing.T) {
 	newRunningExe := func(t *testing.T) string {
 		t.Helper()
-		dir, err := os.MkdirTemp(".", ".gc-supervisor-test-")
-		if err != nil {
-			t.Fatalf("mkdir stable running exe dir: %v", err)
-		}
+		dir := newStableSupervisorTestDir(t, ".gc-supervisor-test-")
 		t.Cleanup(func() { _ = os.RemoveAll(dir) })
 		path, err := filepath.Abs(filepath.Join(dir, "gc"))
 		if err != nil {
