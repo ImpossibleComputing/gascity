@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +45,8 @@ func init() {
 // slingStdin returns the reader for --stdin input. Extracted for testability.
 var slingStdin = func() io.Reader { return os.Stdin }
 
+var slingJSONOutput bool
+
 // BeadQuerier is an alias for sling.BeadQuerier.
 type BeadQuerier = sling.BeadQuerier
 
@@ -66,6 +69,7 @@ func newSlingCmd(stdout, stderr io.Writer) *cobra.Command {
 	var fromStdin bool
 	var scopeKind string
 	var scopeRef string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "sling [target] <bead-or-formula-or-text>",
 		Short: "Route work to a session config or agent",
@@ -114,6 +118,9 @@ Examples:
 				fmt.Fprintf(stderr, "gc sling: --scope-kind must be city or rig\n") //nolint:errcheck // best-effort stderr
 				return errExit
 			}
+			prevJSONOutput := slingJSONOutput
+			slingJSONOutput = jsonOutput
+			defer func() { slingJSONOutput = prevJSONOutput }()
 			code := cmdSling(args, formula, nudge, force, title, vars, merge, noConvoy, owned, reassign, onFormula, noFormula, fromStdin, dryRun, scopeKind, scopeRef, stdout, stderr)
 			return exitForCode(code)
 		},
@@ -133,6 +140,7 @@ Examples:
 	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "read bead text from stdin (first line = title, rest = description)")
 	cmd.Flags().StringVar(&scopeKind, "scope-kind", "", "logical workflow scope kind for graph.v2 launches")
 	cmd.Flags().StringVar(&scopeRef, "scope-ref", "", "logical workflow scope ref for graph.v2 launches")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output dispatch result in JSON format")
 	cmd.MarkFlagsMutuallyExclusive("formula", "on")
 	cmd.MarkFlagsMutuallyExclusive("no-formula", "formula")
 	cmd.MarkFlagsMutuallyExclusive("no-formula", "on")
@@ -326,7 +334,9 @@ func cmdSling(args []string, isFormula, doNudge, force bool, title string, vars 
 				fmt.Fprintf(stderr, "gc sling: creating bead: %v\n", err) //nolint:errcheck // best-effort stderr
 				return 1
 			}
-			fmt.Fprintf(stdout, "Created %s — %q\n", created.ID, beadOrFormula) //nolint:errcheck // best-effort stdout
+			if !slingJSONOutput {
+				fmt.Fprintf(stdout, "Created %s — %q\n", created.ID, beadOrFormula) //nolint:errcheck // best-effort stdout
+			}
 			beadOrFormula = created.ID
 		}
 	}
@@ -743,6 +753,56 @@ func printBatchSlingResult(result sling.SlingResult, stdout, stderr io.Writer) {
 	fmt.Fprintln(stdout, summary) //nolint:errcheck
 }
 
+type slingJSONResult struct {
+	SchemaVersion string   `json:"schema_version"`
+	Success       bool     `json:"success"`
+	Target        string   `json:"target"`
+	Method        string   `json:"method"`
+	BeadID        string   `json:"bead_id,omitempty"`
+	Formula       string   `json:"formula,omitempty"`
+	MoleculeID    string   `json:"molecule_id,omitempty"`
+	WorkflowID    string   `json:"workflow_id,omitempty"`
+	ConvoyID      string   `json:"convoy_id,omitempty"`
+	Routed        bool     `json:"routed"`
+	Queued        bool     `json:"queued"`
+	DryRun        bool     `json:"dry_run,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
+}
+
+func emitSlingJSON(result sling.SlingResult, stdout, stderr io.Writer) int {
+	warnings := append([]string(nil), result.BeadWarnings...)
+	if result.AgentSuspended {
+		warnings = append(warnings, "agent_suspended")
+	}
+	if result.PoolEmpty {
+		warnings = append(warnings, "pool_max_zero")
+	}
+	warnings = append(warnings, result.MetadataErrors...)
+
+	payload := slingJSONResult{
+		SchemaVersion: "1",
+		Success:       true,
+		Target:        result.Target,
+		Method:        result.Method,
+		BeadID:        result.BeadID,
+		Formula:       result.FormulaName,
+		MoleculeID:    result.WispRootID,
+		WorkflowID:    result.WorkflowID,
+		ConvoyID:      result.ConvoyID,
+		Routed:        !result.DryRun && (result.Routed > 0 || !result.Idempotent),
+		Queued:        !result.DryRun && (result.Routed > 0 || !result.Idempotent),
+		DryRun:        result.DryRun,
+		Warnings:      warnings,
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(payload); err != nil {
+		fmt.Fprintf(stderr, "gc sling: encoding JSON: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	return 0
+}
+
 // doSling creates a Sling instance and dispatches to the right intent method.
 func doSling(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, stderr io.Writer) int {
 	populateSlingDepsCallbacks(&deps)
@@ -825,6 +885,9 @@ func doSlingBatch(opts slingOpts, deps slingDeps, querier BeadChildQuerier, stdo
 	}
 	// Print warnings before error check so they're visible on failure.
 	printSlingWarnings(result, stderr)
+	if slingJSONOutput && err == nil {
+		return emitSlingJSON(result, stdout, stderr)
+	}
 	// Always print results when we have children (partial failures
 	// should still show per-child status).
 	if len(result.Children) > 0 {
