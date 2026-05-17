@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	mysql "github.com/go-sql-driver/mysql"
 	beadslib "github.com/steveyegge/beads"
 )
 
@@ -140,11 +141,176 @@ func TestNativeDoltStoreListDelegatesAndConvertsIssues(t *testing.T) {
 	}
 }
 
+func TestNativeDoltStoreTxDelegatesToUpstreamTransaction(t *testing.T) {
+	var capturedCommitMsg string
+	var updatedID string
+	var updated map[string]interface{}
+	var metadataUpdate map[string]interface{}
+	var closedID string
+	tx := &nativeDoltTransactionSpy{
+		getIssue: func(_ context.Context, id string) (*beadslib.Issue, error) {
+			return &beadslib.Issue{
+				ID:       id,
+				Status:   beadslib.StatusOpen,
+				Metadata: json.RawMessage(`{"keep":"yes"}`),
+			}, nil
+		},
+		updateIssue: func(_ context.Context, id string, updates map[string]interface{}, _ string) error {
+			if _, ok := updates["metadata"]; ok {
+				metadataUpdate = updates
+				return nil
+			}
+			updatedID = id
+			updated = updates
+			return nil
+		},
+		closeIssue: func(_ context.Context, id, _, _, _ string) error {
+			closedID = id
+			return nil
+		},
+	}
+	storage := &nativeDoltStorageSpy{
+		runInTransaction: func(_ context.Context, commitMsg string, fn func(beadslib.Transaction) error) error {
+			capturedCommitMsg = commitMsg
+			return fn(tx)
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	description := "updated in tx"
+	err := store.Tx("native transaction", func(tx Tx) error {
+		if err := tx.Update("gc-native", UpdateOpts{Description: &description}); err != nil {
+			return err
+		}
+		if err := tx.SetMetadataBatch("gc-native", map[string]string{"gc.step_ref": "tx"}); err != nil {
+			return err
+		}
+		return tx.Close("gc-native")
+	})
+	if err != nil {
+		t.Fatalf("Tx: %v", err)
+	}
+
+	if capturedCommitMsg != "native transaction" {
+		t.Fatalf("commitMsg = %q, want native transaction", capturedCommitMsg)
+	}
+	if updatedID != "gc-native" {
+		t.Fatalf("updated ID = %q, want gc-native", updatedID)
+	}
+	if updated["description"] != "updated in tx" {
+		t.Fatalf("updates = %#v, want description update", updated)
+	}
+	raw, ok := metadataUpdate["metadata"].(json.RawMessage)
+	if !ok {
+		t.Fatalf("metadata update = %#v, want json.RawMessage metadata", metadataUpdate)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		t.Fatalf("metadata JSON: %v", err)
+	}
+	if metadata["keep"] != "yes" || metadata["gc.step_ref"] != "tx" {
+		t.Fatalf("metadata = %#v, want merged metadata", metadata)
+	}
+	if closedID != "gc-native" {
+		t.Fatalf("closed ID = %q, want gc-native", closedID)
+	}
+}
+
+func TestNativeDoltStoreTxRetriesSerializationConflicts(t *testing.T) {
+	origSleep := nativeTxSleep
+	var slept []time.Duration
+	nativeTxSleep = func(d time.Duration) {
+		slept = append(slept, d)
+	}
+	t.Cleanup(func() { nativeTxSleep = origSleep })
+
+	attempts := 0
+	storage := &nativeDoltStorageSpy{
+		runInTransaction: func(_ context.Context, _ string, fn func(beadslib.Transaction) error) error {
+			attempts++
+			if attempts < 3 {
+				return nativeDoltSerializationConflictErrorForTest()
+			}
+			return fn(&nativeDoltTransactionSpy{})
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	called := 0
+	if err := store.Tx("retry tx", func(Tx) error {
+		called++
+		return nil
+	}); err != nil {
+		t.Fatalf("Tx: %v", err)
+	}
+
+	if attempts != 3 {
+		t.Fatalf("RunInTransaction attempts = %d, want 3", attempts)
+	}
+	if called != 1 {
+		t.Fatalf("callback calls = %d, want 1 after conflicts clear", called)
+	}
+	if len(slept) != 2 || slept[0] != 50*time.Millisecond || slept[1] != 200*time.Millisecond {
+		t.Fatalf("slept = %#v, want 50ms then 200ms", slept)
+	}
+}
+
+func TestNativeDoltStoreTxStopsAfterMaxSerializationAttempts(t *testing.T) {
+	origSleep := nativeTxSleep
+	nativeTxSleep = func(time.Duration) {}
+	t.Cleanup(func() { nativeTxSleep = origSleep })
+
+	attempts := 0
+	wantErr := nativeDoltSerializationConflictErrorForTest()
+	storage := &nativeDoltStorageSpy{
+		runInTransaction: func(context.Context, string, func(beadslib.Transaction) error) error {
+			attempts++
+			return wantErr
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	err := store.Tx("retry exhausted", func(Tx) error {
+		t.Fatal("callback should not run when RunInTransaction fails before invoking it")
+		return nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Tx error = %v, want %v", err, wantErr)
+	}
+	if attempts != 3 {
+		t.Fatalf("RunInTransaction attempts = %d, want 3", attempts)
+	}
+}
+
+func TestNativeDoltStoreTxDoesNotRetryNonSerializationError(t *testing.T) {
+	attempts := 0
+	wantErr := errors.New("non-retry")
+	storage := &nativeDoltStorageSpy{
+		runInTransaction: func(context.Context, string, func(beadslib.Transaction) error) error {
+			attempts++
+			return wantErr
+		},
+	}
+	store := newNativeDoltStoreForTest(storage)
+
+	err := store.Tx("non-retry", func(Tx) error {
+		t.Fatal("callback should not run when RunInTransaction returns an error")
+		return nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Tx error = %v, want %v", err, wantErr)
+	}
+	if attempts != 1 {
+		t.Fatalf("RunInTransaction attempts = %d, want 1", attempts)
+	}
+}
+
 type nativeDoltStorageSpy struct {
 	beadslib.Storage
-	createIssue  func(context.Context, *beadslib.Issue, string) error
-	getIssue     func(context.Context, string) (*beadslib.Issue, error)
-	searchIssues func(context.Context, string, beadslib.IssueFilter) ([]*beadslib.Issue, error)
+	createIssue      func(context.Context, *beadslib.Issue, string) error
+	getIssue         func(context.Context, string) (*beadslib.Issue, error)
+	searchIssues     func(context.Context, string, beadslib.IssueFilter) ([]*beadslib.Issue, error)
+	runInTransaction func(context.Context, string, func(beadslib.Transaction) error) error
 }
 
 func (s *nativeDoltStorageSpy) CreateIssue(ctx context.Context, issue *beadslib.Issue, actor string) error {
@@ -159,10 +325,62 @@ func (s *nativeDoltStorageSpy) SearchIssues(ctx context.Context, query string, f
 	return s.searchIssues(ctx, query, filter)
 }
 
+func (s *nativeDoltStorageSpy) RunInTransaction(ctx context.Context, commitMsg string, fn func(beadslib.Transaction) error) error {
+	return s.runInTransaction(ctx, commitMsg, fn)
+}
+
+type nativeDoltTransactionSpy struct {
+	beadslib.Transaction
+	getIssue      func(context.Context, string) (*beadslib.Issue, error)
+	updateIssue   func(context.Context, string, map[string]interface{}, string) error
+	closeIssue    func(context.Context, string, string, string, string) error
+	addLabel      func(context.Context, string, string, string) error
+	removeLabel   func(context.Context, string, string, string) error
+	addDependency func(context.Context, *beadslib.Dependency, string) error
+	removeDep     func(context.Context, string, string, string) error
+	depRecords    func(context.Context, string) ([]*beadslib.Dependency, error)
+}
+
+func (t *nativeDoltTransactionSpy) GetIssue(ctx context.Context, id string) (*beadslib.Issue, error) {
+	return t.getIssue(ctx, id)
+}
+
+func (t *nativeDoltTransactionSpy) UpdateIssue(ctx context.Context, id string, updates map[string]interface{}, actor string) error {
+	return t.updateIssue(ctx, id, updates, actor)
+}
+
+func (t *nativeDoltTransactionSpy) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
+	return t.closeIssue(ctx, id, reason, actor, session)
+}
+
+func (t *nativeDoltTransactionSpy) AddLabel(ctx context.Context, issueID, label, actor string) error {
+	return t.addLabel(ctx, issueID, label, actor)
+}
+
+func (t *nativeDoltTransactionSpy) RemoveLabel(ctx context.Context, issueID, label, actor string) error {
+	return t.removeLabel(ctx, issueID, label, actor)
+}
+
+func (t *nativeDoltTransactionSpy) AddDependency(ctx context.Context, dep *beadslib.Dependency, actor string) error {
+	return t.addDependency(ctx, dep, actor)
+}
+
+func (t *nativeDoltTransactionSpy) RemoveDependency(ctx context.Context, issueID, dependsOnID, actor string) error {
+	return t.removeDep(ctx, issueID, dependsOnID, actor)
+}
+
+func (t *nativeDoltTransactionSpy) GetDependencyRecords(ctx context.Context, issueID string) ([]*beadslib.Dependency, error) {
+	return t.depRecords(ctx, issueID)
+}
+
 func cloneNativeIssueForTest(issue *beadslib.Issue) *beadslib.Issue {
 	cloned := *issue
 	cloned.Metadata = append(json.RawMessage(nil), issue.Metadata...)
 	cloned.Labels = append([]string(nil), issue.Labels...)
 	cloned.Dependencies = append([]*beadslib.Dependency(nil), issue.Dependencies...)
 	return &cloned
+}
+
+func nativeDoltSerializationConflictErrorForTest() error {
+	return &mysql.MySQLError{Number: 1213, Message: "deadlock found when trying to get lock"}
 }

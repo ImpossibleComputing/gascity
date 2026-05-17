@@ -3,14 +3,27 @@ package beads
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	mysql "github.com/go-sql-driver/mysql"
 	beadslib "github.com/steveyegge/beads"
 )
 
 const nativeDoltStoreActor = "gascity"
+
+const nativeTxMaxAttempts = 3
+
+var (
+	nativeTxBackoffs = [3]time.Duration{
+		50 * time.Millisecond,
+		200 * time.Millisecond,
+		1 * time.Second,
+	}
+	nativeTxSleep = time.Sleep
+)
 
 // NativeDoltStore is a Store implementation backed by the upstream beads
 // library over Dolt. It is constructed by the store factory after native-store
@@ -57,7 +70,7 @@ func (s *NativeDoltStore) Get(id string) (Bead, error) {
 // Update modifies an existing bead through the upstream beads storage layer.
 func (s *NativeDoltStore) Update(id string, opts UpdateOpts) error {
 	ctx := context.Background()
-	updates, err := s.nativeUpdates(ctx, id, opts)
+	updates, err := nativeUpdates(ctx, id, opts, s.storage)
 	if err != nil {
 		return err
 	}
@@ -80,6 +93,29 @@ func (s *NativeDoltStore) Update(id string, opts UpdateOpts) error {
 		return s.updateParent(ctx, id, *opts.ParentID)
 	}
 	return nil
+}
+
+// Tx executes fn inside the upstream beads transaction API.
+func (s *NativeDoltStore) Tx(commitMsg string, fn func(Tx) error) error {
+	if fn == nil {
+		return errors.New("beads tx: nil callback")
+	}
+	var err error
+	for attempt := 0; attempt < nativeTxMaxAttempts; attempt++ {
+		if attempt > 0 {
+			nativeTxSleep(nativeTxBackoffs[attempt-1])
+		}
+		err = s.storage.RunInTransaction(context.Background(), commitMsg, func(libTx beadslib.Transaction) error {
+			return fn(&nativeDoltTx{store: s, libTx: libTx})
+		})
+		if err == nil {
+			return nil
+		}
+		if !isNativeDoltSerializationConflict(err) {
+			return err
+		}
+	}
+	return err
 }
 
 // Close sets a bead's status to closed through the upstream beads storage layer.
@@ -262,6 +298,70 @@ func (s *NativeDoltStore) DepRemove(issueID, dependsOnID string) error {
 	return s.storage.RemoveDependency(context.Background(), issueID, dependsOnID, s.actor)
 }
 
+type nativeDoltTx struct {
+	store *NativeDoltStore
+	libTx beadslib.Transaction
+}
+
+func (t *nativeDoltTx) Update(id string, opts UpdateOpts) error {
+	ctx := context.Background()
+	updates, err := nativeUpdates(ctx, id, opts, t.libTx)
+	if err != nil {
+		return err
+	}
+	if len(updates) > 0 {
+		if err := t.libTx.UpdateIssue(ctx, id, updates, t.store.actor); err != nil {
+			return err
+		}
+	}
+	for _, label := range opts.Labels {
+		if err := t.libTx.AddLabel(ctx, id, label, t.store.actor); err != nil {
+			return err
+		}
+	}
+	for _, label := range opts.RemoveLabels {
+		if err := t.libTx.RemoveLabel(ctx, id, label, t.store.actor); err != nil {
+			return err
+		}
+	}
+	if opts.ParentID != nil {
+		return nativeUpdateParentTx(ctx, t.libTx, t.store.actor, id, *opts.ParentID)
+	}
+	return nil
+}
+
+func (t *nativeDoltTx) SetMetadataBatch(id string, kvs map[string]string) error {
+	ctx := context.Background()
+	issue, err := t.libTx.GetIssue(ctx, id)
+	if err != nil {
+		return err
+	}
+	metadata := metadataMapFromNative(issue.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string, len(kvs))
+	}
+	for k, v := range kvs {
+		metadata[k] = v
+	}
+	raw, err := metadataRawFromMap(metadata)
+	if err != nil {
+		return err
+	}
+	return t.libTx.UpdateIssue(ctx, id, map[string]interface{}{"metadata": raw}, t.store.actor)
+}
+
+func (t *nativeDoltTx) Close(id string) error {
+	ctx := context.Background()
+	current, err := t.libTx.GetIssue(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current.Status == beadslib.StatusClosed {
+		return nil
+	}
+	return t.libTx.CloseIssue(ctx, id, "", t.store.actor, "")
+}
+
 // DepList returns dependencies for a bead.
 func (s *NativeDoltStore) DepList(id, direction string) ([]Dep, error) {
 	ctx := context.Background()
@@ -295,7 +395,11 @@ func (s *NativeDoltStore) DepList(id, direction string) ([]Dep, error) {
 	return deps, nil
 }
 
-func (s *NativeDoltStore) nativeUpdates(ctx context.Context, id string, opts UpdateOpts) (map[string]interface{}, error) {
+type nativeIssueReader interface {
+	GetIssue(context.Context, string) (*beadslib.Issue, error)
+}
+
+func nativeUpdates(ctx context.Context, id string, opts UpdateOpts, reader nativeIssueReader) (map[string]interface{}, error) {
 	updates := make(map[string]interface{})
 	if opts.Title != nil {
 		updates["title"] = *opts.Title
@@ -316,7 +420,7 @@ func (s *NativeDoltStore) nativeUpdates(ctx context.Context, id string, opts Upd
 		updates["assignee"] = *opts.Assignee
 	}
 	if len(opts.Metadata) > 0 {
-		issue, err := s.storage.GetIssue(ctx, id)
+		issue, err := reader.GetIssue(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -334,6 +438,37 @@ func (s *NativeDoltStore) nativeUpdates(ctx context.Context, id string, opts Upd
 		updates["metadata"] = raw
 	}
 	return updates, nil
+}
+
+func nativeUpdateParentTx(ctx context.Context, tx beadslib.Transaction, actor, id, parentID string) error {
+	deps, err := tx.GetDependencyRecords(ctx, id)
+	if err != nil {
+		return err
+	}
+	for _, dep := range deps {
+		if dep.Type != beadslib.DepParentChild {
+			continue
+		}
+		if err := tx.RemoveDependency(ctx, id, dep.DependsOnID, actor); err != nil {
+			return err
+		}
+	}
+	if parentID == "" {
+		return nil
+	}
+	return tx.AddDependency(ctx, &beadslib.Dependency{
+		IssueID:     id,
+		DependsOnID: parentID,
+		Type:        beadslib.DepParentChild,
+	}, actor)
+}
+
+func isNativeDoltSerializationConflict(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == 1213 || mysqlErr.Number == 1205
 }
 
 func (s *NativeDoltStore) updateParent(ctx context.Context, id, parentID string) error {
