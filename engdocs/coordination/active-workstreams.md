@@ -838,7 +838,19 @@ Recommended next actions:
   consumption are boring.
 - Promote `pack-design-drift-check` only after a fresh validation/promotion pass.
 
-New-machine validation commands:
+New Machine Bootstrap:
+
+Local-only state:
+
+- Stable gc4gc is currently local-only at `/Users/dbox/repos/gc/gc4gc`.
+- The stable gc4gc repo has no `origin` remote in the current setup.
+- Grace's producer/dev worktree is also local-only operational state unless
+  separately pushed or promoted.
+- Runtime artifacts under `.runtime/` are local run evidence, not durable GitHub
+  records unless an agent explicitly summarizes them into issues, PR comments,
+  or coordination docs.
+
+Validation commands:
 
 ```sh
 cd /Users/dbox/repos/gc/gc4gc
