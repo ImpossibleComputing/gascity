@@ -1,6 +1,6 @@
 # Active Workstream Coordination
 
-Last updated: 2026-05-18 12:10 PT by Mabel
+Last updated: 2026-05-18 12:45 PT by Jasmine
 
 This is a temporary cross-agent coordination channel, not product documentation.
 Do not merge this file into public docs unless we explicitly promote it.
@@ -34,7 +34,7 @@ JSON
 
 ### Current Branch / PR
 
-Branch: `codex/json-rollup` planned by Jasmine
+Branch: `codex/json-rollup`
 
 PR: not opened yet
 
@@ -42,17 +42,48 @@ Base: `origin/main`
 
 Owner: Jasmine
 
+Worktree: `/Users/dbox/repos/gc/gascity-json-rollup`
+
 ### Latest State
 
-Jasmine is taking over JSON rollout integration. The previous many-small-PR
-strategy is being replaced by a single JSON rollup / review-train PR.
+Jasmine owns the JSON rollout end to end. The previous many-small-PR strategy
+is replaced by a single JSON rollup / review-train PR so Julian can review one
+coherent `gc --json` / `--json-schema` surface instead of many small PRs.
 
-Current JSON source of truth is Jasmine's planned rollup branch, not any single
-existing PR. Until that branch exists, use these PRs as provenance:
+`codex/json-rollup` now exists and is pushed. It currently points at latest
+`origin/main`; train assembly has not started yet.
+
+Current JSON source of truth is this workstream section plus
+`codex/json-rollup`, not any individual JSON PR.
+
+Included provenance PRs for the first train, if they remain clean:
 
 - #2317: schema-platform plumbing plus native management action JSON.
 - #2222: session detail JSON plus oddball/root command JSON.
-- Jasmine's clean downstream JSON command PRs selected for the rollup.
+- #2250: formula/order inspection JSON.
+- #2257: convoy inspection JSON.
+- #2258: agent/rig routing inspection JSON.
+- #2259: mail/trace/events inspection JSON.
+- #2265: miscellaneous inspection command JSON.
+- #2266: runtime/nudge/drain inspection JSON.
+- #2267: doctor diagnostics JSON.
+- #2271: lifecycle action summary JSON.
+- #2273: graph/converge/order/formula action summary JSON.
+- #2274: convoy/mail action summary JSON.
+- #2287: open passthrough/custom schema support.
+
+Conditional include:
+
+- #2256: service/skill inspection JSON. Earlier failed CI looked like
+  cancellation/flaky infra after local tests passed, but it must be revalidated
+  before inclusion.
+
+Excluded from the first train unless repaired:
+
+- #2288: superseded by #2317's adoption branch payload.
+- #2270: local rebase branch had `TestAutoSuspendChatSessions` failure from
+  deprecated `[[agent]]` warning leakage to stderr.
+- #2291: same local `TestAutoSuspendChatSessions` failure family as #2270.
 
 ### Interface Contracts Other Agents Must Honor
 
@@ -61,37 +92,150 @@ existing PR. Until that branch exists, use these PRs as provenance:
 - stdout must be JSON-only when `--json` is used.
 - Human diagnostics and warnings go to stderr unless intentionally represented
   in JSON.
-- `--json-schema` exposes command schema metadata.
+- `--json-schema` exposes command schema metadata. The role-specific form
+  `--json-schema=result` is accepted for result schemas.
 - Result schemas live under `schemas/<command-path>/result.schema.json`.
 - Shared failure schema lives at `schemas/failure.schema.json`.
 - Do not introduce `--format json`.
 
-Open clarification for Jasmine:
+Structured failure JSON policy:
 
-- Confirm the current source of truth for `--json-schema=result`.
-- Confirm whether structured failure JSON is required for every new command now
-  or is staged command-by-command.
-- Confirm schema extension conventions, including whether `x-gc-jsonl` remains
-  accepted for JSONL outputs.
-- Tell Cleo when the JSON rollup branch is stable enough to rebase against.
+- New JSON-enabled commands should use the shared failure schema where the
+  platform path applies.
+- Full structured failure JSON for every command is staged command-by-command,
+  not a reason to block otherwise clean result-schema work.
+- Commands with intentional command-authored nonzero JSON must preserve that
+  behavior and declare compatible schemas/tests.
+
+Schema extension conventions:
+
+- JSON Schema remains the schema language.
+- Gas City extensions use `x-gc-*`.
+- `x-gc-jsonl` remains the convention for JSONL record-count metadata. Absence
+  means a single JSON document unless command docs/schema say otherwise.
+- Keep schemas open where the producer is a passthrough or custom command and
+  Gas City does not own the payload shape.
+
+Validation matrix for `codex/json-rollup`:
+
+- `git diff --check`: pending for assembled train.
+- `make fmt-check`: pending for assembled train.
+- `make vet`: pending for assembled train.
+- `make check-docs`: pending for assembled train.
+- `GOOS=linux make lint`: pending for assembled train.
+- `go test ./cmd/gc -run 'TestJSON|Test.*JSON|TestJSONSchema|TestJSONSchemaManifest|TestJSONCommandOutputMatchesDeclaredResultSchema' -count=1`: pending for assembled train.
+- `go test ./cmd/gc -count=1`: pending for assembled train.
+- `gc4gc` smoke tests: pending for assembled train.
+
+Local-only JSON work state:
+
+- The rollup branch is pushed at `origin/codex/json-rollup`.
+- No meaningful rollup changes are local-only yet.
+- Existing local worktrees for #2270 and #2291 contain unmerged/rebased state
+  with known local test failures; they are excluded from the train until fixed
+  or explicitly discarded.
 
 ### Blockers / Cross-Workstream Risks
 
-- `yellow`: Registry/gc pack command schemas should not lock until Jasmine
-  confirms the final schema conventions for the rollup.
+- `yellow`: Registry/gc pack command schemas/tests should not freeze until
+  Jasmine confirms the rollup branch has assembled schema-platform plumbing and
+  the validation matrix is passing.
 - `yellow`: Pack-defined commands may eventually need schema discovery rules;
   flag pack-facing schema changes to Jasmine rather than patching JSON rollout
   branches directly.
+- `yellow`: Do not introduce `--format json` or command-specific schema
+  discovery conventions in registry work.
+- `yellow`: If registry commands need JSON schemas before the rollup lands, use
+  `schemas/<command-path>/result.schema.json`, shared failure schema
+  compatibility, and `x-gc-jsonl` for JSONL record-count metadata.
 
 ### Needed From Other Agents
 
-- Jasmine: post the rollup branch once created and list included/excluded PRs.
+- Jasmine: assemble and validate `codex/json-rollup`, then open the rollup PR.
 - Cleo: flag any registry/gc pack command schema needs before freezing command
   output shapes.
 
 ### Last Updated
 
-2026-05-18 12:10 PT by Mabel
+2026-05-18 12:45 PT by Jasmine
+
+### New Machine Bootstrap
+
+Repos to clone:
+
+- `gastownhall/gascity`
+- `gastownhall/gc4gc` or the available local equivalent for smoke testing, if
+  needed.
+
+Branches to fetch / checkout:
+
+- `origin/main`
+- `origin/codex/workstream-coordination`
+- `origin/codex/json-rollup`
+- Provenance branches for included PRs:
+  - `origin/adopt/ga-nqfs0pd-pr2288`
+  - `origin/codex/json-schema-platform`
+  - `origin/codex/json-wave2-formula-order`
+  - `origin/codex/json-convoy-workflow`
+  - `origin/codex/json-rig-agent-routing`
+  - `origin/codex/json-mail-events-trace`
+  - `origin/codex/json-misc-inspection`
+  - `origin/codex/json-runtime-nudge-drain`
+  - `origin/codex/json-doctor-diagnostics`
+  - `origin/codex/json-lifecycle-city-actions`
+  - `origin/codex/graph-converge-order-actions`
+  - `origin/codex/json-convoy-mail-actions`
+  - `origin/codex/open-schema-passthrough-custom`
+  - optional after revalidation: `origin/codex/json-pack-service-skill`
+
+Worktrees to create:
+
+- `/Users/dbox/repos/gc/gascity-workstream-coordination` on
+  `codex/workstream-coordination`.
+- `/Users/dbox/repos/gc/gascity-json-rollup` on `codex/json-rollup`.
+
+Local-only state:
+
+- None for the rollup branch.
+- #2270 and #2291 old-machine worktrees have local/rebased state with known
+  failing tests and are intentionally excluded from the first train.
+
+Commands to validate setup:
+
+```sh
+git -C /Users/dbox/repos/gc/gascity-workstream-coordination status --short --branch
+git -C /Users/dbox/repos/gc/gascity-json-rollup status --short --branch
+git -C /Users/dbox/repos/gc/gascity-json-rollup fetch origin --prune
+git -C /Users/dbox/repos/gc/gascity-json-rollup log --oneline -1
+```
+
+Old-machine worktrees safe to ignore:
+
+- Individual clean JSON shard worktrees after their commits are represented in
+  the rollup branch.
+- Deleted/gone provenance branches for already-merged JSON PRs.
+
+Old-machine worktrees that must not be deleted yet:
+
+- `/Users/dbox/repos/gc/gascity-json-rollup`
+- `/Users/dbox/repos/gc/gascity-workstream-coordination`
+- `/Users/dbox/repos/gc/gascity-json-session-mutation-actions` until #2270 is
+  fixed or explicitly discarded.
+- `/Users/dbox/repos/gc/gascity-json-gnarly-session-order-actions` until #2291
+  is fixed or explicitly discarded.
+- Any Cleo/Mabel/Penelope pack worktrees they own.
+
+Exact first prompt for Jasmine on a new machine:
+
+> Jasmine, continue the JSON rollup from
+> `engdocs/coordination/active-workstreams.md` on
+> `origin/codex/workstream-coordination`. Clone/fetch `gastownhall/gascity`,
+> create worktrees for `codex/workstream-coordination` and
+> `codex/json-rollup`, then assemble the JSON train from the included
+> provenance PR branches in the documented order. Do not include #2270 or
+> #2291 unless their local failures are fixed. Preserve the accepted `--json`
+> / `--json-schema` contract and run the documented validation matrix before
+> opening or updating the rollup PR.
 
 ## Workstream Handoff
 
