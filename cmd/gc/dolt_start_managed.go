@@ -26,6 +26,7 @@ type managedDoltStartReport struct {
 }
 
 type managedDoltStartedProcess struct {
+	CityPath    string
 	PID         int
 	WatchdogPID int
 	DisarmFile  string
@@ -41,7 +42,7 @@ const (
 var (
 	managedDoltTestMode             = isTestBinary
 	managedDoltTestProcessRegistry  sync.Map
-	managedDoltTestTerminateProcess = terminateManagedDoltPID
+	managedDoltTestTerminateProcess = terminateManagedDoltTestPID
 )
 
 func init() {
@@ -101,7 +102,7 @@ func startManagedDoltProcessWithOptions(cityPath, host, port, user, logLevel str
 			return report, fmt.Errorf("open log file: %w", err)
 		}
 
-		started, err := startManagedDoltSQLServer(layout.ConfigFile, layout.LogFile, logFile)
+		started, err := startManagedDoltSQLServer(cityPath, layout.ConfigFile, layout.LogFile, logFile)
 		if err != nil {
 			_ = logFile.Close()
 			return report, err
@@ -180,9 +181,9 @@ func startManagedDoltProcessWithOptions(cityPath, host, port, user, logLevel str
 	return report, fmt.Errorf("dolt server could not find a free port after repeated address-in-use failures (last port %d)", report.Port)
 }
 
-func startManagedDoltSQLServer(configFile, logFilePath string, logFile *os.File) (managedDoltStartedProcess, error) {
+func startManagedDoltSQLServer(cityPath, configFile, logFilePath string, logFile *os.File) (managedDoltStartedProcess, error) {
 	if managedDoltTestWatchdogEnabled() {
-		return startManagedDoltSQLServerWithTestWatchdog(configFile, logFilePath, logFile)
+		return startManagedDoltSQLServerWithTestWatchdog(cityPath, configFile, logFilePath, logFile)
 	}
 	cmd := exec.Command("dolt", "sql-server", "--config", configFile)
 	cmd.Stdout = logFile
@@ -193,10 +194,10 @@ func startManagedDoltSQLServer(configFile, logFilePath string, logFile *os.File)
 	if err := cmd.Start(); err != nil {
 		return managedDoltStartedProcess{}, fmt.Errorf("start dolt sql-server: %w", err)
 	}
-	return managedDoltStartedProcess{PID: cmd.Process.Pid}, nil
+	return managedDoltStartedProcess{CityPath: cityPath, PID: cmd.Process.Pid}, nil
 }
 
-func startManagedDoltSQLServerWithTestWatchdog(configFile, logFilePath string, logFile *os.File) (managedDoltStartedProcess, error) {
+func startManagedDoltSQLServerWithTestWatchdog(cityPath, configFile, logFilePath string, logFile *os.File) (managedDoltStartedProcess, error) {
 	disarmFile, err := managedDoltTestWatchdogDisarmFile(logFilePath)
 	if err != nil {
 		return managedDoltStartedProcess{}, err
@@ -216,13 +217,14 @@ func startManagedDoltSQLServerWithTestWatchdog(configFile, logFilePath string, l
 	}
 	pid, err := readManagedDoltTestWatchdogPID(stdout, cmd.Process.Pid)
 	if err != nil {
-		_ = terminateManagedDoltPID(cmd.Process.Pid)
+		_ = terminateManagedDoltPID(cityPath, cmd.Process.Pid)
 		_ = cmd.Wait()
 		_ = os.Remove(disarmFile)
 		return managedDoltStartedProcess{}, err
 	}
 	go func() { _ = cmd.Wait() }()
 	started := managedDoltStartedProcess{
+		CityPath:    cityPath,
 		PID:         pid,
 		WatchdogPID: cmd.Process.Pid,
 		DisarmFile:  disarmFile,
@@ -322,13 +324,17 @@ func managedDoltTestDisarmOnReady() bool {
 }
 
 func terminateManagedDoltStartedProcess(started managedDoltStartedProcess) {
-	_ = terminateManagedDoltPID(started.PID)
+	_ = terminateManagedDoltPID(started.CityPath, started.PID)
 	if started.WatchdogPID > 0 {
-		_ = terminateManagedDoltPID(started.WatchdogPID)
+		_ = terminateManagedDoltPID(started.CityPath, started.WatchdogPID)
 	}
 	if started.DisarmFile != "" {
 		_ = os.Remove(started.DisarmFile)
 	}
+}
+
+func terminateManagedDoltTestPID(pid int) error {
+	return terminateManagedDoltPID("", pid)
 }
 
 func disarmManagedDoltStartedProcess(started managedDoltStartedProcess) {
@@ -416,7 +422,18 @@ func resolveDoltArchiveLevel(explicit int) int {
 	return 0
 }
 
-func terminateManagedDoltPID(pid int) error {
+// terminateManagedDoltPID stops a managed dolt subprocess on startup-failure
+// and failed-recovery cleanup. It honors the same configurable SIGTERM→SIGKILL
+// grace as the stop/unregister/restart path (resolveManagedDoltStopTimeout) so
+// a too-short hardcoded grace cannot SIGKILL dolt mid-flush on these paths
+// either (gastownhall/gascity#2090). cityPath may be empty — the grace then
+// falls back to config.DefaultDoltStopTimeout.
+//
+// The liveness-poll interval is clamped to the grace via
+// managedDoltStopPollInterval, matching the stop/unregister path: without the
+// clamp a sub-100ms configured grace would still sleep a fixed ~100ms before
+// the first re-check, sending SIGKILL well past the intended deadline.
+func terminateManagedDoltPID(cityPath string, pid int) error {
 	if pid <= 0 {
 		return nil
 	}
@@ -425,12 +442,14 @@ func terminateManagedDoltPID(pid int) error {
 		return err
 	}
 	_ = process.Signal(syscall.SIGTERM)
-	deadline := time.Now().Add(5 * time.Second)
+	gracePeriod := resolveManagedDoltStopTimeout(cityPath)
+	deadline := time.Now().Add(gracePeriod)
+	pollInterval := managedDoltStopPollInterval(gracePeriod)
 	for time.Now().Before(deadline) {
 		if !pidAlive(pid) {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	_ = process.Signal(syscall.SIGKILL)
 	time.Sleep(250 * time.Millisecond)
@@ -485,7 +504,7 @@ func runManagedDoltTestWatchdog(args []string, stdout, stderr *os.File) int {
 	for {
 		select {
 		case <-signals:
-			_ = terminateManagedDoltPID(cmd.Process.Pid)
+			_ = terminateManagedDoltPID("", cmd.Process.Pid)
 			<-done
 			return 0
 		case <-ticker.C:
@@ -494,7 +513,7 @@ func runManagedDoltTestWatchdog(args []string, stdout, stderr *os.File) int {
 				return 0
 			}
 			if !pidutil.Alive(parentPID) {
-				_ = terminateManagedDoltPID(cmd.Process.Pid)
+				_ = terminateManagedDoltPID("", cmd.Process.Pid)
 				<-done
 				return 0
 			}
