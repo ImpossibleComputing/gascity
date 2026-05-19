@@ -1,6 +1,6 @@
 # Active Workstream Coordination
 
-Last updated: 2026-05-18 17:36 PT by Grace
+Last updated: 2026-05-18 17:40 PT by Mabel
 
 This is a temporary cross-agent coordination channel, not product documentation.
 Do not merge this file into public docs unless we explicitly promote it.
@@ -47,6 +47,75 @@ needed owner in `Reason`.
   published separately.
 - `green`: Cleo's dirty registry work has been pushed to a preservation /
   workstream branch; no meaningful registry local-only state is expected.
+- `yellow`: before retiring the old machine, Jasmine and Cleo should each
+  publish one final "ready for machine move" checkpoint after any current local
+  edits are pushed or explicitly marked disposable.
+- `yellow`: Mabel's coordination state is portable through this branch, but the
+  new machine should bootstrap from this file before resuming pack work.
+
+## Machine Move Readiness
+
+### Current State
+
+This file is the canonical handoff for moving active Gas City pack/package work
+to a new machine.
+
+Mabel / coordination state:
+
+- Source of truth: `gastownhall/gascity:codex/workstream-coordination`.
+- Coordination file: `engdocs/coordination/active-workstreams.md`.
+- Current branch is not a product PR and should not be merged unless explicitly
+  promoted.
+- Mabel can resume from this file plus live GitHub PR state.
+
+Known portable workstreams:
+
+- JSON: `gastownhall/gascity:codex/json-rollup` exists as Jasmine's rollup base.
+- Registry/gc pack: `donbox/gascityworkplace:codex/pack-registry-workstream`
+  exists at Cleo's pushed checkpoint.
+- gc4gc: `donbox/gc4gc:master`, `donbox/gc4gc:codex/gc4gc-producer-dev`, and
+  `donbox/gc4gc:codex/gc4gc-producer-snapshot-20260518` exist.
+- Pack deprecation: #2126 is the source of truth for the deprecation train.
+- Docs/source reconciliation: #2318 is the source of truth for PackV2 docs
+  source reconciliation.
+
+Remaining move-readiness asks:
+
+- Jasmine: confirm no meaningful JSON rollup work is local-only after her next
+  checkpoint.
+- Cleo: confirm no meaningful registry/gc pack work is local-only after her
+  next checkpoint.
+- Grace: no blocking ask; gc4gc is portable.
+- Penelope: intentionally separate on another machine.
+
+### New Machine Bootstrap For Mabel / Coordination
+
+```sh
+mkdir -p /Users/dbox/repos/gc
+cd /Users/dbox/repos/gc
+
+git clone https://github.com/gastownhall/gascity.git gascity-workstream-coordination
+cd gascity-workstream-coordination
+git fetch origin codex/workstream-coordination
+git switch codex/workstream-coordination
+
+sed -n '1,220p' engdocs/coordination/active-workstreams.md
+```
+
+Suggested first prompt for Mabel on the new machine:
+
+```text
+Mabel, resume Gas City pack/package coordination from:
+
+- repo: /Users/dbox/repos/gc/gascity-workstream-coordination
+- branch: codex/workstream-coordination
+- file: engdocs/coordination/active-workstreams.md
+
+Please read the coordination file, refresh live PR/branch state for #2126,
+#2318, #2119, #2129, Jasmine's JSON rollup, Cleo's registry/gc pack workstream,
+and Grace's gc4gc handoff, then tell me where we are and what is safe to do
+next on this machine.
+```
 
 ## Communication Mechanism
 
