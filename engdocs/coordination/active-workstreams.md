@@ -701,6 +701,11 @@ remains draft and not queued. Stable gc4gc is verified as safe to consume from
 `codex/gc4gc-agent-runtime-dolt-leak` at
 `631493c52046d44cd006662e3858d1e6efc67f85`.
 
+Grace has a newer gc4gc dogfood runtime branch available for current review
+work: `codex/gc4gc-runtime-main-2313-json` at
+`0ae2ba20`. Treat this as the dogfood/review runtime, distinct from the
+previous stable-consumer bootstrap runtime above.
+
 Live #2351 failures at `f82f3c4e`:
 
 - Preflight / static checks: lint failures in registry/source plus adjacent
@@ -1246,6 +1251,8 @@ Gas City runtime used by stable gc4gc:
 - Expected runtime branch: `codex/gc4gc-agent-runtime-dolt-leak`.
 - New-machine runtime commit:
   `631493c52046d44cd006662e3858d1e6efc67f85`.
+- Current dogfood runtime branch for review work:
+  `codex/gc4gc-runtime-main-2313-json` at `0ae2ba20`.
 - Expected managed-Dolt leak fix commits include:
   - `bd6b0152 Fix managed Dolt test process leaks`
   - `9c205d19 Tighten Dolt leak guard cleanup`
@@ -1307,6 +1314,7 @@ Known unpromoted work:
 | Producer/dev gc4gc | `https://github.com/donbox/gc4gc`, branch `codex/gc4gc-producer-dev` | portable, dev only | future Grace-side producer work | Grace |
 | Producer snapshot | `https://github.com/donbox/gc4gc`, branch `codex/gc4gc-producer-snapshot-20260518` | archival | archaeology only | no active owner |
 | Runtime dependency | `https://github.com/gastownhall/gascity`, branch `codex/gc4gc-agent-runtime-dolt-leak` | portable runtime | patched gc for stable gc4gc | Mabel/Grace verify on new machine |
+| Dogfood runtime | `https://github.com/gastownhall/gascity`, branch `codex/gc4gc-runtime-main-2313-json` | available, review runtime | current gc4gc dogfood runtime with main/#2313/JSON composition | Grace owns; Mabel/Cleo may consume intentionally |
 
 ### Immediate Next Step
 
@@ -1316,6 +1324,10 @@ Known unpromoted work:
 - Cleo can safely consume stable gc4gc artifacts/lanes for registry/gc pack
   work: `pack-pr-review` canary evidence, `gc-json-audit` docs/runbook/formula
   and auditor lane, and stable `.runtime/runs/<run-id>/` core artifacts.
+- Mabel/Cleo may use the dogfood runtime branch
+  `codex/gc4gc-runtime-main-2313-json` at `0ae2ba20` for current review
+  dogfooding, but should name that choice in any artifact so it is not confused
+  with the stable bootstrap baseline.
 
 ### Complete Victory Checklist
 
