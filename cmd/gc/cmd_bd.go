@@ -195,7 +195,7 @@ func bdFirstSubcommandArg(args []string) string {
 
 func bdLeadingBoolFlag(arg string) bool {
 	switch arg {
-	case "--json", "--help", "-h", "--version":
+	case "--global", "--help", "-h", "--json", "--profile", "-q", "--quiet", "--readonly", "-v", "--verbose", "-V", "--version":
 		return true
 	default:
 		return false
@@ -204,7 +204,7 @@ func bdLeadingBoolFlag(arg string) bool {
 
 func bdLeadingValueFlag(arg string) bool {
 	switch arg {
-	case "--id", "--metadata-field", "--limit", "--status", "--assignee", "--type", "--label", "--labels":
+	case "--actor", "--assignee", "-C", "--db", "--directory", "--dolt-auto-commit", "--id", "--label", "--labels", "--limit", "--metadata-field", "--status", "--type":
 		return true
 	default:
 		return false
