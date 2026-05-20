@@ -9,7 +9,7 @@ import (
 
 func TestWriteJSONErrorIncludesExitCodeOnStdoutAndStderr(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := writeJSONError(&stdout, &stderr, "config_load_failed", "gc status: loading config failed", 7)
+	code := writeJSONError(&stdout, &stderr, "config_load_failed", "gc status: loading <config>&failed", 7)
 	if code != 7 {
 		t.Fatalf("code = %d, want 7", code)
 	}
@@ -20,6 +20,12 @@ func TestWriteJSONErrorIncludesExitCodeOnStdoutAndStderr(t *testing.T) {
 	}
 	if out.SchemaVersion != "1" || out.OK || out.Error.Code != "config_load_failed" || out.Error.ExitCode != 7 {
 		t.Fatalf("stdout error payload = %+v", out)
+	}
+	if lines := strings.Split(strings.TrimSpace(stdout.String()), "\n"); len(lines) != 1 {
+		t.Fatalf("stdout lines = %d, want one JSON line; stdout=%q", len(lines), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "<config>&failed") || strings.Contains(stdout.String(), `\u003cconfig\u003e\u0026failed`) {
+		t.Fatalf("stdout = %q, want unescaped CLI JSON text", stdout.String())
 	}
 
 	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
