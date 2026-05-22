@@ -13,6 +13,22 @@ env:
   BD_VERSION: "v1.0.4"
 
 jobs:
+  tier-b:
+    name: Tier B acceptance tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: ./.github/actions/setup-gascity-ubuntu
+        with:
+          dolt-version: ${{ env.DOLT_VERSION }}
+          bd-version: ${{ env.BD_VERSION }}
+          install-claude-cli: "false"
+
+      - name: Tier B lifecycle tests
+        run: make test-acceptance-b
+
   tier-c:
     name: Tier C acceptance tests (Ollama)
     runs-on: ubuntu-latest
