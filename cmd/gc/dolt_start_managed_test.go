@@ -323,6 +323,52 @@ func TestManagedDoltTestWatchdogExecutableUsesOSExecutable(t *testing.T) {
 	}
 }
 
+func TestManagedDoltTestWatchdogSpawnerIsolatesWatchdogSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX session semantics required")
+	}
+	withManagedDoltTestMode(t, true)
+	fakeDoltDir := writeFakeDoltSQLServer(t)
+	t.Setenv("PATH", fakeDoltDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "dolt-config.yaml")
+	logPath := filepath.Join(dir, "dolt.log")
+	if err := os.WriteFile(configPath, []byte("log_level: debug\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("open log file: %v", err)
+	}
+	defer logFile.Close() //nolint:errcheck
+
+	started, err := startManagedDoltSQLServerWithTestWatchdog("", configPath, logPath, logFile)
+	if err != nil {
+		t.Fatalf("start managed dolt with watchdog: %v", err)
+	}
+	t.Cleanup(func() { terminateManagedDoltStartedProcess(started) })
+
+	parentSID := readProcessSessionID(t, os.Getpid())
+	watchdogSID := readProcessSessionID(t, started.WatchdogPID)
+	if watchdogSID == parentSID {
+		t.Fatalf("watchdog SID = parent SID %d; watchdog must be isolated from test-run session kills", parentSID)
+	}
+}
+
+func readProcessSessionID(t *testing.T, pid int) int {
+	t.Helper()
+	out, err := exec.Command("ps", "-o", "sid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Skipf("ps session id lookup unavailable for pid %d: %v", pid, err)
+	}
+	sid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || sid <= 0 {
+		t.Skipf("ps session id lookup for pid %d returned %q", pid, out)
+	}
+	return sid
+}
+
 type blockingWatchdogPIDReader struct {
 	started chan struct{}
 	unblock chan struct{}

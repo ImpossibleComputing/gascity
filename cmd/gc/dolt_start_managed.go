@@ -266,6 +266,9 @@ func startManagedDoltSQLServerWithTestWatchdog(cityPath, configFile, logFilePath
 	cmd := exec.Command(watchdogExecutable, args...)
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
+	// The watchdog must survive process-group or session kills of the test run
+	// long enough to reap the dolt process it owns.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = doltServerEnv(os.Environ())
 	if parentPipeRead != nil {
 		cmd.ExtraFiles = []*os.File{parentPipeRead}
@@ -449,10 +452,10 @@ func unregisterManagedDoltStartedProcess(started managedDoltStartedProcess) {
 }
 
 // terminateManagedDoltTestPID stops a managed dolt test process. When the
-// target is its own process-group leader (Setpgid was applied at spawn — see
+// target is its own process-group leader (Setpgid/Setsid was applied at spawn — see
 // runManagedDoltTestWatchdog), it signals the entire process group so descendant
 // dolt workers do not outlive the test parent (gastownhall/gascity#2313 follow-up
-// M3). When the target is NOT a group leader (e.g. the watchdog itself, which
+// M3). When the target is NOT a group leader (e.g. a plain test child that
 // inherits the test binary's process group), it falls back to leader-only
 // termination so we never accidentally signal the test binary's group.
 func terminateManagedDoltTestPID(pid int) error {
@@ -527,7 +530,7 @@ func reapManagedDoltTestProcesses() {
 		}
 		if started.WatchdogPID > 0 && pidAlive(started.WatchdogPID) {
 			// Watchdog identity is not snapshotted; the watchdog is short-lived
-			// and exits with the dolt sql-server. Terminate leader-only.
+			// and exits with the dolt sql-server.
 			_ = managedDoltTestTerminateProcess(started.WatchdogPID)
 		}
 		managedDoltTestProcessRegistry.Delete(key)
