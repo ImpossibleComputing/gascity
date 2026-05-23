@@ -973,7 +973,7 @@ func TestPromptGuidanceUsesConfiguredRigRootsAndNamespacedWorktrees(t *testing.T
 		t.Fatalf("mayor prompt missing rig-status guidance:\n%s", mayorPrompt)
 	}
 
-	crewPrompt, err := os.ReadFile(filepath.Join(dir, "packs", "gastown", "assets", "prompts", "crew.template.md"))
+	crewPrompt, err := os.ReadFile(filepath.Join(dir, "packs", "gastown", "agents", "crew", "prompt.template.md"))
 	if err != nil {
 		t.Fatalf("reading crew prompt: %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 			},
 		},
 		{
-			rel:          "packs/gastown/assets/prompts/crew.template.md",
+			rel:          "packs/gastown/agents/crew/prompt.template.md",
 			agentName:    "demo/gastown.alice",
 			templateName: "crew",
 			rigName:      "demo",
@@ -1414,7 +1414,7 @@ func TestGastownPromptPeerAddressesUseBindingPrefix(t *testing.T) {
 			},
 		},
 		{
-			rel:          "packs/gastown/assets/prompts/crew.template.md",
+			rel:          "packs/gastown/agents/crew/prompt.template.md",
 			agentName:    "demo/alice",
 			templateName: "crew",
 			rigName:      "demo",
