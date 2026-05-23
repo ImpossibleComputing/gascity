@@ -18,6 +18,12 @@ RIG_ROOT="${1:?usage: clone-setup.sh <rig-root> <target-dir> <agent-name>}"
 TARGET="${2:?missing target-dir}"
 AGENT="${3:?missing agent-name}"
 
+# The supervisor sets cwd to the work_dir (which is $TARGET) before running
+# pre_start. The script rmdir's $TARGET before cloning into it; if we stayed
+# inside it, git clone would fail with "Unable to read current working
+# directory" once the cwd inode was unlinked. Step out to a stable parent.
+cd /
+
 # Idempotent: a present clone is left as-is. Crew sessions reuse the same
 # workspace across nudges; clobbering would discard WIP and feature branches.
 if [ -d "$TARGET/.git" ] || [ -f "$TARGET/.git" ]; then
