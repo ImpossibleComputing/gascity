@@ -9,9 +9,14 @@ import (
 func (s *HQStore) PurgeExpired() (int, error) {
 	now := time.Now()
 
+	finish, err := s.beginLiveWrite()
+	if err != nil {
+		return 0, err
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := s.ensureOpenLocked(); err != nil {
+		s.mu.Unlock()
+		_ = finish(false)
 		return 0, err
 	}
 
@@ -32,7 +37,12 @@ func (s *HQStore) PurgeExpired() (int, error) {
 	for _, id := range ids {
 		s.deleteLocked(id)
 	}
-	return len(ids), nil
+	purged := len(ids)
+	s.mu.Unlock()
+	if err := finish(purged > 0); err != nil {
+		return 0, err
+	}
+	return purged, nil
 }
 
 func hqBeadExpiresAt(b Bead) (time.Time, bool) {
