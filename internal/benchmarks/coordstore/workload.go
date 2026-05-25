@@ -102,6 +102,8 @@ type SoakConfig struct {
 	SoakPhase SoakPhase
 	// SoakDuration overrides the workload duration when non-zero.
 	SoakDuration time.Duration
+	// ChaosDuration overrides the Phase B workload duration when non-zero.
+	ChaosDuration time.Duration
 	// KillCadence is reserved for later chaos phases; Phase A does not kill
 	// processes.
 	KillCadence time.Duration

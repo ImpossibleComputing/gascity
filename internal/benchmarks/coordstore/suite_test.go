@@ -134,6 +134,9 @@ func TestBenchmarkSoakPhaseB(t *testing.T) {
 	}
 	cfg := soakConfigFromEnv(t, 4*time.Hour)
 	cfg.SoakPhase = coordstore.SoakPhaseB
+	if cfg.ChaosDuration > 0 {
+		cfg.SoakDuration = cfg.ChaosDuration
+	}
 	cfg.KillCadence = killCadenceFromEnv(t, 30*time.Second)
 	checkSoakPreflight(t, cfg, len(registeredAdapters))
 	runChaosSuite(t, cfg)
@@ -165,6 +168,9 @@ func TestBenchmarkSoakFullMatrix(t *testing.T) {
 	cfg := soakConfigFromEnv(t, 4*time.Hour)
 	phaseBCfg := cfg
 	phaseBCfg.SoakPhase = coordstore.SoakPhaseB
+	if cfg.ChaosDuration > 0 {
+		phaseBCfg.SoakDuration = cfg.ChaosDuration
+	}
 	phaseBCfg.KillCadence = killCadenceFromEnv(t, 30*time.Second)
 	checkSoakPreflight(t, phaseBCfg, len(adapters))
 	for _, af := range adapters {
@@ -431,9 +437,18 @@ func soakConfigFromEnv(t *testing.T, defaultDuration time.Duration) coordstore.S
 		}
 		scale = parsed
 	}
+	var chaosDuration time.Duration
+	if raw := os.Getenv("COORDSTORE_CHAOS_DURATION"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			t.Fatalf("invalid COORDSTORE_CHAOS_DURATION %q: %v", raw, err)
+		}
+		chaosDuration = parsed
+	}
 	return coordstore.SoakConfig{
 		SoakPhase:      coordstore.SoakPhaseA,
 		SoakDuration:   duration,
+		ChaosDuration:  chaosDuration,
 		SampleInterval: sampleInterval,
 		ResultsDir:     resultsDir,
 		ScaleFactor:    scale,
