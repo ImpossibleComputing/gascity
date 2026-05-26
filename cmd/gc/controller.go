@@ -128,7 +128,6 @@ func startControllerSocket(
 	convergenceReqCh chan convergenceRequest,
 	pokeCh chan struct{},
 	controlDispatcherCh chan struct{},
-	onExternalPoke func(),
 ) (net.Listener, error) {
 	sockPath := controllerSocketPath(cityPath)
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
@@ -146,7 +145,7 @@ func startControllerSocket(
 			if err != nil {
 				return // listener closed
 			}
-			go handleControllerConn(conn, cityPath, cancelFn, forceShutdown, dirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh, onExternalPoke)
+			go handleControllerConn(conn, cityPath, cancelFn, forceShutdown, dirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh)
 		}
 	}()
 	return lis, nil
@@ -166,7 +165,6 @@ func handleControllerConn(
 	convergenceReqCh chan convergenceRequest,
 	pokeCh chan struct{},
 	controlDispatcherCh chan struct{},
-	onExternalPoke func(),
 ) {
 	defer conn.Close()                                 //nolint:errcheck // best-effort cleanup
 	conn.SetDeadline(time.Now().Add(95 * time.Second)) //nolint:errcheck // symmetric read+write deadline; 5s margin over 30s enqueue + 60s reply
@@ -188,9 +186,6 @@ func handleControllerConn(
 		case line == "ping":
 			fmt.Fprintf(conn, "%d\n", os.Getpid()) //nolint:errcheck // best-effort
 		case line == "poke":
-			if onExternalPoke != nil {
-				onExternalPoke()
-			}
 			// Non-blocking send: triggers immediate reconciler tick for
 			// event-driven wake after sling assigns work.
 			select {
@@ -1251,17 +1246,10 @@ func runController(
 	pokeCh := make(chan struct{}, 1)
 	controlDispatcherCh := make(chan struct{}, 1)
 	configDirty := &atomic.Bool{}
-	var externalPokeHook atomic.Value
-	externalPokeHook.Store(func() {})
-	onExternalPoke := func() {
-		if fn, ok := externalPokeHook.Load().(func()); ok && fn != nil {
-			fn()
-		}
-	}
 
 	sockPath := controllerSocketPath(cityPath)
 	forceShutdown := &atomic.Bool{}
-	lis, err := startControllerSocket(cityPath, cancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh, onExternalPoke)
+	lis, err := startControllerSocket(cityPath, cancel, forceShutdown, configDirty, reloadReqCh, convergenceReqCh, pokeCh, controlDispatcherCh)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc start: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
@@ -1326,7 +1314,6 @@ func runController(
 	cs.configDirty = configDirty
 	cs.services = cr.svc
 	cs.startBeadEventWatcher(ctx)
-	externalPokeHook.Store(cs.markExternalBeadStoreMutation)
 	cr.setControllerState(cs)
 
 	// Start API server if configured. Standalone city mode wraps the
