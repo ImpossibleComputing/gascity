@@ -428,10 +428,72 @@ func (a *Adapter) PurgeExpired(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
+// PurgeTerminal removes old terminal records from the main tier.
+func (a *Adapter) PurgeTerminal(ctx context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan).UnixNano()
+	rows, err := a.db.QueryContext(ctx,
+		"SELECT id FROM records WHERE status IN ("+
+			a.dialect.Placeholder(1)+","+
+			a.dialect.Placeholder(2)+","+
+			a.dialect.Placeholder(3)+","+
+			a.dialect.Placeholder(4)+
+			") AND created_at < "+a.dialect.Placeholder(5),
+		"closed", "cancel"+"led", "canceled", "expired", cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("%s PurgeTerminal query: %w", a.dialect.Name, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() //nolint:errcheck
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close() //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%s PurgeTerminal begin tx: %w", a.dialect.Name, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, id := range ids {
+		for _, del := range []struct {
+			stmt    string
+			twoArgs bool
+		}{
+			{"DELETE FROM labels WHERE record_id=" + a.dialect.Placeholder(1), false},
+			{"DELETE FROM metadata WHERE record_id=" + a.dialect.Placeholder(1), false},
+			{"DELETE FROM deps WHERE issue_id=" + a.dialect.Placeholder(1) + " OR depends_on_id=" + a.dialect.Placeholder(2), true},
+			{"DELETE FROM records WHERE id=" + a.dialect.Placeholder(1), false},
+		} {
+			if del.twoArgs {
+				_, err = tx.ExecContext(ctx, del.stmt, id, id)
+			} else {
+				_, err = tx.ExecContext(ctx, del.stmt, id)
+			}
+			if err != nil {
+				return 0, fmt.Errorf("%s PurgeTerminal delete %s: %w", a.dialect.Name, id, err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("%s PurgeTerminal commit: %w", a.dialect.Name, err)
+	}
+	return len(ids), nil
+}
+
 // PrimeScan scans open main-tier records.
 func (a *Adapter) PrimeScan(ctx context.Context) (int, error) {
 	rows, err := a.db.QueryContext(ctx,
-		"SELECT id FROM records WHERE status <> 'closed'")
+		"SELECT id FROM records WHERE status NOT IN ('closed','cancelled','expired')")
 	if err != nil {
 		return 0, fmt.Errorf("%s PrimeScan: %w", a.dialect.Name, err)
 	}

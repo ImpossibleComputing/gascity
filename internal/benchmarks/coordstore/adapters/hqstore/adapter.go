@@ -183,6 +183,34 @@ func (a *Adapter) PurgeExpired(context.Context) (int, error) {
 	return a.store.PurgeExpired()
 }
 
+// PurgeTerminal removes old terminal main-tier records.
+func (a *Adapter) PurgeTerminal(_ context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	items, err := a.store.List(beads.ListQuery{
+		AllowScan:     true,
+		IncludeClosed: true,
+		CreatedBefore: cutoff,
+		TierMode:      beads.TierIssues,
+	})
+	if err != nil {
+		return 0, err
+	}
+	purged := 0
+	for _, item := range items {
+		if !coordstore.IsTerminalStatus(item.Status) || !item.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if err := a.store.Delete(item.ID); err != nil {
+			return purged, mapNotFound(err)
+		}
+		purged++
+	}
+	return purged, nil
+}
+
 // PrimeScan loads open records through the HQStore list path.
 func (a *Adapter) PrimeScan(context.Context) (int, error) {
 	items, err := a.store.List(beads.ListQuery{AllowScan: true})

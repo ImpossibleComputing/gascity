@@ -371,13 +371,51 @@ func (a *Adapter) PurgeExpired(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
+// PurgeTerminal removes old terminal main-tier records.
+func (a *Adapter) PurgeTerminal(ctx context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var ids []string
+	for id, r := range a.main {
+		if terminalBefore(r, cutoff) {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		r := a.main[id]
+		if a.persister != nil {
+			if err := a.persister.DeleteRecord(ctx, id, false); err != nil {
+				return 0, err
+			}
+		}
+		a.mainIdx.remove(r)
+		delete(a.main, id)
+		for k, d := range a.deps {
+			if d.FromID == id || d.ToID == id {
+				if a.persister != nil {
+					if err := a.persister.DeleteDep(ctx, d.FromID, d.ToID); err != nil {
+						return 0, err
+					}
+				}
+				delete(a.deps, k)
+			}
+		}
+	}
+	return len(ids), nil
+}
+
 // PrimeScan loads all non-closed main records into the hot path.
 func (a *Adapter) PrimeScan(_ context.Context) (int, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	n := 0
 	for _, r := range a.main {
-		if r.Status != "closed" {
+		if !coordstore.IsTerminalStatus(r.Status) {
 			n++
 		}
 	}
@@ -504,11 +542,14 @@ func normalizeRecord(r coordstore.Record, nextID func() string) coordstore.Recor
 }
 
 func applyUpdate(r *coordstore.Record, u coordstore.Update) {
+	changed := false
 	if u.Status != "" {
 		r.Status = u.Status
+		changed = true
 	}
 	if u.Assignee != "" {
 		r.Assignee = u.Assignee
+		changed = true
 	}
 	if len(u.Metadata) > 0 {
 		if r.Metadata == nil {
@@ -517,7 +558,22 @@ func applyUpdate(r *coordstore.Record, u coordstore.Update) {
 		for k, v := range u.Metadata {
 			r.Metadata[k] = v
 		}
+		changed = true
 	}
+	if changed {
+		r.UpdatedAt = time.Now()
+	}
+}
+
+func terminalBefore(r coordstore.Record, cutoff time.Time) bool {
+	if !coordstore.IsTerminalStatus(r.Status) {
+		return false
+	}
+	t := r.UpdatedAt
+	if t.IsZero() {
+		t = r.CreatedAt
+	}
+	return t.Before(cutoff)
 }
 
 func matches(r coordstore.Record, q coordstore.Query) bool {
@@ -525,7 +581,7 @@ func matches(r coordstore.Record, q coordstore.Query) bool {
 		if r.Status != q.Status {
 			return false
 		}
-	} else if r.Status == "closed" {
+	} else if coordstore.IsTerminalStatus(r.Status) {
 		return false
 	}
 	if q.Type != "" && r.Type != q.Type {

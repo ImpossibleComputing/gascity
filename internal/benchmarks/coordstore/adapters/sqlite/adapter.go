@@ -8,9 +8,8 @@
 //   - Labels in a separate table with cascade on delete (FR-17).
 //   - Deps in a separate table (FR-10).
 //   - WAL journal mode for concurrent reads (FR-16, throughput target).
-//   - PRAGMA synchronous=NORMAL: single-process only; full fsync on each
-//     commit is not needed for this benchmark (same trade-off as discovery.md
-//     author-own design, which allows sync=normal for single-process use).
+//   - PRAGMA synchronous=FULL: commits are flushed through SQLite's WAL path
+//     so acknowledged writes survive process crashes in the production config.
 package sqlite
 
 import (
@@ -18,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,16 +31,19 @@ import (
 // WAL concurrency model:
 //   - writeDB: single connection, serializes all writes. WAL mode allows
 //     readers to continue during writes without blocking.
-//   - readDB: pool of up to 20 connections. Multiple goroutines can read
+//   - readDB: pool of up to 8 connections. Multiple goroutines can read
 //     concurrently in WAL mode while a write is in progress.
 //
 // This matches the canonical SQLite WAL production pattern for in-process use.
 type Adapter struct {
-	writeDB     *sql.DB // single writer connection
-	readDB      *sql.DB // reader connection pool
-	stmtGetMain *sql.Stmt
-	stmtGetEph  *sql.Stmt
-	seq         atomic.Int64
+	writeDB         *sql.DB // single writer connection
+	readDB          *sql.DB // reader connection pool
+	stmtGetMain     *sql.Stmt
+	stmtGetEph      *sql.Stmt
+	retentionCancel context.CancelFunc
+	retentionDone   chan struct{}
+	seq             atomic.Int64
+	retentionErrors atomic.Int64
 }
 
 // New returns an Adapter. Call Open before using it.
@@ -49,6 +52,18 @@ func New() *Adapter { return &Adapter{} }
 // Open initializes the SQLite database at cfg.DataDir/store.db.
 func (a *Adapter) Open(ctx context.Context, cfg coordstore.Config) error {
 	path := cfg.DataDir + "/store.db"
+	readPoolSize, err := sqliteReadPoolSize(cfg.Extra)
+	if err != nil {
+		return err
+	}
+	walAutocheckpoint, err := sqliteWALAutocheckpoint(cfg.Extra)
+	if err != nil {
+		return err
+	}
+	retentionPeriod, retentionSweepInterval, err := sqliteRetentionConfig(cfg.Extra)
+	if err != nil {
+		return err
+	}
 
 	// Write connection: single connection, serializes all mutations.
 	writeDB, err := sql.Open("sqlite", path+"?_busy_timeout=5000")
@@ -57,7 +72,7 @@ func (a *Adapter) Open(ctx context.Context, cfg coordstore.Config) error {
 	}
 	writeDB.SetMaxOpenConns(1)
 
-	if _, err := writeDB.ExecContext(ctx, pragmas); err != nil {
+	if _, err := writeDB.ExecContext(ctx, pragmas(walAutocheckpoint)); err != nil {
 		writeDB.Close() //nolint:errcheck
 		return fmt.Errorf("sqlite: set pragmas: %w", err)
 	}
@@ -76,8 +91,8 @@ func (a *Adapter) Open(ctx context.Context, cfg coordstore.Config) error {
 	}
 	// Keep all connections warm — connection churn is the dominant read latency
 	// when MaxIdleConns < MaxOpenConns causes constant open/close on every op.
-	readDB.SetMaxOpenConns(20)
-	readDB.SetMaxIdleConns(20)
+	readDB.SetMaxOpenConns(readPoolSize)
+	readDB.SetMaxIdleConns(readPoolSize)
 	readDB.SetConnMaxIdleTime(5 * time.Minute)
 
 	writeDB.SetMaxIdleConns(1)
@@ -103,11 +118,13 @@ func (a *Adapter) Open(ctx context.Context, cfg coordstore.Config) error {
 	a.readDB = readDB
 	a.stmtGetMain = stmtGetMain
 	a.stmtGetEph = stmtGetEph
+	a.startRetentionSweep(retentionPeriod, retentionSweepInterval)
 	return nil
 }
 
 // Close releases all database connections and prepared statements.
 func (a *Adapter) Close() error {
+	a.stopRetentionSweep()
 	var errs []string
 	if a.stmtGetMain != nil {
 		if err := a.stmtGetMain.Close(); err != nil {
@@ -165,6 +182,10 @@ func (a *Adapter) Create(ctx context.Context, r coordstore.Record) (coordstore.R
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
+	updatedNs := int64(0)
+	if !r.UpdatedAt.IsZero() {
+		updatedNs = r.UpdatedAt.UnixNano()
+	}
 	if r.Status == "" {
 		r.Status = "open"
 	}
@@ -184,10 +205,10 @@ func (a *Adapter) Create(ctx context.Context, r coordstore.Record) (coordstore.R
 			expiresNs = r.ExpiresAt.UnixNano()
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO ephemeral(id,title,status,type,created_at,assignee,parent_id,expires_at)
-			 VALUES(?,?,?,?,?,?,?,?)`,
+			`INSERT INTO ephemeral(id,title,status,type,created_at,updated_at,assignee,parent_id,expires_at)
+			 VALUES(?,?,?,?,?,?,?,?,?)`,
 			r.ID, r.Title, r.Status, r.Type,
-			r.CreatedAt.UnixNano(), r.Assignee, r.ParentID, expiresNs)
+			r.CreatedAt.UnixNano(), updatedNs, r.Assignee, r.ParentID, expiresNs)
 		if err != nil {
 			return coordstore.Record{}, fmt.Errorf("sqlite Create ephemeral: %w", err)
 		}
@@ -199,10 +220,10 @@ func (a *Adapter) Create(ctx context.Context, r coordstore.Record) (coordstore.R
 		}
 	} else {
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO records(id,title,status,type,priority,created_at,assignee,parent_id,description)
-			 VALUES(?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO records(id,title,status,type,priority,created_at,updated_at,assignee,parent_id,description)
+			 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 			r.ID, r.Title, r.Status, r.Type,
-			r.Priority, r.CreatedAt.UnixNano(), r.Assignee, r.ParentID, "")
+			r.Priority, r.CreatedAt.UnixNano(), updatedNs, r.Assignee, r.ParentID, "")
 		if err != nil {
 			return coordstore.Record{}, fmt.Errorf("sqlite Create main: %w", err)
 		}
@@ -245,10 +266,10 @@ func (a *Adapter) getMain(ctx context.Context, id string) (coordstore.Record, er
 	// Uses pre-compiled stmtGetMain: single query with correlated subqueries
 	// for labels and metadata. char(30)=RS, char(31)=US as separators.
 	var r coordstore.Record
-	var createdNs int64
+	var createdNs, updatedNs int64
 	var labelsStr, metaStr sql.NullString
 	err := a.stmtGetMain.QueryRowContext(ctx, id).Scan(
-		&r.ID, &r.Title, &r.Status, &r.Type, &r.Priority, &createdNs, &r.Assignee, &r.ParentID,
+		&r.ID, &r.Title, &r.Status, &r.Type, &r.Priority, &createdNs, &updatedNs, &r.Assignee, &r.ParentID,
 		&labelsStr, &metaStr,
 	)
 	if err == sql.ErrNoRows {
@@ -258,6 +279,9 @@ func (a *Adapter) getMain(ctx context.Context, id string) (coordstore.Record, er
 		return coordstore.Record{}, err
 	}
 	r.CreatedAt = time.Unix(0, createdNs)
+	if updatedNs > 0 {
+		r.UpdatedAt = time.Unix(0, updatedNs)
+	}
 	r.Labels = splitConcat(labelsStr)
 	r.Metadata = splitKVConcat(metaStr)
 	return r, nil
@@ -265,10 +289,10 @@ func (a *Adapter) getMain(ctx context.Context, id string) (coordstore.Record, er
 
 func (a *Adapter) getEphemeral(ctx context.Context, id string) (coordstore.Record, error) {
 	var r coordstore.Record
-	var createdNs, expiresNs int64
+	var createdNs, updatedNs, expiresNs int64
 	var labelsStr, metaStr sql.NullString
 	err := a.stmtGetEph.QueryRowContext(ctx, id).Scan(
-		&r.ID, &r.Title, &r.Status, &r.Type, &createdNs, &r.Assignee, &r.ParentID, &expiresNs,
+		&r.ID, &r.Title, &r.Status, &r.Type, &createdNs, &updatedNs, &r.Assignee, &r.ParentID, &expiresNs,
 		&labelsStr, &metaStr,
 	)
 	if err == sql.ErrNoRows {
@@ -278,6 +302,9 @@ func (a *Adapter) getEphemeral(ctx context.Context, id string) (coordstore.Recor
 		return coordstore.Record{}, err
 	}
 	r.CreatedAt = time.Unix(0, createdNs)
+	if updatedNs > 0 {
+		r.UpdatedAt = time.Unix(0, updatedNs)
+	}
 	r.Ephemeral = true
 	if expiresNs > 0 {
 		r.ExpiresAt = time.Unix(0, expiresNs)
@@ -302,6 +329,8 @@ func (a *Adapter) Update(ctx context.Context, id string, u coordstore.Update) er
 	if len(setClauses) == 0 && len(u.Metadata) == 0 {
 		return nil
 	}
+	setClauses = append(setClauses, "updated_at=?")
+	args = append(args, time.Now().UnixNano())
 
 	tx, err := a.writeDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -309,17 +338,15 @@ func (a *Adapter) Update(ctx context.Context, id string, u coordstore.Update) er
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if len(setClauses) > 0 {
-		q := "UPDATE records SET " + strings.Join(setClauses, ",") + " WHERE id=?"
-		args = append(args, id)
-		res, err := tx.ExecContext(ctx, q, args...)
-		if err != nil {
-			return fmt.Errorf("sqlite Update: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return coordstore.ErrNotFound
-		}
+	q := "UPDATE records SET " + strings.Join(setClauses, ",") + " WHERE id=?"
+	args = append(args, id)
+	res, err := tx.ExecContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("sqlite Update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return coordstore.ErrNotFound
 	}
 	if len(u.Metadata) > 0 {
 		if err := upsertMetadata(ctx, tx, id, u.Metadata, false); err != nil {
@@ -422,7 +449,7 @@ func (a *Adapter) BatchGet(ctx context.Context, ids []string) ([]coordstore.Reco
 	}
 
 	rows, err := a.readDB.QueryContext(ctx,
-		"SELECT id,title,status,type,priority,created_at,assignee,parent_id FROM records WHERE id IN ("+placeholders+")",
+		"SELECT id,title,status,type,priority,created_at,updated_at,assignee,parent_id FROM records WHERE id IN ("+placeholders+")",
 		args...)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite BatchGet: %w", err)
@@ -474,7 +501,7 @@ func (a *Adapter) Ready(ctx context.Context, q coordstore.ReadyQuery) ([]coordst
 	              JOIN records b ON b.id = d.depends_on_id
 	              WHERE b.status IN ('open','in_progress')
 	          )
-	          SELECT r.id,r.title,r.status,r.type,r.priority,r.created_at,r.assignee,r.parent_id
+	          SELECT r.id,r.title,r.status,r.type,r.priority,r.created_at,r.updated_at,r.assignee,r.parent_id
 	          FROM records r
 	          WHERE r.status IN ('open','in_progress')
 	            AND r.type NOT IN (` + placeholders + `)
@@ -578,21 +605,87 @@ func (a *Adapter) PurgeExpired(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
+// PurgeTerminal removes old terminal records from the main tier.
+func (a *Adapter) PurgeTerminal(ctx context.Context, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan).UnixNano()
+	tx, err := a.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite PurgeTerminal: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM records
+		 WHERE status IN ('closed','cancelled','canceled','expired')
+		   AND COALESCE(NULLIF(updated_at, 0), created_at) < ?
+		 LIMIT ?`,
+		cutoff, coordstore.TerminalPurgeBatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite PurgeTerminal: query: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close() //nolint:errcheck
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close() //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, id := range ids {
+		for _, del := range []struct {
+			stmt    string
+			twoArgs bool
+		}{
+			{"DELETE FROM labels WHERE record_id=?", false},
+			{"DELETE FROM metadata WHERE record_id=?", false},
+			{"DELETE FROM deps WHERE issue_id=? OR depends_on_id=?", true},
+			{"DELETE FROM records WHERE id=?", false},
+		} {
+			var err error
+			if del.twoArgs {
+				_, err = tx.ExecContext(ctx, del.stmt, id, id)
+			} else {
+				_, err = tx.ExecContext(ctx, del.stmt, id)
+			}
+			if err != nil {
+				return 0, fmt.Errorf("sqlite PurgeTerminal: delete %q: %w", id, err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("sqlite PurgeTerminal: commit: %w", err)
+	}
+	if len(ids) > 0 {
+		if _, err := a.writeDB.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+			return len(ids), fmt.Errorf("sqlite PurgeTerminal: checkpoint: %w", err)
+		}
+	}
+	return len(ids), nil
+}
+
 // --- FR-15: Prime scan ---
 
 // PrimeScan loads all open records and returns the count.
 func (a *Adapter) PrimeScan(ctx context.Context) (int, error) {
 	rows, err := a.readDB.QueryContext(ctx,
-		"SELECT id,title,status,type,priority,created_at,assignee,parent_id FROM records WHERE status != 'closed'")
+		"SELECT id FROM records WHERE status NOT IN ('closed','cancelled','canceled','expired')")
 	if err != nil {
 		return 0, fmt.Errorf("sqlite PrimeScan: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 	n := 0
 	for rows.Next() {
-		var r coordstore.Record
-		if err := rows.Scan(&r.ID, &r.Title, &r.Status, &r.Type, &r.Priority,
-			new(int64), &r.Assignee, &r.ParentID); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return n, err
 		}
 		n++
@@ -608,7 +701,7 @@ func (a *Adapter) RecentScan(ctx context.Context, limit int) ([]coordstore.Recor
 		limit = 100
 	}
 	rows, err := a.readDB.QueryContext(ctx,
-		`SELECT id,title,status,type,priority,created_at,assignee,parent_id
+		`SELECT id,title,status,type,priority,created_at,updated_at,assignee,parent_id
 		 FROM records ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite RecentScan: %w", err)
@@ -624,7 +717,45 @@ func (a *Adapter) Stats(_ context.Context) map[string]int64 {
 		"open_connections": int64(stats.OpenConnections),
 		"in_use":           int64(stats.InUse),
 		"idle":             int64(stats.Idle),
+		"retention_errors": a.retentionErrors.Load(),
 	}
+}
+
+func (a *Adapter) startRetentionSweep(retentionPeriod, sweepInterval time.Duration) {
+	if retentionPeriod <= 0 || sweepInterval <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	a.retentionCancel = cancel
+	a.retentionDone = done
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(sweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := a.PurgeTerminal(ctx, retentionPeriod); err != nil && !errors.Is(err, context.Canceled) {
+					a.retentionErrors.Add(1)
+				}
+			}
+		}
+	}()
+}
+
+func (a *Adapter) stopRetentionSweep() {
+	if a.retentionCancel == nil {
+		return
+	}
+	a.retentionCancel()
+	if a.retentionDone != nil {
+		<-a.retentionDone
+	}
+	a.retentionCancel = nil
+	a.retentionDone = nil
 }
 
 // --- helpers ---
@@ -660,7 +791,7 @@ func buildMainQuery(q coordstore.Query) (string, []any) {
 		where = append(where, "EXISTS(SELECT 1 FROM metadata m WHERE m.record_id=r.id AND m.key=? AND m.value=?)")
 		args = append(args, k, v)
 	}
-	query := `SELECT r.id,r.title,r.status,r.type,r.priority,r.created_at,r.assignee,r.parent_id
+	query := `SELECT r.id,r.title,r.status,r.type,r.priority,r.created_at,r.updated_at,r.assignee,r.parent_id
 	          FROM records r WHERE ` + strings.Join(where, " AND ")
 	if q.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", q.Limit)
@@ -689,7 +820,7 @@ func buildEphemeralQuery(q coordstore.Query) (string, []any) {
 		where = append(where, "EXISTS(SELECT 1 FROM ephemeral_labels el WHERE el.record_id=e.id AND el.label=?)")
 		args = append(args, q.Label)
 	}
-	query := `SELECT e.id,e.title,e.status,e.type,e.created_at,e.assignee,e.parent_id,e.expires_at
+	query := `SELECT e.id,e.title,e.status,e.type,e.created_at,e.updated_at,e.assignee,e.parent_id,e.expires_at
 	          FROM ephemeral e WHERE ` + strings.Join(where, " AND ")
 	if q.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", q.Limit)
@@ -701,11 +832,14 @@ func scanMainRows(rows *sql.Rows) ([]coordstore.Record, error) {
 	var records []coordstore.Record
 	for rows.Next() {
 		var r coordstore.Record
-		var createdNs int64
-		if err := rows.Scan(&r.ID, &r.Title, &r.Status, &r.Type, &r.Priority, &createdNs, &r.Assignee, &r.ParentID); err != nil {
+		var createdNs, updatedNs int64
+		if err := rows.Scan(&r.ID, &r.Title, &r.Status, &r.Type, &r.Priority, &createdNs, &updatedNs, &r.Assignee, &r.ParentID); err != nil {
 			return nil, err
 		}
 		r.CreatedAt = time.Unix(0, createdNs)
+		if updatedNs > 0 {
+			r.UpdatedAt = time.Unix(0, updatedNs)
+		}
 		records = append(records, r)
 	}
 	return records, rows.Err()
@@ -715,11 +849,14 @@ func scanEphemeralRows(rows *sql.Rows) ([]coordstore.Record, error) {
 	var records []coordstore.Record
 	for rows.Next() {
 		var r coordstore.Record
-		var createdNs, expiresNs int64
-		if err := rows.Scan(&r.ID, &r.Title, &r.Status, &r.Type, &createdNs, &r.Assignee, &r.ParentID, &expiresNs); err != nil {
+		var createdNs, updatedNs, expiresNs int64
+		if err := rows.Scan(&r.ID, &r.Title, &r.Status, &r.Type, &createdNs, &updatedNs, &r.Assignee, &r.ParentID, &expiresNs); err != nil {
 			return nil, err
 		}
 		r.CreatedAt = time.Unix(0, createdNs)
+		if updatedNs > 0 {
+			r.UpdatedAt = time.Unix(0, updatedNs)
+		}
 		r.Ephemeral = true
 		if expiresNs > 0 {
 			r.ExpiresAt = time.Unix(0, expiresNs)
@@ -796,13 +933,13 @@ func splitKVConcat(s sql.NullString) map[string]string {
 // sqlGetMain and sqlGetEphemeral are pre-compiled at Open time to avoid
 // repeated SQL parsing overhead on the hot Get path.
 const sqlGetMain = `
-	SELECT r.id, r.title, r.status, r.type, r.priority, r.created_at, r.assignee, r.parent_id,
+	SELECT r.id, r.title, r.status, r.type, r.priority, r.created_at, r.updated_at, r.assignee, r.parent_id,
 	    (SELECT GROUP_CONCAT(label, char(30)) FROM labels WHERE record_id = r.id),
 	    (SELECT GROUP_CONCAT(key || char(31) || value, char(30)) FROM metadata WHERE record_id = r.id)
 	FROM records r WHERE r.id = ?`
 
 const sqlGetEphemeral = `
-	SELECT e.id, e.title, e.status, e.type, e.created_at, e.assignee, e.parent_id, e.expires_at,
+	SELECT e.id, e.title, e.status, e.type, e.created_at, e.updated_at, e.assignee, e.parent_id, e.expires_at,
 	    (SELECT GROUP_CONCAT(label, char(30)) FROM ephemeral_labels WHERE record_id = e.id),
 	    (SELECT GROUP_CONCAT(key || char(31) || value, char(30)) FROM ephemeral_metadata WHERE record_id = e.id)
 	FROM ephemeral e WHERE e.id = ?`
@@ -817,15 +954,74 @@ func isNotFound(err error) bool {
 	return ok
 }
 
+const (
+	defaultSQLiteReadPoolSize        = 8
+	defaultSQLiteWALAutocheckpoint   = 1000
+	defaultSQLiteRetentionPeriod     = 4 * time.Hour
+	defaultSQLiteRetentionSweepEvery = 30 * time.Second
+)
+
+func sqliteReadPoolSize(extra map[string]string) (int, error) {
+	return intConfig(extra, "pool_size", defaultSQLiteReadPoolSize)
+}
+
+func sqliteWALAutocheckpoint(extra map[string]string) (int, error) {
+	return intConfig(extra, "wal_autocheckpoint", defaultSQLiteWALAutocheckpoint)
+}
+
+func sqliteRetentionConfig(extra map[string]string) (time.Duration, time.Duration, error) {
+	period, err := durationConfig(extra, "retention_period", defaultSQLiteRetentionPeriod)
+	if err != nil {
+		return 0, 0, err
+	}
+	interval, err := durationConfig(extra, "retention_sweep_interval", defaultSQLiteRetentionSweepEvery)
+	if err != nil {
+		return 0, 0, err
+	}
+	return period, interval, nil
+}
+
+func intConfig(extra map[string]string, key string, fallback int) (int, error) {
+	raw := extra[key]
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: parse %s=%q: %w", key, raw, err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("sqlite: %s must be > 0, got %d", key, value)
+	}
+	return value, nil
+}
+
+func durationConfig(extra map[string]string, key string, fallback time.Duration) (time.Duration, error) {
+	raw := extra[key]
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: parse %s=%q: %w", key, raw, err)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("sqlite: %s must be >= 0, got %s", key, value)
+	}
+	return value, nil
+}
+
 // pragmas are applied once after opening the database.
-const pragmas = `
+func pragmas(walAutocheckpoint int) string {
+	return fmt.Sprintf(`
 PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
+PRAGMA synchronous=FULL;
 PRAGMA cache_size=-65536;
 PRAGMA temp_store=MEMORY;
 PRAGMA mmap_size=268435456;
-PRAGMA wal_autocheckpoint=0;
-`
+PRAGMA wal_autocheckpoint=%d;
+`, walAutocheckpoint)
+}
 
 // schema defines all tables and indexes. Applied once at Open.
 const schema = `
@@ -836,6 +1032,7 @@ CREATE TABLE IF NOT EXISTS records (
     type        TEXT NOT NULL DEFAULT 'task',
     priority    INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL DEFAULT 0,
     assignee    TEXT NOT NULL DEFAULT '',
     parent_id   TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT ''
@@ -845,6 +1042,8 @@ CREATE INDEX IF NOT EXISTS idx_records_assignee  ON records(assignee);
 CREATE INDEX IF NOT EXISTS idx_records_type      ON records(type);
 CREATE INDEX IF NOT EXISTS idx_records_parent_id ON records(parent_id);
 CREATE INDEX IF NOT EXISTS idx_records_created   ON records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_records_terminal_retention ON records(status, updated_at)
+    WHERE status IN ('closed','cancelled','canceled','expired');
 CREATE INDEX IF NOT EXISTS idx_records_status_assignee ON records(status, assignee);
 -- Partial index covering only non-closed rows: makes "status != 'closed' AND assignee=?"
 -- scan ~10 rows instead of all 1k+ rows per assignee in a large closed-record dataset.
@@ -856,6 +1055,7 @@ CREATE TABLE IF NOT EXISTS ephemeral (
     status      TEXT NOT NULL DEFAULT 'open',
     type        TEXT NOT NULL DEFAULT 'message',
     created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL DEFAULT 0,
     assignee    TEXT NOT NULL DEFAULT '',
     parent_id   TEXT NOT NULL DEFAULT '',
     expires_at  INTEGER NOT NULL DEFAULT 0
@@ -868,7 +1068,7 @@ CREATE INDEX IF NOT EXISTS idx_eph_type_status_assignee ON ephemeral(type, statu
 -- Covering index for the mail-poll hot path: all SELECT columns are in the index,
 -- so SQLite answers the query without touching the heap table.
 CREATE INDEX IF NOT EXISTS idx_eph_mailpoll
-ON ephemeral(type, status, assignee, id, title, created_at, parent_id, expires_at)
+ON ephemeral(type, status, assignee, id, title, created_at, updated_at, parent_id, expires_at)
 WHERE status = 'open';
 
 CREATE TABLE IF NOT EXISTS labels (
