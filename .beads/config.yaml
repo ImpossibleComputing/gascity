@@ -12,7 +12,9 @@ gc.endpoint_status: unverified
 types.custom: molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,spec,convergence,step
 export.auto: false
 validation.on-close: "error"
-dolt.host: dolt.ops.gascity.com
+dolt.host: 127.0.0.1
 dolt.port: 3307
+dolt.user: root
+dolt.sync-cli-remotes: false
 
 sync.remote: "git+https://github.com/gastownhall/gascity.git"
