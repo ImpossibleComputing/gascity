@@ -1541,13 +1541,14 @@ func trackWorkspace(prov *Provenance, meta toml.MetaData, source string) {
 }
 
 // resolvedPackNames collects pack names that are reachable from a set of
-// top-level include paths and imports. It walks both legacy [pack].includes
-// and V2 [imports] transitively so builtin system-pack injection can be
-// skipped when a user pack already brings the same pack into the city
-// closure.
+// top-level include paths and imports. It walks legacy [pack].includes and V2
+// [imports] according to each import's transitive setting so builtin system-pack
+// injection can be skipped when a user pack already brings the same pack into
+// the city closure.
 func resolvedPackNames(includes []string, imports map[string]Import, sysFS fsys.FS, cityRoot string) map[string]bool {
 	names := make(map[string]bool, len(includes)+len(imports))
-	seenDirs := make(map[string]bool)
+	seenShallowDirs := make(map[string]bool)
+	seenTransitiveDirs := make(map[string]bool)
 
 	var visit func(ref, declDir string, transitive bool)
 	visit = func(ref, declDir string, transitive bool) {
@@ -1559,10 +1560,17 @@ func resolvedPackNames(includes []string, imports map[string]Import, sysFS fsys.
 		if absErr != nil {
 			absDir = dir
 		}
-		if seenDirs[absDir] {
-			return
+		if transitive {
+			if seenTransitiveDirs[absDir] {
+				return
+			}
+			seenTransitiveDirs[absDir] = true
+		} else {
+			if seenShallowDirs[absDir] || seenTransitiveDirs[absDir] {
+				return
+			}
+			seenShallowDirs[absDir] = true
 		}
-		seenDirs[absDir] = true
 
 		data, err := sysFS.ReadFile(filepath.Join(dir, packFile))
 		if err != nil {
