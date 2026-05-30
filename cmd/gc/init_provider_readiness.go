@@ -148,7 +148,7 @@ func wizardProviderGuidanceMessage(item api.ReadinessItem) string {
 }
 
 func runInitProviderPreflight(cityPath string, stdout, stderr io.Writer, commandName string) error {
-	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
+	cfg, err := loadInitProviderPreflightConfig(cityPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: city created, but startup is blocked by configuration loading\n", commandName) //nolint:errcheck // best-effort stderr
 		fmt.Fprintf(stderr, "%s: loading config for provider readiness: %v\n", commandName, err)                //nolint:errcheck // best-effort stderr
@@ -211,6 +211,26 @@ func runInitProviderPreflight(cityPath string, stdout, stderr io.Writer, command
 	fmt.Fprintf(stderr, "Next: cd %s && gc start\n", shellQuotePath(cityPath))                        //nolint:errcheck // best-effort stderr
 	fmt.Fprintf(stderr, "Override: gc init --skip-provider-readiness %s\n", shellQuotePath(cityPath)) //nolint:errcheck // best-effort stderr
 	return errInitProviderPreflight
+}
+
+func loadInitProviderPreflightConfig(cityPath string) (*config.City, error) {
+	tomlPath := filepath.Join(cityPath, "city.toml")
+	cfg, _, err := config.LoadWithIncludes(fsys.OSFS{}, tomlPath)
+	if err == nil {
+		return cfg, nil
+	}
+	// Fresh init can check provider readiness before PackV2 remote imports
+	// have been installed. In that bootstrap-only case, fall back to raw
+	// city.toml so workspace.provider still gets checked before any network
+	// fetch. Other include/load errors remain startup-blocking.
+	if !strings.Contains(err.Error(), "remote import") || !strings.Contains(err.Error(), "gc import install") {
+		return nil, err
+	}
+	rawCfg, rawErr := config.Load(fsys.OSFS{}, tomlPath)
+	if rawErr != nil {
+		return nil, err
+	}
+	return rawCfg, nil
 }
 
 func collectInitProviderTargets(cfg *config.City) ([]initProviderTarget, []string, error) {

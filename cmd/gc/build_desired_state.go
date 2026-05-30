@@ -1151,7 +1151,7 @@ func defaultScaleCheckCountsAndNamedDemand(
 			if routedTo == "" {
 				continue
 			}
-			if _, ok := group.poolTemplates[routedTo]; ok && (assignee == "" || assignee == routedTo) {
+			if _, ok := group.poolTemplates[routedTo]; ok && assignee == "" {
 				if _, dup := countedPool[b.ID]; dup {
 					continue
 				}
