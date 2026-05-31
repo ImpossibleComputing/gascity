@@ -631,7 +631,7 @@ func buildDesiredStateWithSessionBeads(
 	// Phase 2: discover session beads created outside config iteration
 	// (e.g., by "gc session new"). Include them in desired state if they
 	// have a valid template and are not held/closed.
-	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
+	applySessionBeadDesiredOverlay(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, trace, stderr)
 
 	return DesiredStateResult{
 		State:                           desired,
@@ -680,9 +680,10 @@ func applySessionBeadDesiredOverlay(
 	suspendedRigPaths map[string]bool,
 	poolScaleCheckPartialTemplates map[string]bool,
 	namedScaleCheckPartialTemplates map[string]bool,
+	trace *sessionReconcilerTraceCycle,
 	stderr io.Writer,
 ) {
-	realizedRoots := discoverSessionBeadsWithRoots(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, stderr)
+	realizedRoots := discoverSessionBeadsWithRoots(bp, cfg, desired, suspendedRigPaths, poolScaleCheckPartialTemplates, namedScaleCheckPartialTemplates, trace, stderr)
 	realizeDependencyFloors(bp, cfg, desired, realizedRoots, suspendedRigPaths, stderr)
 }
 
@@ -711,7 +712,7 @@ func refreshDesiredStateWithSessionBeads(
 
 	bp := newAgentBuildParams(cityName, cityPath, cfg, sp, result.BeaconTime, store, stderr)
 	bp.sessionBeads = sessionBeads
-	applySessionBeadDesiredOverlay(bp, cfg, refreshed.State, buildSuspendedRigPaths(cfg), result.PoolScaleCheckPartialTemplates, result.NamedScaleCheckPartialTemplates, stderr)
+	applySessionBeadDesiredOverlay(bp, cfg, refreshed.State, buildSuspendedRigPaths(cfg), result.PoolScaleCheckPartialTemplates, result.NamedScaleCheckPartialTemplates, nil, stderr)
 	return refreshed
 }
 
@@ -1457,7 +1458,7 @@ func discoverSessionBeads(
 	desired map[string]TemplateParams,
 	stderr io.Writer,
 ) {
-	discoverSessionBeadsWithRoots(bp, cfg, desired, nil, nil, nil, stderr)
+	discoverSessionBeadsWithRoots(bp, cfg, desired, nil, nil, nil, nil, stderr)
 }
 
 func discoverSessionBeadsWithRoots(
@@ -1467,8 +1468,11 @@ func discoverSessionBeadsWithRoots(
 	suspendedRigPaths map[string]bool,
 	poolScaleCheckPartialTemplates map[string]bool,
 	namedScaleCheckPartialTemplates map[string]bool,
+	trace *sessionReconcilerTraceCycle,
 	stderr io.Writer,
 ) map[string]bool {
+	_ = trace
+
 	sessionBeads := bp.sessionBeads
 	if sessionBeads == nil && bp.beadStore != nil {
 		var err error

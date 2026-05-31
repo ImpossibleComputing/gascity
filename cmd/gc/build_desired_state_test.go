@@ -3558,7 +3558,7 @@ func TestDiscoverSessionBeadsSkipsStaleMaxOneWhenDependencyFloorDesired(t *testi
 		agents:       cfg.Agents,
 	}
 
-	discoverSessionBeadsWithRoots(bp, cfg, desired, nil, map[string]bool{"gascity/db": true}, nil, io.Discard)
+	discoverSessionBeadsWithRoots(bp, cfg, desired, nil, map[string]bool{"gascity/db": true}, nil, nil, io.Discard)
 
 	if _, ok := desired[stale.Metadata["session_name"]]; ok {
 		t.Fatalf("desired state includes stale duplicate dependency-floor sibling; keys=%v", mapKeys(desired))
