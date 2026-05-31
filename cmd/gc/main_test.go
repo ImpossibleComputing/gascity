@@ -2724,6 +2724,12 @@ func TestDoInitWritesExpectedTOML(t *testing.T) {
 	// default mayor-only path). workspace.name lives in .gc/site.toml.
 	got := string(f.Files[filepath.Join("/bright-lights", "city.toml")])
 	want := `[workspace]
+
+# [mail]
+# retention_ttl controls how long read messages are retained before purge.
+# 0 disables retention; use "168h" for 7 days.
+# "7d" is not a valid Go duration.
+# retention_ttl = "0"
 `
 	if got != want {
 		t.Errorf("city.toml content:\ngot:\n%s\nwant:\n%s", got, want)

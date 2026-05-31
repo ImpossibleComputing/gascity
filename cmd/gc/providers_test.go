@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -150,6 +151,9 @@ prefix = "zz"
 
 [beads]
 provider = "hqstore"
+
+[mail]
+retention_ttl = "168h"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -161,6 +165,9 @@ provider = "hqstore"
 	hq, ok := store.(*beads.HQStore)
 	if !ok {
 		t.Fatalf("openCityStoreAt returned %T, want *beads.HQStore", store)
+	}
+	if got := hq.MailRetentionTTL(); got != 168*time.Hour {
+		t.Fatalf("MailRetentionTTL() = %v, want 168h", got)
 	}
 	t.Cleanup(func() {
 		if err := hq.Shutdown(); err != nil {
@@ -180,6 +187,32 @@ provider = "hqstore"
 	}
 	if got := beadsProvider(cityDir); got != "hqstore" {
 		t.Fatalf("beadsProvider() = %q, want hqstore", got)
+	}
+}
+
+func TestOpenCityStoreAtRejectsInvalidMailRetentionTTL(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[beads]
+provider = "hqstore"
+
+[mail]
+retention_ttl = "7d"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := openCityStoreAt(cityDir)
+	if err == nil {
+		t.Fatal("openCityStoreAt succeeded, want invalid retention_ttl error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"loading hqstore mail retention", "[mail] retention_ttl", "7d"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("openCityStoreAt error = %q, want %q", msg, want)
+		}
 	}
 }
 

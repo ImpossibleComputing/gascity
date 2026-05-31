@@ -1217,14 +1217,30 @@ func openHQStoreUncached(scopeRoot, cityPath, storeDir string) (*beads.HQStore, 
 	if err != nil {
 		cfg = nil
 	}
+	mailRetentionTTL, err := hqStoreMailRetentionTTL(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return beads.OpenHQStore(
 		storeDir,
 		beads.WithHQStoreIDPrefix(issuePrefixForScope(scopeRoot, cityPath, cfg)),
 		beads.WithHQStoreTTLInterval(time.Minute),
+		beads.WithHQStoreMailRetentionTTL(mailRetentionTTL),
 		beads.WithHQStoreSnapshotInterval(0),
 		beads.WithHQStoreSnapshotOnWrite(true),
 		beads.WithHQStoreLocker(beads.NewFileFlock(filepath.Join(storeDir, "snapshot.lock"))),
 	)
+}
+
+func hqStoreMailRetentionTTL(cfg *config.City) (time.Duration, error) {
+	if cfg == nil {
+		return 0, nil
+	}
+	ttl, err := cfg.Mail.RetentionTTLDuration()
+	if err != nil {
+		return 0, fmt.Errorf("loading hqstore mail retention: %w", err)
+	}
+	return ttl, nil
 }
 
 func openCoordStoreAt(scopeRoot, cityPath string) (beads.Store, error) {
