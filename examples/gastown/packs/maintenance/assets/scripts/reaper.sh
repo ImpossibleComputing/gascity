@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# reaper — close stale wisps with closed parents, purge old closed data, auto-close stale issues.
+# reaper — close stale wisps with closed dependency targets, purge old closed data, auto-close stale issues.
 #
 # Replaces mol-dog-reaper formula. All operations are deterministic:
 # SQL queries with age thresholds, bd close/update commands, count
@@ -346,8 +346,8 @@ while IFS= read -r DB; do
     DB_MUTATIONS=0
 
     # Step 1: Count stale non-closed wisps, then close only candidates whose
-    # explicit parent-child edge points to a closed parent. Wisps
-    # without a parent edge are reported but not closed by age alone.
+    # reaper-owned dependency targets are all closed. Wisps without a
+    # parent/tracks/blocks edge are reported but not closed by age alone.
     get_sql_count "$DB" "stale non-closed wisp" "
         SELECT COUNT(*) FROM \`$DB\`.wisps
         WHERE status IN ('open', 'hooked', 'in_progress')
@@ -365,16 +365,29 @@ while IFS= read -r DB; do
     while [ "$STALE_WISP_COUNT" -gt 0 ] && [ "$CLOSE_WISP_COUNT" -lt "$STALE_WISP_COUNT" ]; do
         get_sql_count "$DB" "schema-safe stale wisp" "
             SELECT COUNT(DISTINCT w.id) FROM \`$DB\`.wisps w
-            INNER JOIN \`$DB\`.dependencies d
-                ON d.issue_id = w.id
-                AND d.type = 'parent-child'
-            LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_wisp_id = parent_wisp.id
-            LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_issue_id = parent_issue.id
             WHERE w.status IN ('open', 'hooked', 'in_progress')
             AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
-            AND (
-                parent_wisp.status = 'closed'
-                OR parent_issue.status = 'closed'
+            AND EXISTS (
+                SELECT 1 FROM \`$DB\`.dependencies d
+                LEFT JOIN \`$DB\`.wisps target_wisp ON d.depends_on_wisp_id = target_wisp.id
+                LEFT JOIN \`$DB\`.issues target_issue ON d.depends_on_issue_id = target_issue.id
+                WHERE d.issue_id = w.id
+                AND d.type IN ('parent-child', 'tracks', 'blocks')
+                AND (
+                    target_wisp.status = 'closed'
+                    OR target_issue.status = 'closed'
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM \`$DB\`.dependencies d
+                LEFT JOIN \`$DB\`.wisps target_wisp ON d.depends_on_wisp_id = target_wisp.id
+                LEFT JOIN \`$DB\`.issues target_issue ON d.depends_on_issue_id = target_issue.id
+                WHERE d.issue_id = w.id
+                AND d.type IN ('parent-child', 'tracks', 'blocks')
+                AND (
+                    (target_wisp.status IS NULL OR target_wisp.status != 'closed')
+                    AND (target_issue.status IS NULL OR target_issue.status != 'closed')
+                )
             )
         "
         CLOSE_WISP_BATCH=$SQL_COUNT_RESULT
@@ -389,16 +402,29 @@ while IFS= read -r DB; do
             AND id IN (
                 SELECT id FROM (
                     SELECT w.id FROM \`$DB\`.wisps w
-                    INNER JOIN \`$DB\`.dependencies d
-                        ON d.issue_id = w.id
-                        AND d.type = 'parent-child'
-                    LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_wisp_id = parent_wisp.id
-                    LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_issue_id = parent_issue.id
                     WHERE w.status IN ('open', 'hooked', 'in_progress')
                     AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
-                    AND (
-                        parent_wisp.status = 'closed'
-                        OR parent_issue.status = 'closed'
+                    AND EXISTS (
+                        SELECT 1 FROM \`$DB\`.dependencies d
+                        LEFT JOIN \`$DB\`.wisps target_wisp ON d.depends_on_wisp_id = target_wisp.id
+                        LEFT JOIN \`$DB\`.issues target_issue ON d.depends_on_issue_id = target_issue.id
+                        WHERE d.issue_id = w.id
+                        AND d.type IN ('parent-child', 'tracks', 'blocks')
+                        AND (
+                            target_wisp.status = 'closed'
+                            OR target_issue.status = 'closed'
+                        )
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM \`$DB\`.dependencies d
+                        LEFT JOIN \`$DB\`.wisps target_wisp ON d.depends_on_wisp_id = target_wisp.id
+                        LEFT JOIN \`$DB\`.issues target_issue ON d.depends_on_issue_id = target_issue.id
+                        WHERE d.issue_id = w.id
+                        AND d.type IN ('parent-child', 'tracks', 'blocks')
+                        AND (
+                            (target_wisp.status IS NULL OR target_wisp.status != 'closed')
+                            AND (target_issue.status IS NULL OR target_issue.status != 'closed')
+                        )
                     )
                 ) reaper_wisp_candidates
             )
@@ -424,7 +450,7 @@ while IFS= read -r DB; do
         AND id NOT IN (
             SELECT DISTINCT d.depends_on_wisp_id FROM \`$DB\`.dependencies d
             INNER JOIN \`$DB\`.wisps child_wisp ON d.issue_id = child_wisp.id
-            WHERE d.type = 'parent-child'
+            WHERE d.type IN ('parent-child', 'tracks', 'blocks')
             AND d.depends_on_wisp_id IS NOT NULL
             AND child_wisp.status IN ('open', 'hooked', 'in_progress')
         )
@@ -439,7 +465,7 @@ while IFS= read -r DB; do
             AND id NOT IN (
                 SELECT DISTINCT d.depends_on_wisp_id FROM \`$DB\`.dependencies d
                 INNER JOIN \`$DB\`.wisps child_wisp ON d.issue_id = child_wisp.id
-                WHERE d.type = 'parent-child'
+                WHERE d.type IN ('parent-child', 'tracks', 'blocks')
                 AND d.depends_on_wisp_id IS NOT NULL
                 AND child_wisp.status IN ('open', 'hooked', 'in_progress')
             )

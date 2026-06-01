@@ -9,6 +9,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/molecule"
 	"github.com/gastownhall/gascity/internal/session"
+	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
 
 // wispGC performs mechanical garbage collection of closed GC-owned beads that
@@ -36,11 +37,13 @@ type beadGCPolicy struct {
 	name     string
 	ttl      time.Duration
 	queries  []beads.ListQuery
+	matchFn  func(beads.Bead) bool
 	deleteFn func(beads.Store, string) error
 }
 
 const (
 	beadPolicyWisp          = "wisp"
+	beadPolicyWorkflow      = "workflow"
 	beadPolicyOrderTracking = "order_tracking"
 	beadPolicySession       = "session"
 	beadPolicyWait          = "wait"
@@ -96,6 +99,22 @@ func legacyWispGCPolicies(ttl time.Duration) []beadGCPolicy {
 			deleteFn: deleteExpiredBeadClosure,
 		},
 		{
+			name: beadPolicyWorkflow,
+			ttl:  ttl,
+			queries: []beads.ListQuery{
+				{
+					Status:   "closed",
+					Metadata: map[string]string{"gc.kind": "workflow"},
+				},
+				{
+					Status:   "closed",
+					Metadata: map[string]string{"gc.formula_contract": "graph.v2"},
+				},
+			},
+			matchFn:  sourceworkflow.IsWorkflowRoot,
+			deleteFn: deleteExpiredBeadClosure,
+		},
+		{
 			name: beadPolicyOrderTracking,
 			ttl:  ttl,
 			queries: []beads.ListQuery{
@@ -114,9 +133,11 @@ func legacyWispGCPolicies(ttl time.Duration) []beadGCPolicy {
 }
 
 func configuredWispGCPolicies(defaultTTL time.Duration, overrides map[string]config.BeadPolicyConfig) []beadGCPolicy {
+	legacy := legacyWispGCPolicies(defaultTTL)
 	specs := []beadGCPolicy{
-		legacyWispGCPolicies(defaultTTL)[0],
-		legacyWispGCPolicies(defaultTTL)[1],
+		legacy[0],
+		legacy[1],
+		legacy[2],
 		{
 			name: beadPolicySession,
 			queries: []beads.ListQuery{
@@ -166,7 +187,7 @@ func effectiveBeadGCPolicyTTL(name string, defaultTTL time.Duration, overrides m
 		return policy.DeleteAfterCloseDuration()
 	}
 	switch name {
-	case beadPolicyWisp, beadPolicyOrderTracking:
+	case beadPolicyWisp, beadPolicyWorkflow, beadPolicyOrderTracking:
 		return defaultTTL
 	default:
 		return 0
@@ -215,6 +236,9 @@ func (p beadGCPolicy) list(store beads.Store, cutoff time.Time) ([]beads.Bead, e
 				continue
 			}
 			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			if p.matchFn != nil && !p.matchFn(item) {
 				continue
 			}
 			seen[item.ID] = struct{}{}

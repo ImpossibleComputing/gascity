@@ -244,6 +244,16 @@ func runControlDispatcherWithStoreAndConfig(cityPath, storePath string, store be
 		if errors.Is(err, dispatch.ErrControlPending) {
 			return err
 		}
+		if dispatch.IsTransientControllerError(err) {
+			return err
+		}
+		terminalControllerError, closedErr := controlBeadAlreadyTerminalControllerError(store, beadID)
+		if closedErr != nil {
+			return errors.Join(err, fmt.Errorf("checking control bead %s before quarantine: %w", beadID, closedErr))
+		}
+		if terminalControllerError {
+			return nil
+		}
 		if quarantineErr := quarantineControlFailureBead(store, beadID, err); quarantineErr != nil {
 			return errors.Join(err, quarantineErr)
 		}
@@ -261,6 +271,14 @@ func runControlDispatcherWithStoreAndConfig(cityPath, storePath string, store be
 		fmt.Fprintln(stdout) //nolint:errcheck
 	}
 	return nil
+}
+
+func controlBeadAlreadyTerminalControllerError(store beads.Store, beadID string) (bool, error) {
+	current, err := store.Get(beadID)
+	if err != nil {
+		return false, err
+	}
+	return current.Status == "closed" && current.Metadata["gc.final_disposition"] == "controller_error", nil
 }
 
 func quarantineControlFailureBead(store beads.Store, beadID string, cause error) error {

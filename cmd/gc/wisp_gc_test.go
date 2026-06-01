@@ -417,6 +417,87 @@ func TestWispGC_PartialChildDeleteRemainsRetryable(t *testing.T) {
 	}
 }
 
+func TestWispGC_PurgesExpiredWorkflowRootClosureByKind(t *testing.T) {
+	now := time.Now()
+	root := makeClosedWorkflowRoot("workflow-root", now.Add(-2*time.Hour), map[string]string{
+		"gc.kind": "workflow",
+	})
+	child := makeGCBead("workflow-child", now.Add(-2*time.Hour), "closed", "task")
+	child.Metadata = map[string]string{"gc.root_bead_id": root.ID}
+	store := newGCStore([]beads.Bead{root, child})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1 workflow root", purged)
+	}
+	assertDeletedIDs(t, store.deletedIDs, "workflow-child", "workflow-root")
+}
+
+func TestWispGC_PurgesExpiredWorkflowRootClosureByGraphContract(t *testing.T) {
+	now := time.Now()
+	root := makeClosedWorkflowRoot("graph-root", now.Add(-2*time.Hour), map[string]string{
+		"gc.formula_contract": "graph.v2",
+	})
+	child := makeGCBead("graph-finalizer", now.Add(-2*time.Hour), "closed", "task")
+	child.Metadata = map[string]string{"gc.root_bead_id": root.ID}
+	store := newGCStore([]beads.Bead{root, child})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1 graph workflow root", purged)
+	}
+	assertDeletedIDs(t, store.deletedIDs, "graph-finalizer", "graph-root")
+}
+
+func TestWispGC_DoesNotPurgeOpenOrRecentWorkflowRoots(t *testing.T) {
+	now := time.Now()
+	openRoot := makeGCBead("workflow-open", now.Add(-2*time.Hour), "open", "task")
+	openRoot.Metadata = map[string]string{"gc.kind": "workflow"}
+	recentRoot := makeClosedWorkflowRoot("workflow-recent", now.Add(-10*time.Minute), map[string]string{
+		"gc.formula_contract": "graph.v2",
+	})
+	store := newGCStore([]beads.Bead{openRoot, recentRoot})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 0 {
+		t.Fatalf("purged = %d, want 0", purged)
+	}
+	if len(store.deletedIDs) != 0 {
+		t.Fatalf("deleted = %v, want none", store.deletedIDs)
+	}
+}
+
+func TestWispGC_DedupesWorkflowRootMatchedByKindAndGraphContract(t *testing.T) {
+	now := time.Now()
+	root := makeClosedWorkflowRoot("workflow-root", now.Add(-2*time.Hour), map[string]string{
+		"gc.kind":             "workflow",
+		"gc.formula_contract": "graph.v2",
+	})
+	store := newGCStore([]beads.Bead{root})
+
+	wg := newWispGC(5*time.Minute, time.Hour)
+	purged, err := wg.runGC(store, now)
+	if err != nil {
+		t.Fatalf("runGC: %v", err)
+	}
+	if purged != 1 {
+		t.Fatalf("purged = %d, want 1 deduped workflow root", purged)
+	}
+	assertDeletedIDs(t, store.deletedIDs, "workflow-root")
+}
+
 func TestWispGC_PurgesExpiredTrackingBeads(t *testing.T) {
 	now := time.Now()
 	store := newGCStore([]beads.Bead{
@@ -539,10 +620,9 @@ func TestWispGC_QueriesUseClosedBeforeAndIndexedOwnershipLabels(t *testing.T) {
 		if !query.ClosedBefore.Equal(wantCutoff) {
 			t.Fatalf("ClosedBefore = %s, want %s in query %+v", query.ClosedBefore, wantCutoff, query)
 		}
-		if len(query.Metadata) != 0 {
-			t.Fatalf("query used metadata filter on hot GC path: %+v", query)
-		}
 		switch {
+		case len(query.Metadata) != 0:
+			seen["metadata:"+metadataQueryKey(query.Metadata)] = true
 		case query.Label != "":
 			seen["label:"+query.Label] = true
 		case query.Type != "":
@@ -554,6 +634,8 @@ func TestWispGC_QueriesUseClosedBeforeAndIndexedOwnershipLabels(t *testing.T) {
 		"label:" + labelOrderTracking,
 		"label:" + legacyLabelOrderTracking,
 		"type:molecule",
+		"metadata:gc.kind=workflow",
+		"metadata:gc.formula_contract=graph.v2",
 	} {
 		if !seen[key] {
 			t.Fatalf("missing GC query %s; got %+v", key, store.listQueries)
@@ -645,6 +727,17 @@ func makeClosedGCBeadWithLabels(id string, closedAt time.Time, beadType string, 
 		ClosedAt:  closedAt,
 		Labels:    labels,
 		Ephemeral: ephemeral,
+	}
+}
+
+func makeClosedWorkflowRoot(id string, closedAt time.Time, metadata map[string]string) beads.Bead {
+	return beads.Bead{
+		ID:        id,
+		Status:    "closed",
+		Type:      "task",
+		CreatedAt: closedAt.Add(-time.Hour),
+		ClosedAt:  closedAt,
+		Metadata:  metadata,
 	}
 }
 

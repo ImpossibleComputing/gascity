@@ -27,6 +27,28 @@ import (
 	"github.com/gastownhall/gascity/internal/sourceworkflow"
 )
 
+type transientControlReadFailStore struct {
+	beads.Store
+	err error
+}
+
+func (s *transientControlReadFailStore) List(beads.ListQuery) ([]beads.Bead, error) {
+	return nil, s.err
+}
+
+func (s *transientControlReadFailStore) DepList(string, string) ([]beads.Dep, error) {
+	return nil, s.err
+}
+
+type controlDepAddFailStore struct {
+	beads.Store
+	err error
+}
+
+func (s *controlDepAddFailStore) DepAdd(string, string, string) error {
+	return s.err
+}
+
 func TestDrainItemRecipeVarsIncludesRuntimeMetadata(t *testing.T) {
 	recipe := &formula.Recipe{
 		Steps: []formula.RecipeStep{{
@@ -3912,6 +3934,126 @@ func TestRunControlDispatcherQuarantinesGenericControlFailure(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "control dispatch: quarantined bead="+control.ID) {
 		t.Fatalf("stderr = %q, want quarantine message", got)
+	}
+}
+
+func TestRunControlDispatcherReturnsTransientControlErrorWithoutQuarantine(t *testing.T) {
+	clearGCEnv(t)
+
+	base := beads.NewMemStore()
+	control, err := base.Create(beads.Bead{
+		Title: "Retry control",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":         "retry",
+			"gc.max_attempts": "2",
+			"gc.on_exhausted": "hard_fail",
+			"gc.step_ref":     "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create control: %v", err)
+	}
+
+	storeErr := errors.New("invalid connection: i/o timeout")
+	store := &transientControlReadFailStore{Store: base, err: storeErr}
+
+	var stderr bytes.Buffer
+	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
+	err = runControlDispatcherWithStoreAndConfig(t.TempDir(), t.TempDir(), store, control, control.ID, cfg, io.Discard, &stderr)
+	if err == nil {
+		t.Fatalf("runControlDispatcherWithStoreAndConfig error = nil, want transient error")
+	}
+	if !dispatch.IsTransientControllerError(err) {
+		t.Fatalf("runControlDispatcherWithStoreAndConfig error = %v, want transient controller error", err)
+	}
+
+	after, err := base.Get(control.ID)
+	if err != nil {
+		t.Fatalf("get control: %v", err)
+	}
+	if after.Status != "open" {
+		t.Fatalf("control status = %q, want open", after.Status)
+	}
+	if got := after.Metadata["gc.control_quarantined"]; got != "" {
+		t.Fatalf("gc.control_quarantined = %q, want empty", got)
+	}
+	if got := after.Metadata["gc.failure_class"]; got != "" {
+		t.Fatalf("gc.failure_class = %q, want empty", got)
+	}
+	if got := after.Metadata["gc.final_disposition"]; got != "" {
+		t.Fatalf("gc.final_disposition = %q, want empty", got)
+	}
+	if slices.Contains(after.Labels, "gc:control-quarantined") {
+		t.Fatalf("labels = %#v, want no gc:control-quarantined", after.Labels)
+	}
+	if got := stderr.String(); strings.Contains(got, "control dispatch: quarantined bead="+control.ID) {
+		t.Fatalf("stderr = %q, want no quarantine message", got)
+	}
+}
+
+func TestRunControlDispatcherPreservesAlreadyTerminalControlError(t *testing.T) {
+	clearGCEnv(t)
+
+	base := beads.NewMemStore()
+	control, err := base.Create(beads.Bead{
+		Title: "Retry control",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.kind":         "retry",
+			"gc.max_attempts": "2",
+			"gc.on_exhausted": "hard_fail",
+			"gc.step_ref":     "worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create control: %v", err)
+	}
+	attempt, err := base.Create(beads.Bead{
+		Title: "Pending attempt",
+		Type:  "task",
+		Metadata: map[string]string{
+			"gc.root_bead_id": control.ID,
+			"gc.step_ref":     "worker.attempt.1",
+			"gc.attempt":      "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create attempt: %v", err)
+	}
+
+	store := &controlDepAddFailStore{Store: base, err: errors.New("dependency cycle check failed permanently")}
+
+	var stderr bytes.Buffer
+	cfg := &config.City{Workspace: config.Workspace{Name: "test-city"}}
+	if err := runControlDispatcherWithStoreAndConfig(t.TempDir(), t.TempDir(), store, control, control.ID, cfg, io.Discard, &stderr); err != nil {
+		t.Fatalf("runControlDispatcherWithStoreAndConfig: %v", err)
+	}
+
+	after, err := base.Get(control.ID)
+	if err != nil {
+		t.Fatalf("get control: %v", err)
+	}
+	if after.Status != "closed" {
+		t.Fatalf("control status = %q, want closed", after.Status)
+	}
+	if got := after.Metadata["gc.final_disposition"]; got != "controller_error" {
+		t.Fatalf("gc.final_disposition = %q, want controller_error", got)
+	}
+	if got := after.Metadata["gc.controller_error_class"]; got != "hard" {
+		t.Fatalf("gc.controller_error_class = %q, want hard", got)
+	}
+	if got := after.Metadata["gc.control_quarantined"]; got != "" {
+		t.Fatalf("gc.control_quarantined = %q, want empty", got)
+	}
+	if slices.Contains(after.Labels, "gc:control-quarantined") {
+		t.Fatalf("labels = %#v, want no gc:control-quarantined", after.Labels)
+	}
+	if got := stderr.String(); strings.Contains(got, "control dispatch: quarantined bead="+control.ID) {
+		t.Fatalf("stderr = %q, want no quarantine message", got)
+	}
+	if _, err := base.Get(attempt.ID); err != nil {
+		t.Fatalf("get attempt: %v", err)
 	}
 }
 

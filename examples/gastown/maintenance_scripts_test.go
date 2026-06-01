@@ -2282,7 +2282,7 @@ func TestReaperParentIDIsParentChildDependencyProjection(t *testing.T) {
 	if strings.Contains(script, "parent_id") {
 		t.Fatalf("reaper queried parent_id directly; Dolt ParentID is projected from parent-child dependencies:\n%s", script)
 	}
-	if !strings.Contains(script, "dependencies d") || !strings.Contains(script, "d.type = 'parent-child'") {
+	if !strings.Contains(script, "dependencies d") || !strings.Contains(script, "d.type IN ('parent-child', 'tracks', 'blocks')") {
 		t.Fatalf("reaper does not follow the canonical Dolt parent-child projection:\n%s", script)
 	}
 }
@@ -2368,9 +2368,9 @@ exit 0
 	} else {
 		purgeSQL := log[purgeIdx:]
 		if !strings.Contains(purgeSQL, "child_wisp.status IN ('open', 'hooked', 'in_progress')") ||
-			!strings.Contains(purgeSQL, "d.type = 'parent-child'") ||
+			!strings.Contains(purgeSQL, "d.type IN ('parent-child', 'tracks', 'blocks')") ||
 			!strings.Contains(purgeSQL, "d.depends_on_wisp_id IS NOT NULL") {
-			t.Errorf("reaper purge can delete closed parents with non-closed children:\n%s", purgeSQL)
+			t.Errorf("reaper purge can delete closed dependency targets with non-closed dependents:\n%s", purgeSQL)
 		}
 	}
 
@@ -3090,17 +3090,21 @@ exit 0
 	if !strings.Contains(log, "COUNT(DISTINCT w.id)") {
 		t.Fatalf("reaper stale-wisp close count can be join-multiplied:\n%s", log)
 	}
-	if !strings.Contains(log, "dependencies d") || !strings.Contains(log, "d.type = 'parent-child'") {
-		t.Fatalf("reaper stale-wisp close path does not use parent-child dependencies:\n%s", log)
+	if !strings.Contains(log, "dependencies d") || !strings.Contains(log, "d.type IN ('parent-child', 'tracks', 'blocks')") {
+		t.Fatalf("reaper stale-wisp close path does not use reaper-owned dependency edges:\n%s", log)
 	}
-	if !strings.Contains(log, "d.depends_on_wisp_id = parent_wisp.id") || !strings.Contains(log, "d.depends_on_issue_id = parent_issue.id") {
+	if !strings.Contains(log, "d.depends_on_wisp_id = target_wisp.id") || !strings.Contains(log, "d.depends_on_issue_id = target_issue.id") {
 		t.Fatalf("reaper stale-wisp close path does not use split dependency target columns:\n%s", log)
 	}
-	if strings.Contains(log, "parent_wisp.id IS NULL AND parent_issue.id IS NULL") {
-		t.Fatalf("reaper closes stale wisps when parent liveness is unresolved:\n%s", log)
+	if strings.Contains(log, "target_wisp.id IS NULL AND target_issue.id IS NULL") {
+		t.Fatalf("reaper closes stale wisps when dependency target liveness is unresolved:\n%s", log)
 	}
-	if !strings.Contains(log, "parent_wisp.status = 'closed'") || !strings.Contains(log, "parent_issue.status = 'closed'") {
-		t.Fatalf("reaper stale-wisp close path does not require a closed parent:\n%s", log)
+	if !strings.Contains(log, "target_wisp.status = 'closed'") || !strings.Contains(log, "target_issue.status = 'closed'") {
+		t.Fatalf("reaper stale-wisp close path does not require a closed dependency target:\n%s", log)
+	}
+	if !strings.Contains(log, "target_wisp.status IS NULL OR target_wisp.status != 'closed'") ||
+		!strings.Contains(log, "target_issue.status IS NULL OR target_issue.status != 'closed'") {
+		t.Fatalf("reaper stale-wisp close path does not reject unresolved or non-closed dependency targets:\n%s", log)
 	}
 
 	gcData, err := os.ReadFile(gcLog)
@@ -3109,6 +3113,101 @@ exit 0
 	}
 	if !strings.Contains(string(gcData), "stale_wisps:2") || !strings.Contains(string(gcData), "closed_wisps:1") {
 		t.Fatalf("reaper summary did not report observed and closed wisp counts:\n%s", gcData)
+	}
+}
+
+func TestReaperClosesStaleStepWispsWhenTracksAndBlocksTargetsAreClosed(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	doltLog := filepath.Join(t.TempDir(), "dolt-args.log")
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	closeCountState := filepath.Join(t.TempDir(), "close-count-state")
+
+	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
+printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+case "$*" in
+  *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
+    printf 'Tables_in_db\nwisps\n'
+    ;;
+  *"SHOW DATABASES"*)
+    printf 'Database\nbeads\n'
+    ;;
+  *"SHOW COLUMNS FROM"*"dependencies"*)
+    printf 'Field,Type,Null,Key,Default,Extra\n'
+    printf 'issue_id,varchar,NO,,,\n'
+    printf 'depends_on_issue_id,varchar,YES,,,\n'
+    printf 'depends_on_wisp_id,varchar,YES,,,\n'
+    printf 'depends_on_external,varchar,YES,,,\n'
+    printf 'type,varchar,NO,,,\n'
+    ;;
+  *"COUNT(DISTINCT w.id)"*"d.type IN ('parent-child', 'tracks', 'blocks')"*"NOT EXISTS"*)
+    n=0
+    if [ -f "$CLOSE_COUNT_STATE" ]; then
+      n=$(cat "$CLOSE_COUNT_STATE")
+    fi
+    if [ "$n" = "0" ]; then
+      printf '1\n' > "$CLOSE_COUNT_STATE"
+      printf 'COUNT(*)\n1\n'
+    else
+      printf 'COUNT(*)\n0\n'
+    fi
+    ;;
+  *"UPDATE "*"wisps SET status='closed'"*"d.type IN ('parent-child', 'tracks', 'blocks')"*"NOT EXISTS"*)
+    printf 'ROW_COUNT()\n1\n'
+    ;;
+  *"SELECT COUNT(*) FROM "*"wisps"*"status IN ('open', 'hooked', 'in_progress')"*"created_at <"*)
+    printf 'COUNT(*)\n1\n'
+    ;;
+  *"COUNT("*)
+    printf 'COUNT(*)\n0\n'
+    ;;
+  *"SELECT id"*)
+    printf 'id\n'
+    ;;
+esac
+exit 0
+`)
+	writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_CALL_LOG"
+exit 0
+`)
+
+	env := map[string]string{
+		"CLOSE_COUNT_STATE": closeCountState,
+		"DOLT_ARGS_LOG":     doltLog,
+		"GC_CALL_LOG":       gcLog,
+		"GC_CITY":           cityDir,
+		"GC_CITY_PATH":      cityDir,
+		"GC_DOLT_HOST":      "127.0.0.1",
+		"GC_DOLT_PORT":      "3307",
+		"GC_DOLT_USER":      "root",
+		"GC_DOLT_PASSWORD":  "",
+		"PATH":              binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+
+	runScript(t, filepath.Join(exampleDir(), "packs", "maintenance", "assets", "scripts", "reaper.sh"), env)
+
+	logData, err := os.ReadFile(doltLog)
+	if err != nil {
+		t.Fatalf("ReadFile(dolt log): %v", err)
+	}
+	log := string(logData)
+	if !strings.Contains(log, "d.type IN ('parent-child', 'tracks', 'blocks')") {
+		t.Fatalf("reaper stale-wisp close path ignores tracks/blocks step-wisp edges:\n%s", log)
+	}
+	if !strings.Contains(log, "NOT EXISTS") {
+		t.Fatalf("reaper stale-wisp close path does not require all dependency targets to be closed:\n%s", log)
+	}
+	if !strings.Contains(log, "UPDATE `beads`.wisps SET status='closed'") {
+		t.Fatalf("reaper did not close stale step wisps whose tracks/blocks targets were closed:\n%s", log)
+	}
+
+	gcData, err := os.ReadFile(gcLog)
+	if err != nil {
+		t.Fatalf("ReadFile(gc log): %v", err)
+	}
+	if !strings.Contains(string(gcData), "closed_wisps:1") {
+		t.Fatalf("reaper summary did not report closed tracks/blocks step wisps:\n%s", gcData)
 	}
 }
 
