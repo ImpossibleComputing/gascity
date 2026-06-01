@@ -52,6 +52,12 @@ adds the result to `sessions-pruned`, and escalates nonzero prune
 failures. Dry-run skips this mutating CLI path because `gc session prune` has no
 preview mode today.
 
+After the safe-close backlog drained, live `ga` and `mc` still exceeded the
+open-wisp alert threshold during active workflow load even though the stale
+non-message counts were low. The reaper anomaly now counts only non-message
+wisps older than `GC_REAPER_MAX_AGE`; fresh active workflow rows no longer page
+as leak evidence. Mail wisps keep their separate optional backlog threshold.
+
 `ga-6pbt8` identified that `runControlDispatcherWithStoreAndConfig`
 hard-quarantined every `ProcessControl` error except `ErrControlPending`.
 That swallowed transient store/controller faults before the serve loop could use
@@ -104,7 +110,7 @@ review artifact is visible from the failed run output.
 
 | Path | Responsibility | Current status |
 | --- | --- | --- |
-| `examples/gastown/packs/maintenance/assets/scripts/reaper.sh` | Close stale non-closed wisps with closed dependency targets; close isolated generated step-spec debris; purge old closed wisps; auto-close stale city issues; prune closed `gm-*` session beads; prune terminal drained session-state beads. | Patched for `parent-child`/`tracks`/`blocks` closure and purge protection through `wisp_dependencies`, plus a narrow unassigned `Step spec for ...` no-edge cleanup and a `gc session prune --state drained` pass for legacy drained-asleep session rows. |
+| `examples/gastown/packs/maintenance/assets/scripts/reaper.sh` | Close stale non-closed wisps with closed dependency targets; close isolated generated step-spec debris; purge old closed wisps; auto-close stale city issues; prune closed `gm-*` session beads; prune terminal drained session-state beads; escalate only stale non-message open-wisp backlog. | Patched for `parent-child`/`tracks`/`blocks` closure and purge protection through `wisp_dependencies`, plus a narrow unassigned `Step spec for ...` no-edge cleanup, a `gc session prune --state drained` pass for legacy drained-asleep session rows, and a stale-only alert query so fresh workflow load is not reported as a reaper leak. |
 | `examples/gastown/packs/maintenance/assets/scripts/wisp-compact.sh` | Promote old non-closed ephemeral beads for stuck detection and delete expired closed wisps. | Still separate from the safe-close decision. It must not become an age-only closer. |
 | `internal/molecule/cleanup.go` | Close molecule subtrees by ownership metadata and parent-child descendants. | Handles explicit teardown, not abandoned workflow drift. |
 | `cmd/gc/wisp_gc.go` / `wisp autoclose` | Close attached workflow roots and owned workflow beads from CLI-driven cleanup. Purge expired closed wisps, order-tracking beads, and closed graph-v2 workflow-root closures. | Patched to include workflow-root closure GC through indexed metadata queries guarded by `sourceworkflow.IsWorkflowRoot`. |
@@ -125,7 +131,7 @@ review artifact is visible from the failed run output.
 - `go vet ./...` and `git diff --check` passed.
 - `.githooks/pre-commit` ran with `core.hooksPath=.githooks`; it failed in
   unrelated baseline `cmd/gc` shards. Latest log directory:
-  `/data/tmp/gc-local-tests.xP6rVH`.
+  `/data/tmp/gc-local-tests.Ifz8Nk`.
 
 ## Remaining Work
 
@@ -159,3 +165,17 @@ review artifact is visible from the failed run output.
   the current patch makes those rows closeable by the reaper's drained-state
   prune pass. The branch reaper session-state prune has not yet been run
   destructively against `/data/projects/maintainer-city` after this patch.
+- Live measurement on 2026-06-01T08:47:24Z: `ga` had `729` open non-message
+  rows but only `13` stale non-message rows older than 24h; `mc` had `434`
+  open non-message rows plus `133` mail rows, with only `24` stale non-message
+  rows and `0` drained-session candidates older than 24h by `updated_at`.
+  This is the evidence for changing the reaper page from total open
+  non-message rows to stale non-message rows.
+- Branch reaper dry-run on the same live server after the stale-only alert
+  patch reported `stale_wisps:115`, `mail_wisps:134`, `would_close_wisps:0`,
+  and made no escalation mail call with `GC_REAPER_ALERT_THRESHOLD=500`.
+- Dolt compaction remains blocked for `mc` by
+  `/data/projects/maintainer-city/.gc/runtime/packs/dolt/compact-quarantine/mc`
+  (`post-flatten value hash changed without row-count increase`,
+  `created_at=2026-05-20T11:14:29Z`). A branch dry-run with
+  `GC_DOLT_COMPACT_ONLY_DBS=ga,mc` reached that marker and failed before any GC.
