@@ -46,12 +46,36 @@ func TestGastownIdleOpenBeadCountsStayBounded(t *testing.T) {
 	}
 
 	time.Sleep(probe.Warmup)
+	samples := sampleOpenBeadCounts(t, c.Dir, probe)
+	assertOpenBeadCountsStayBounded(t, samples)
+}
+
+func TestPlainIdleOpenBeadCountsStayBounded(t *testing.T) {
+	probe := idleBeadStabilityProbeConfig(t)
+	env := newIsolatedTierBEnv(t, "fake")
+	c := helpers.NewCity(t, env)
+	c.Init("claude")
+	writePlainIdleProbeOrders(t, c.Dir)
+
+	c.StartWithSupervisor()
+
+	time.Sleep(probe.Warmup)
+	samples := sampleOpenBeadCounts(t, c.Dir, probe)
+	assertOpenBeadCountsStayBounded(t, samples)
+}
+
+func sampleOpenBeadCounts(t *testing.T, cityDir string, probe idleBeadStabilityProbe) []beadCountSnapshot {
+	t.Helper()
 	samples := make([]beadCountSnapshot, 0, probe.Samples)
 	for i := 0; i < probe.Samples; i++ {
-		samples = append(samples, readOpenBeadSnapshot(t, c.Dir))
+		samples = append(samples, readOpenBeadSnapshot(t, cityDir))
 		time.Sleep(probe.Interval)
 	}
+	return samples
+}
 
+func assertOpenBeadCountsStayBounded(t *testing.T, samples []beadCountSnapshot) {
+	t.Helper()
 	first := samples[0]
 	last := samples[len(samples)-1]
 	maxIssues, maxWisps := first.OpenIssues, first.OpenWisps
@@ -201,6 +225,23 @@ interval = "1s"
 		if err := os.WriteFile(filepath.Join(orderDir, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("write order %s: %v", name, err)
 		}
+	}
+}
+
+func writePlainIdleProbeOrders(t *testing.T, cityDir string) {
+	t.Helper()
+	orderDir := filepath.Join(cityDir, "orders")
+	if err := os.MkdirAll(orderDir, 0o755); err != nil {
+		t.Fatalf("create orders dir: %v", err)
+	}
+	body := `[order]
+description = "Nightly plain idle-city exec tracking leak probe"
+exec = "true"
+trigger = "cooldown"
+interval = "1s"
+`
+	if err := os.WriteFile(filepath.Join(orderDir, "idle-exec.toml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write plain idle order: %v", err)
 	}
 }
 

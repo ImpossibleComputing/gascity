@@ -119,17 +119,19 @@ found 13 more legacy roots in configured rig or legacy stores (`bd=2`, `gp=1`,
 `bd`, `ga`, `gg`, `gp`, `gt`, `mc`, `my_db`, and `rig` found `0` workflow
 roots with `gc.run_target` and missing `gc.routed_to`.
 
-`TestGastownIdleOpenBeadCountsStayBounded` now runs in Tier B nightly
+`TestPlainIdleOpenBeadCountsStayBounded` and
+`TestGastownIdleOpenBeadCountsStayBounded` now run in Tier B nightly
 acceptance. `.github/workflows/nightly.yml` schedules the Tier B job daily at
 06:00 UTC and calls `make test-acceptance-b`; the Makefile target runs
 `go test -tags acceptance_b -timeout 10m -v ./test/acceptance/tier_b/...`. The
-test starts an isolated Gastown city with fake sessions, shortens the patrol
-interval, adds a fast formula order and a fast exec order, and samples open
-issue-tier and wisp-tier counts across repeated controller cycles. Local runs
-keep the fast default window (`3s` warmup, `8` samples, `2s` interval). The
-nightly workflow overrides that to `10s` warmup, `36` samples, and a `5s`
-interval so the scheduled regression watches the idle city for roughly three
-minutes. The test fails if either open-count series grows beyond a small
+plain-city test starts an isolated file-backed city with a fast exec order. The
+Gastown test starts an isolated Gastown city with fake sessions, shortens the
+patrol interval, adds a fast formula order and a fast exec order, and samples
+open issue-tier and wisp-tier counts across repeated controller cycles. Local
+runs keep the fast default window (`3s` warmup, `8` samples, `2s` interval).
+The nightly workflow overrides that to `10s` warmup, `36` samples, and a `5s`
+interval so the scheduled regression watches idle cities for roughly three
+minutes. The tests fail if either open-count series grows beyond a small
 transient jitter window after warmup.
 
 `ga-hiew1` split into two retention checks in this branch. First, the built-in
@@ -278,9 +280,13 @@ session aliases already covered by the session row (`adoption_barrier`,
   `.github/workflows/nightly.yml` -> `make test-acceptance-b` -> the
   `acceptance_b` Tier B package, with nightly-only long-run overrides for the
   idle stability window.
-- `go test -tags acceptance_b -timeout 3m ./test/acceptance/tier_b -run 'Test(IdleBeadStabilityProbeConfigReadsNightlyOverrides|GastownIdleOpenBeadCountsStayBounded)$' -count=1`
-  passed for the nightly idle-probe override parser and the default-duration
-  idle stability probe.
+- `go test -tags acceptance_b -timeout 4m ./test/acceptance/tier_b -run 'TestPlainIdleOpenBeadCountsStayBounded$' -count=1`
+  failed before the plain-city probe used a valid provider name, then passed
+  after the test initialized the plain city with `claude` while keeping the
+  isolated session runtime fake.
+- `go test -tags acceptance_b -timeout 5m ./test/acceptance/tier_b -run 'Test(PlainIdleOpenBeadCountsStayBounded|GastownIdleOpenBeadCountsStayBounded|IdleBeadStabilityProbeConfigReadsNightlyOverrides)$' -count=1`
+  passed for the plain idle-city probe, the Gastown idle-pack probe, and the
+  nightly idle-probe override parser.
 - `go test ./internal/graphroute -run 'Test(DecorateGraphWorkflowRecipe_(SetsRootMetadata|RootStampsRoutedToForClaim)|StampLegacyRecipeRouting_RespectsPerStepRunTarget)$' -count=1`
   passed for graph workflow root route stamping.
 - `go test ./cmd/gc -run 'Test(BatchOnGraphWorkflowStartsWorkflowWithoutRoutingChild|DefaultScaleCheckCountsIgnoresRunTargetOnlyPersistedWork|DefaultScaleCheckCountsAndNamedDemandIgnoresRunTargetOnlyReadyWork|FilterAssignedWorkBeadsForPoolDemandIgnoresRunTargetOnlyWork|StoreForPoolAssignment_IgnoresRunTargetForStoreRouting|ComputePoolDesiredStates_IgnoresRunTargetOnlyWakeDemand|RunTargetRoutedToBackfillCheck|InstantiateSlingFormulaGraphWorkflowPreservesRoutedTo|DoctorCheckNamesGolden|CmdHookIgnoresRunTargetOnlyRoot)$' -count=1`
