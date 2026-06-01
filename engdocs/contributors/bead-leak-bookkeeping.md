@@ -97,6 +97,19 @@ runtime.
 | `cmd/gc/wisp_gc.go` / `wisp autoclose` | Close attached workflow roots and owned workflow beads from CLI-driven cleanup. Purge expired closed wisps, order-tracking beads, and closed graph-v2 workflow-root closures. | Patched to include workflow-root closure GC through indexed metadata queries guarded by `sourceworkflow.IsWorkflowRoot`. |
 | `cmd/gc/order_dispatch.go` | Close order-tracking beads after dispatch attempt completion. | Existing defer is the primary owner; stale tracking-bead bugs should be treated as order-dispatch defects. |
 
+## Verification Snapshot
+
+- `go test ./examples/gastown -count=1` passed for the reaper and wisp-GC
+  changes.
+- `go test ./examples/dolt -count=1` passed for the compactor endpoint change.
+- `go test -tags acceptance_b -timeout 10m -v ./test/acceptance/tier_b -run TestGastownIdleOpenBeadCountsStayBounded`
+  passed on 2026-06-01, proving the nightly idle Gastown regression runs
+  against the current branch.
+- `go vet ./...` and `git diff --check` passed.
+- `.githooks/pre-commit` ran with `core.hooksPath=.githooks`; it failed in
+  unrelated baseline `cmd/gc` shards. Latest log directory:
+  `/data/tmp/gc-local-tests.xP6rVH`.
+
 ## Remaining Work
 
 - Finish the companion rescue-drain bug `ga-ksno8`: required-artifact
