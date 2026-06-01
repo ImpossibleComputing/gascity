@@ -102,7 +102,10 @@ review artifact is visible from the failed run output. Explicit
 can target a database even when `gc rig list` times out and the local metadata
 fallback misses that rig. Pending-push dry-run now validates marker shape and
 freshness before claiming it would retry a remote push, matching the live retry
-guard.
+guard. Legacy pending-push markers that predate the full marker contract can
+self-heal only when the script can re-derive a remote, active branch/refspec,
+remote branch head, and prove that remote head is reachable from the local
+Dolt log. Unverified legacy markers still stop before any force-push.
 
 ## Creation Paths
 
@@ -133,7 +136,8 @@ guard.
 - `go test ./cmd/gc -run 'TestCmdSessionPrune|TestSessionActionJSONSchema' -count=1`
   passed for the session prune CLI surface.
 - `go test ./examples/dolt -count=1` passed for the compactor endpoint,
-  explicit target discovery, and pending-push dry-run marker checks.
+  explicit target discovery, pending-push dry-run marker checks, and safe
+  legacy pending-push marker recovery.
 - `go test -tags acceptance_b -timeout 10m -v ./test/acceptance/tier_b -run TestGastownIdleOpenBeadCountsStayBounded`
   passed on 2026-06-01, proving the idle Gastown regression itself against the
   current branch. Nightly coverage is wired through
@@ -199,9 +203,12 @@ guard.
   `/data/projects/maintainer-city/.gc/runtime/packs/dolt/compact-pending-push/ga`
   (`flatten and full GC succeeded but remote push failed`,
   `created_at=2026-05-16T18:03:26Z`). The marker is also legacy/incomplete: it
-  contains no `remote=` field. A branch dry-run with
-  `GC_DOLT_COMPACT_ONLY_DBS=ga` now discovers the explicit `ga` target even
-  though `gc rig list` times out, then fails with
-  `pending_push marker is missing remote — manual intervention required` before
-  any remote push retry. A combined `GC_DOLT_COMPACT_ONLY_DBS=ga,mc` dry-run now
-  reports both blockers in one run and exits with two failed databases.
+  contains no `remote=` field. After the legacy-marker recovery patch, a branch
+  dry-run with `GC_DOLT_COMPACT_ONLY_DBS=ga` discovers the explicit `ga` target
+  even though `gc rig list` times out, derives `remote=origin`,
+  `local_branch=main`, `remote_branch=main`, proves remote head
+  `7kon6u7jt09nhukq4urpqc598am91u5o` is in the local `ga` Dolt log, and exits
+  cleanly with `pending_push=present — dry-run (would retry remote push)`. No
+  mutating remote push was run from this report pass. A combined
+  `GC_DOLT_COMPACT_ONLY_DBS=ga,mc` dry-run now exits nonzero only because of the
+  remaining `mc` quarantine; `ga` reaches the recoverable dry-run retry path.
