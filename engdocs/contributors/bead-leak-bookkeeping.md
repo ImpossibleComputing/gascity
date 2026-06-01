@@ -65,6 +65,9 @@ open-wisp alert threshold during active workflow load even though the stale
 non-message counts were low. The reaper anomaly now counts only non-message
 wisps older than `GC_REAPER_MAX_AGE`; fresh active workflow rows no longer page
 as leak evidence. Mail wisps keep their separate optional backlog threshold.
+The `mol-dog-reaper` formula instructions now mirror that contract, including
+the stale non-message SQL example and the current summary fields; a maintenance
+test guards against drifting back to total-open-wisp alert wording.
 
 `ga-vwnt1` fixed a deacon patrol formula leak source. The
 `mol-deacon-patrol` final step used to pour the next patrol wisp, sleep for the
@@ -133,6 +136,9 @@ The nightly workflow overrides that to `10s` warmup, `36` samples, and a `5s`
 interval so the scheduled regression watches idle cities for roughly three
 minutes. The tests fail if either open-count series grows beyond a small
 transient jitter window after warmup.
+The same long-window settings passed locally on 2026-06-01 with both probes:
+`GC_IDLE_BEAD_STABILITY_WARMUP=10s GC_IDLE_BEAD_STABILITY_SAMPLES=36 GC_IDLE_BEAD_STABILITY_INTERVAL=5s go test -tags acceptance_b -timeout 12m ./test/acceptance/tier_b -run 'Test(PlainIdleOpenBeadCountsStayBounded|GastownIdleOpenBeadCountsStayBounded)$' -count=1`
+completed in `420.809s`.
 
 `ga-hiew1` split into two retention checks in this branch. First, the built-in
 Dolt compactor order remains installed and dispatched through the managed Dolt
@@ -386,11 +392,11 @@ session aliases already covered by the session row (`adoption_barrier`,
   to close `ga-k5ds4` because its AC explicitly asks for raw open wisps below
   500 in both `ga` and `mc`.
 - Stale stuck-root cleanup for `ga-k5ds4` is now implemented in the branch
-  reaper, but it has not yet been applied to the live `/data/projects/maintainer-city`
-  Dolt server. Remaining proof is a branch dry-run/live run followed by raw
-  open-wisp remeasurement. Keep `ga-k5ds4` open until `ga` and `mc` are below
-  the literal raw `<500` AC, or the AC is explicitly revised to the stale
-  non-message invariant.
+  reaper and verified against the live `/data/projects/maintainer-city` Dolt
+  server in dry-run mode. The guarded candidate query found nothing safe to
+  close, so no live mutation was run from that path. Keep `ga-k5ds4` open until
+  `ga` and `mc` are below the literal raw `<500` AC, or the AC is explicitly
+  revised to the stale non-message invariant.
 - Live route-key inspection and repair at 2026-06-01T10:58:02Z found `139`
   `ga.wisps` workflow roots with `gc.run_target` and missing `gc.routed_to`:
   `129` closed, `6` in progress, and `4` open. A later all-database scan at
