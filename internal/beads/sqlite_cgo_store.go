@@ -254,7 +254,7 @@ func (s *SQLiteCGOStore) Create(b Bead) (Bead, error) {
 	if err := s.upsertBeadTx(ctx, tx, stored); err != nil {
 		return Bead{}, err
 	}
-	for _, dep := range depsFromNeeds(stored) {
+	for _, dep := range depsFromBeadFields(stored) {
 		if err := s.depAddTx(ctx, tx, dep.IssueID, dep.DependsOnID, dep.Type); err != nil {
 			return Bead{}, err
 		}
@@ -880,4 +880,18 @@ func (s *SQLiteCGOStore) purgeTerminal(ctx context.Context, olderThan time.Durat
 
 func ptrString(v string) *string {
 	return &v
+}
+
+func numericIDSuffix(id string) int {
+	for i := len(id) - 1; i >= 0; i-- {
+		if id[i] < '0' || id[i] > '9' {
+			if i == len(id)-1 {
+				return 0
+			}
+			n, _ := strconv.Atoi(id[i+1:])
+			return n
+		}
+	}
+	n, _ := strconv.Atoi(id)
+	return n
 }
