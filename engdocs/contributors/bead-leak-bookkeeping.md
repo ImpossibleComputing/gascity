@@ -145,15 +145,18 @@ remote branch head, and prove that remote head is reachable from the local
 Dolt log. Unverified legacy markers still stop before any force-push.
 
 The compactor now also purges per-database `.dolt/git-remote-cache`
-directories before quarantine, pending-push, and commit-threshold checks. Those
-directories are rebuildable fetch caches, not canonical table storage, and live
-inspection found they can dwarf the actual Noms data even when a database is far
-below the flatten threshold. This cleanup is independent of history flattening:
-dry-run reports the cache it would purge, while a live run removes only that
-cache directory and can still skip flattening for below-threshold databases.
-`GC_DOLT_COMPACT_REMOTE_CACHE_ONLY=1` stops immediately after this rebuildable
-cache cleanup, so operators can reclaim cache bloat without retrying pending
-remote pushes or touching quarantine/pending-GC state.
+directories before quarantine and commit-threshold checks. Those directories
+are rebuildable fetch caches, not canonical table storage, and live inspection
+found they can dwarf the actual Noms data even when a database is far below the
+flatten threshold. Default pending-push and pending-GC retry paths preserve the
+cache until the remote repair has completed because the running Dolt SQL server
+may need the existing cache to fetch or push. This cleanup is independent of
+history flattening: dry-run reports the cache it would purge, while a live run
+removes only that cache directory and can still skip flattening for
+below-threshold databases. `GC_DOLT_COMPACT_REMOTE_CACHE_ONLY=1` stops
+immediately after this rebuildable cache cleanup, so operators can reclaim cache
+bloat without retrying pending remote pushes or touching quarantine/pending-GC
+state.
 
 ## Creation Paths
 
@@ -177,7 +180,7 @@ remote pushes or touching quarantine/pending-GC state.
 | `cmd/gc/wisp_gc.go` / `wisp autoclose` | Close attached workflow roots and owned workflow beads from CLI-driven cleanup. Purge expired closed wisps, order-tracking beads, and closed graph-v2 workflow-root closures. | Patched to include workflow-root closure GC through indexed metadata queries guarded by `sourceworkflow.IsWorkflowRoot`. |
 | `cmd/gc/order_dispatch.go` | Close order-tracking beads after dispatch attempt completion. | Existing defer is the primary owner; stale tracking-bead bugs should be treated as order-dispatch defects. |
 | `cmd/gc/doctor_run_target_backfill.go` | Mechanical repair for workflow roots with `gc.run_target` but missing `gc.routed_to`. | New `gc doctor --fix` check backfills the canonical claim key without touching non-workflow beads or already-routed roots. |
-| `examples/dolt/commands/compact/run.sh` | Bound Dolt storage by flattening high-commit databases, running full GC, retrying safe pending-push/pending-GC markers, and pruning rebuildable `.dolt/git-remote-cache` directories. | Patched so remote-cache cleanup runs before commit-count skips and before blocking quarantine markers; dry-run reports the exact cache path without deleting it; cache-only mode reclaims cache bloat without retrying pending remote pushes. |
+| `examples/dolt/commands/compact/run.sh` | Bound Dolt storage by flattening high-commit databases, running full GC, retrying safe pending-push/pending-GC markers, and pruning rebuildable `.dolt/git-remote-cache` directories. | Patched so remote-cache cleanup runs before commit-count skips and before blocking quarantine markers, while preserving the cache during pending remote repair retries; dry-run reports the exact cache path without deleting it; cache-only mode reclaims cache bloat without retrying pending remote pushes. |
 
 ## Verification Snapshot
 
@@ -199,6 +202,11 @@ remote pushes or touching quarantine/pending-GC state.
   marker still triggered a remote push retry after cache purge, then passed
   after cache-only mode left the marker untouched and skipped push/fetch/flatten
   SQL.
+- `go test ./examples/dolt -run 'TestCompactScriptPreservesRemoteCacheBeforePendingPushRetry$' -count=1`
+  failed before the pending-repair cache-order patch because the compactor
+  purged `.dolt/git-remote-cache` and the retry fetch failed before push; it
+  passed after default pending-push retry preserved the remote cache and cleared
+  the marker.
 - `go test -tags acceptance_b -timeout 10m -v ./test/acceptance/tier_b -run TestGastownIdleOpenBeadCountsStayBounded`
   passed on 2026-06-01, proving the idle Gastown regression itself against the
   current branch. Nightly coverage is wired through
@@ -229,7 +237,7 @@ remote pushes or touching quarantine/pending-GC state.
 - `go vet ./...` and `git diff --check` passed.
 - `.githooks/pre-commit` ran with `core.hooksPath=.githooks`; it failed in
   unrelated baseline `cmd/gc` shards. Latest log directory:
-  `/data/tmp/gc-local-tests.ETgSn1`.
+  `/data/tmp/gc-local-tests.fodGTC`.
 
 ## Remaining Work
 
@@ -337,3 +345,10 @@ remote pushes or touching quarantine/pending-GC state.
   `/data/services/gascity-local-dolt`, and local Dolt storage was about `1.8G`
   total (`ga=1.2G`, `mc=498M`, `gt=33M`, `bd=34M`, `gp=46M`,
   `my_db=59M`).
+- A direct live `CALL DOLT_FETCH('origin')` against `ga` after that cache-only
+  purge failed because the running Dolt SQL server still referenced the purged
+  git remote-cache path. No non-dry pending-push retry was run. The branch now
+  preserves remote caches on default pending-push/pending-GC retries so future
+  runs do not delete the cache immediately before a remote repair; the existing
+  `ga` marker still requires an explicit remote-cache reinitialization or remote
+  repair decision before retrying the stale push.
