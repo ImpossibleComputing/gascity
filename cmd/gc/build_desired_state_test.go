@@ -463,7 +463,7 @@ func TestCollectAssignedWorkBeadsUsesCachedInProgressReadModel(t *testing.T) {
 	}
 }
 
-func TestCollectAssignedWorkBeadsReprimesWhenCachedInProgressDirty(t *testing.T) {
+func TestCollectAssignedWorkBeadsReportsPartialWhenCachedInProgressDirty(t *testing.T) {
 	backing := &demandRefreshFailStore{Store: beads.NewMemStore()}
 	work, err := backing.Create(beads.Bead{
 		Title: "handoff becomes active",
@@ -485,17 +485,17 @@ func TestCollectAssignedWorkBeadsReprimesWhenCachedInProgressDirty(t *testing.T)
 	}
 
 	got, partial := collectAssignedWorkBeads(&config.City{}, cache)
-	if partial {
-		t.Fatal("collectAssignedWorkBeads reported partial with successful cache reprime")
+	if !partial {
+		t.Fatal("collectAssignedWorkBeads partial = false, want partial when cached in-progress read is dirty")
 	}
-	if len(got) != 1 || got[0].ID != work.ID || got[0].Status != "in_progress" || got[0].Assignee != "repo/refinery" {
-		t.Fatalf("collectAssignedWorkBeads returned %#v, want reprime in-progress %s", got, work.ID)
+	if len(got) != 0 {
+		t.Fatalf("collectAssignedWorkBeads returned %#v, want no live fallback rows for dirty cached in-progress %s", got, work.ID)
 	}
 	if backing.liveInProgressIssueLists != 0 {
-		t.Fatalf("live issue in_progress list calls = %d, want shared cache reprime", backing.liveInProgressIssueLists)
+		t.Fatalf("live issue in_progress list calls = %d, want no live fallback", backing.liveInProgressIssueLists)
 	}
 	if backing.liveInProgressWispLists != 0 {
-		t.Fatalf("live wisp in_progress list calls = %d, want shared cache reprime", backing.liveInProgressWispLists)
+		t.Fatalf("live wisp in_progress list calls = %d, want no live fallback", backing.liveInProgressWispLists)
 	}
 }
 

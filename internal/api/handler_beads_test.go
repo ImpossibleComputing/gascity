@@ -758,7 +758,7 @@ func TestBeadListInProgressUsesLiveLookup(t *testing.T) {
 	}
 }
 
-func TestBeadReadyUsesLiveLookup(t *testing.T) {
+func TestBeadReadyUsesCachedLookup(t *testing.T) {
 	state := newFakeState(t)
 	backing := beads.NewMemStore()
 	blocker, err := backing.Create(beads.Bead{Title: "blocker"})
@@ -796,8 +796,15 @@ func TestBeadReadyUsesLiveLookup(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].ID != ready.ID {
-		t.Fatalf("ready beads = %+v, want only %s", resp.Items, ready.ID)
+	readyIDs := make(map[string]bool, len(resp.Items))
+	for _, item := range resp.Items {
+		readyIDs[item.ID] = true
+	}
+	if readyIDs[ready.ID] {
+		t.Fatalf("ready beads = %+v, want cached dependency state to keep %s blocked", resp.Items, ready.ID)
+	}
+	if !readyIDs[blocker.ID] {
+		t.Fatalf("ready beads = %+v, want cached open blocker %s", resp.Items, blocker.ID)
 	}
 }
 

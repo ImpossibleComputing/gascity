@@ -143,7 +143,7 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	var pa partialAggregator
 	for _, rigName := range rigNames {
 		pa.attempt()
-		ready, err := beads.HandlesFor(stores[rigName]).Live.Ready()
+		ready, err := beads.HandlesFor(stores[rigName]).Cached.Ready()
 		if err != nil {
 			if beads.IsPartialResult(err) && len(ready) > 0 {
 				pa.record("rig "+rigName, err)
@@ -166,8 +166,10 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	}
 
 	index := s.latestIndex()
+	cacheAge := cacheAgeSeconds(s.state.CityBeadStore())
 	return &ListOutput[beads.Bead]{
-		Index: index,
+		Index:     index,
+		CacheAgeS: cacheAge,
 		Body: ListBody[beads.Bead]{
 			Items:         all,
 			Total:         len(all),

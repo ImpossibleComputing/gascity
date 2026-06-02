@@ -1,8 +1,6 @@
 package beads
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -127,34 +125,18 @@ type cachedStoreReader struct {
 }
 
 func (r cachedStoreReader) Get(id string) (Bead, error) {
-	if err := r.store.ensureFullPrime(context.Background()); err != nil {
-		return Bead{}, err
-	}
 	return r.store.cachedGetOnly(id)
 }
 
 func (r cachedStoreReader) List(query ListQuery) ([]Bead, error) {
-	rows, err := r.store.cachedListOnly(logicalCachedListQuery(query))
-	if err == nil || !errors.Is(err, ErrCacheUnavailable) {
-		return rows, err
-	}
-	if err := r.store.ensureFullPrime(context.Background()); err != nil {
-		return nil, err
-	}
 	return r.store.cachedListOnly(logicalCachedListQuery(query))
 }
 
 func (r cachedStoreReader) Ready(query ...ReadyQuery) ([]Bead, error) {
-	if err := r.store.ensureFullPrime(context.Background()); err != nil {
-		return nil, err
-	}
 	return r.store.cachedReadyOnly(readyQueryFromArgs(query))
 }
 
 func (r cachedStoreReader) DepList(id, direction string) ([]Dep, error) {
-	if err := r.store.ensureFullPrime(context.Background()); err != nil {
-		return nil, err
-	}
 	return r.store.cachedDepListOnly(id, direction)
 }
 
