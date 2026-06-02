@@ -1063,19 +1063,9 @@ func defaultScaleCheckCounts(targets []defaultScaleCheckTarget) (map[string]int,
 		// metadata-only (open + gc.pool_demand=<sentinel>); the
 		// unassigned + matching-route checks apply below as for the
 		// Ready source.
-		//
-		// Live: true skips the CachingStore in-memory snapshot and reads
-		// the backing store directly. The cache populates from PrimeActive
-		// at supervisor startup and is maintained by the event stream, but
-		// gc order run is a sibling subprocess so the cache lag would
-		// otherwise stretch demand observation by an unbounded number of
-		// reconcile ticks. Mirrors openSessionBeadExists in
-		// adoption_barrier.go, which uses Live: true for the same
-		// cross-process freshness reason.
-		demand, demandErr := group.store.List(beads.ListQuery{
+		demand, demandErr := listBothTiersForControllerDemand(group.store, beads.ListQuery{
 			Status:   "open",
 			Metadata: poolDemandMetadataPair(),
-			Live:     true,
 			TierMode: beads.TierBoth,
 		})
 		if demandErr != nil {

@@ -25,7 +25,7 @@ func TestHookScriptsContainStamp(t *testing.T) {
 			} else {
 				content = hookScript(eventType, "")
 			}
-			if !strings.Contains(content, "# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234") {
+			if !strings.Contains(content, "# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234 gen:2") {
 				t.Errorf("hook %s missing stamp line:\n%s", name, content)
 			}
 		})
@@ -38,7 +38,8 @@ func TestParseHookStampDate(t *testing.T) {
 		content string
 		want    string
 	}{
-		{"with stamp", "#!/bin/sh\n# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234\n", "2026-04-29T10:00:00Z"},
+		{"with stamp", "#!/bin/sh\n# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234 gen:2\n", "2026-04-29T10:00:00Z"},
+		{"legacy stamp", "#!/bin/sh\n# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234\n", "2026-04-29T10:00:00Z"},
 		{"no stamp", "#!/bin/sh\n# Installed by gc\n", ""},
 		{"empty", "", ""},
 		{"unknown date", "#!/bin/sh\n# gc-hook-stamp: unknown unknown\n", "unknown"},
@@ -48,6 +49,26 @@ func TestParseHookStampDate(t *testing.T) {
 			got := parseHookStampDate([]byte(tt.content))
 			if got != tt.want {
 				t.Errorf("parseHookStampDate() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseHookStampGeneration(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"current stamp", "#!/bin/sh\n# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234 gen:2\n", "2"},
+		{"legacy stamp", "#!/bin/sh\n# gc-hook-stamp: 2026-04-29T10:00:00Z abc1234\n", ""},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseHookStampGeneration([]byte(tt.content))
+			if got != tt.want {
+				t.Errorf("parseHookStampGeneration() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -241,6 +262,50 @@ func TestInstallBeadHooksForwardOnly(t *testing.T) {
 	}
 	if !bytes.Equal(newerContent, afterContent) {
 		t.Errorf("stale binary overwrote newer hook.\nwant stamp from 2026-06-01, got:\n%s", afterContent)
+	}
+}
+
+func TestInstallBeadHooksUpgradesNewerStampedOldGeneration(t *testing.T) {
+	oldDate, oldCommit := date, commit
+	t.Cleanup(func() { date, commit = oldDate, oldCommit })
+
+	dir := t.TempDir()
+	hooksDir := filepath.Join(dir, ".beads", "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(hooksDir, "on_create")
+	oldGeneration := `#!/bin/sh
+# gc-hook-stamp: 2099-01-01T00:00:00Z stale999
+GC_BIN="${GC_BIN:-gc}"
+DATA=$(cat)
+PAYLOAD=$(printf '{"bead":%s}' "$DATA")
+"$GC_BIN" event emit bead.created --subject "$1" --payload "$PAYLOAD"
+`
+	if err := os.WriteFile(path, []byte(oldGeneration), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	date = "2026-06-02T00:00:00Z"
+	commit = "fixed111"
+	if err := installBeadHooks(dir, ""); err != nil {
+		t.Fatalf("installBeadHooks: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "gen:2") {
+		t.Fatalf("old-generation newer-dated hook was not upgraded:\n%s", content)
+	}
+	if !strings.Contains(content, `--bead-payload "$1"`) {
+		t.Fatalf("upgraded hook missing bead payload fallback:\n%s", content)
+	}
+	if strings.Contains(content, "2099-01-01T00:00:00Z stale999") {
+		t.Fatalf("old-generation stamp survived upgrade:\n%s", content)
 	}
 }
 

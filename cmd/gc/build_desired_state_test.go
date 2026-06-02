@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -882,38 +883,33 @@ func TestDefaultScaleCheckCountsIgnoresOpenMoleculeContainers(t *testing.T) {
 	}
 }
 
-// TestDefaultScaleCheckCountsCountsCronPoolDemandViaMetadataFlag asserts the
-// gc.pool_demand path end-to-end: cmd/gc/cmd_order.go and
-// cmd/gc/order_dispatch.go both write the pair from
-// poolDemandMetadataPair() onto the wisp when a.Pool != "", and
-// defaultScaleCheckCounts must count such beads regardless of type. The
-// molecule type itself is still excluded from Ready()/CachedReady() per
-// PR #1154 + the TestDefaultScaleCheckCountsIgnoresOpenMoleculeContainers
-// invariant above, so without the explicit metadata-list path cron pool
-// orders generate zero scale_check demand and the pool never spawns.
-// Regression for https://github.com/gastownhall/gascity/pull/2531
-// → https://github.com/gastownhall/gascity/pull/2556.
-//
-// Also asserts the Live: true cache-bypass behavior is load-bearing:
-// the demandListCountingStore's livePoolDemand counter must increment,
-// proving defaultScaleCheckCounts goes through to the backing store
-// rather than the CachingStore snapshot (which can lag for wisps
-// created by sibling subprocesses like gc order run).
+// TestDefaultScaleCheckCountsCountsCronPoolDemandViaMetadataFlag asserts that
+// gc.pool_demand beads are counted from the controller cache after the bead
+// event path applies the external write. The molecule type itself is still
+// excluded from Ready()/CachedReady() per PR #1154, so without the explicit
+// metadata-list source cron pool orders generate zero scale_check demand.
 func TestDefaultScaleCheckCountsCountsCronPoolDemandViaMetadataFlag(t *testing.T) {
 	backing := &demandListCountingStore{Store: beads.NewMemStore()}
-	if _, err := backing.Create(beads.Bead{
+	cache := beads.NewCachingStoreForTest(backing, nil)
+	if err := cache.PrimeActive(); err != nil {
+		t.Fatalf("PrimeActive: %v", err)
+	}
+
+	created, err := backing.Create(beads.Bead{
 		Title:     "mol-dog-stale-db",
 		Type:      "molecule",
 		Status:    "open",
 		Metadata:  poolWispMetadata("dog"),
 		Ephemeral: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create pool-order wisp: %v", err)
 	}
-	cache := beads.NewCachingStoreForTest(backing, nil)
-	if err := cache.PrimeActive(); err != nil {
-		t.Fatalf("PrimeActive: %v", err)
+	payload, err := json.Marshal(created)
+	if err != nil {
+		t.Fatalf("marshal created bead: %v", err)
 	}
+	cache.ApplyEvent("bead.created", payload)
 
 	counts, _, errs := defaultScaleCheckCounts([]defaultScaleCheckTarget{{
 		template: "dog",
@@ -926,8 +922,8 @@ func TestDefaultScaleCheckCountsCountsCronPoolDemandViaMetadataFlag(t *testing.T
 	if got := counts["dog"]; got != 1 {
 		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 1 (gc.pool_demand wisp must count as cron pool demand)", "dog", got)
 	}
-	if backing.livePoolDemand == 0 {
-		t.Fatalf("livePoolDemand list calls = 0, want >0 (defaultScaleCheckCounts must use Live: true to bypass the CachingStore snapshot, since cron pool orders fire from sibling subprocesses and the cache lags)")
+	if backing.livePoolDemand != 0 {
+		t.Fatalf("livePoolDemand list calls = %d, want 0 (controller demand must read the cache and rely on bead events for external writes)", backing.livePoolDemand)
 	}
 }
 
@@ -997,8 +993,8 @@ func TestDefaultScaleCheckCountsIgnoresFutureDeferredCronPoolDemand(t *testing.T
 	if got := counts["cat"]; got != 0 {
 		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 0 for future-deferred gc.pool_demand wisp", "cat", got)
 	}
-	if backing.livePoolDemand == 0 {
-		t.Fatalf("livePoolDemand list calls = 0, want >0")
+	if backing.livePoolDemand != 0 {
+		t.Fatalf("livePoolDemand list calls = %d, want 0", backing.livePoolDemand)
 	}
 }
 
