@@ -732,9 +732,9 @@ func (m *memSampler) sampleOnce() {
 		}
 		if !m.warmUpAt.IsZero() {
 			elapsed := now.Sub(m.warmUpAt).Seconds()
-			if elapsed > 0 {
+			if elapsed > 0 && rss > m.warmUpRSS {
 				growthRate := float64(rss-m.warmUpRSS) / elapsed
-				if rss > m.warmUpRSS && growthRate > float64(m.maxRSSGrowthBytesPerSec) {
+				if growthRate > float64(m.maxRSSGrowthBytesPerSec) {
 					finding := fmt.Sprintf(
 						"RSS growth rate %.1f B/s exceeds limit %s/s at T+%s (warm-up RSS %s, current RSS %s)",
 						growthRate, FormatBytes(m.maxRSSGrowthBytesPerSec),

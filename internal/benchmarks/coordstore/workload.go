@@ -124,6 +124,7 @@ type WorkloadConfig struct {
 	// computed after a warm-up period. If the mean growth rate from the
 	// warm-up checkpoint to now exceeds this value, the runner cancels the
 	// workload and reports a "leak detected" finding. Zero disables (default).
+	// Inactive for runs shorter than memGuardWarmUp (30 s); intended for long soak runs.
 	MaxRSSGrowthBytesPerSec uint64
 }
 
