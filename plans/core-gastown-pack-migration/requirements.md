@@ -4,9 +4,9 @@ phase: requirements
 rig: gascity
 rig_root: /data/projects/gascity-fresh-main-20260604-VLKm8c
 artifact_root: /data/projects/gascity-fresh-main-20260604-VLKm8c/plans
-status: draft
+status: approved
 created_at: 2026-06-04T00:00:00Z
-updated_at: 2026-06-04T00:00:00Z
+updated_at: 2026-06-04T15:07:35Z
 ---
 
 # Requirements: Core and Gastown Pack Split
@@ -195,6 +195,9 @@ Resolved decisions from requirements review:
   Core requirement until provider support is restored.
 - Branch pruning: branch pruning originated in Gastown and moves to
   `gascity-packs/gastown`.
+- Core opt-out: Core is mandatory for real cities. Missing Core is
+  doctor-diagnosable and fixable. Explicit opt-out is unsupported except for a
+  narrowly scoped dev/test escape hatch.
 
 Current `origin/main` already contains partial migration work:
 
@@ -384,7 +387,6 @@ The implementation plan must account for these reference classes:
 
 ### Remaining Open Questions For Design
 
-- How should explicit Core opt-out work? The requirements currently say doctor
-  warns and offers a fix when Core is absent from a resolved config. The design
-  still needs to decide whether Core opt-out is unsupported, supported only with
-  a clearly named escape hatch, or supported for tests/dev fixtures only.
+- None at requirements level. Design may still resolve implementation details
+  such as exact fix-command wiring, test helper opt-out shape, and ownership of
+  assets marked `review`.
