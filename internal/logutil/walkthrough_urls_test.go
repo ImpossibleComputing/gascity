@@ -41,12 +41,11 @@ func TestWalkthroughURLStringsStayInContractFile(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".gc", "node_modules":
+			name := d.Name()
+			if name == ".git" || name == ".gc" || name == "node_modules" || name == "worktrees" || strings.HasPrefix(name, "worktree-") {
 				return filepath.SkipDir
-			default:
-				return nil
 			}
+			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {
 			return nil
