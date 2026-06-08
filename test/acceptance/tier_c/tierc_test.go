@@ -934,6 +934,25 @@ func TestTierCEnvAuthDoesNotMirrorAuthTokenIntoAPIKey(t *testing.T) {
 	require.True(t, hasEnvAuth)
 }
 
+func TestUniqueRigName(t *testing.T) {
+	cases := []struct {
+		testName string
+		want     string
+	}{
+		{"TestSwarm_SlingWorkCoderCommits", "swc"},
+		{"TestGastown_PolecatImplementsRefineryMerges", "pir"},
+		{"TestGastown_PolecatLifecycle", "pl"},
+		{"TestGastown_MayorDispatchPipeline", "mdp"},
+		{"TestStandalone", "s"}, // no underscore: strips "Test", single initial
+		{"", "rig"},             // empty input falls back to "rig"
+	}
+	for _, tc := range cases {
+		if got := uniqueRigName(tc.testName); got != tc.want {
+			t.Errorf("uniqueRigName(%q) = %q, want %q", tc.testName, got, tc.want)
+		}
+	}
+}
+
 func stageClaudeOAuth(realHome, gcHome string) error {
 	srcClaudeDir := filepath.Join(realHome, ".claude")
 	dstClaudeDir := filepath.Join(gcHome, ".claude")
