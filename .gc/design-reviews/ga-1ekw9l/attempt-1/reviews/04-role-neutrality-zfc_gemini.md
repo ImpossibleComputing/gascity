@@ -1,49 +1,22 @@
-# Anand Krishnaswamy — Gemini (Role Neutrality & ZFC Invariant Reviewer, Attempt 1, Independent DeepSeek V4 Flash Style)
+# Anand Krishnaswamy — Gemini (Role Neutrality & ZFC Invariant Reviewer, Attempt 4, Independent DeepSeek V4 Flash Style)
 
-**Verdict:** approve-with-risks
+**Verdict:** block
 
-**Lane:** zero hardcoded roles in Go and assets, symbolic `maintenance_worker` binding, SDK self-sufficiency, and ZFC (Zero Framework Cognition) judgment containment.
-
-Reviewed against the initial design document in Attempt 1 (`.gc/design-reviews/ga-1ekw9l/initial/design-before.md` / `.gc/design-reviews/ga-1ekw9l/initial/design.diff`) and grounded in the live codebase under `internal/runtime/tmux/theme.go`, `internal/api/handler_agents.go`, `internal/sling/sling.go`, `internal/dispatch/fanout.go`, and the required provider pack under `examples/dolt/`.
+> **Lane:** zero hardcoded roles in Go and assets, the symbolic maintenance-worker binding, SDK self-sufficiency, ZFC (Zero Framework Cognition) judgment containment.
+>
+> Reviewed against the Attempt 4 design document (`.gc/design-reviews/ga-1ekw9l/attempt-4/design-before.md`, 657 lines, `updated_at: 2026-06-09T07:28:00Z`) — §"Role Neutrality And Configurable Bindings" (328–369), §"Required System Pack Loader" (193-251), §"Bootstrap Fixture Isolation" (370-396), and §"Data And State" (426–486).
+>
+> This independent review is produced using the DeepSeek V4 Flash style, focusing specifically on cross-document consistency, missing edge cases, and assumptions other reviewers may accept too quickly.
 
 ---
 
 ## Executive Summary
 
-As Anand Krishnaswamy, the **Role Neutrality & ZFC Invariant Reviewer**, I have conducted an independent, evidence-backed, and deeply analytical review of the Attempt 1 design for the Core and Gastown Pack Split. My verdict is **Verdict: approve-with-risks**.
+As Anand Krishnaswamy, the **Role Neutrality & ZFC Invariant Reviewer**, I have conducted an independent, evidence-backed, and deeply analytical review of the Attempt 4 design for the Core and Gastown Pack Split. My verdict is **Verdict: block**.
 
-The core architecture of Gas City is built on the principle of **ZERO hardcoded roles**. The SDK is merely a role-agnostic transport layer. It must never contain hardcoded heuristics or reasoning about specific roles (e.g., Mayor, Deacon, Polecat, or Dog). Moving the default maintenance agent decision from a compiled literal `dog` to a configurable, symbolic `core.maintenance_worker` binding resolved at runtime is a massive leap forward. Similarly, implementing a strict `role-surface.generated.yaml` manifest is a solid quality gate.
+This iteration (Attempt 4) introduces necessary clarifications, such as declarative formula-level branch metadata in TOML, explicit binding precedence rules, and a role-surface manifest. However, several **critical, compile-bound role leakage vectors, suffix-level binding holes, and unstated runtime assumptions** remain unresolved in the plan. Other reviewers have accepted the scope and completeness of this migration too quickly. 
 
-However, other reviewers have accepted the scope and completeness of this migration too quickly. There are significant **cross-document inconsistencies, hidden code-level role leakage vectors, and unstated runtime assumptions** that must be resolved. Specifically, the hardcoded status-bar themes in the tmux package (`theme.go`), the branch-variable heuristics in `internal/sling/sling.go`, and the missing escalation-recipient binding for required provider packs (`dolt`) represent severe architectural risks. We must address these vulnerabilities before approving the transition to implementation.
-
----
-
-## Top Strengths & Design Evolution
-
-1. **True Symbolic Worker Indirection**: Elevating the required maintenance agent from a compiled `dog` string to a configurable symbolic binding (`core.maintenance_worker` / `gc.bindings.*`) moves the selection of the worker agent out of Go compiled binary space and into pack/config space.
-2. **Tested SDK Self-Sufficiency**: Decoupling Core infrastructure operations (health patrol, order dispatch, and bead lifecycles) from specific user-configured roles ensures the SDK remains fully functional in Core-only cities, even when the maintenance worker is renamed or completely omitted.
-3. **Rigorous Surface Manifest Gate**: Requiring `role-surface.generated.yaml` to catalog and validate all role name instances before source deletion ensures that the de-roling sweep is systematic and auditable, preventing silent regressions.
-
----
-
-## Cross-Document Consistency & Unstated Assumptions
-
-When comparing the proposed `plans/core-gastown-pack-migration/implementation-plan.md` against `requirements.md`, the `gc.mayor.implementation-plan.v1` schema, and the live codebase, several critical gaps emerge:
-
-### 1. Precedence and Pre-flight Behavior of `[gc.bindings.*]` is Unstated
-The plan introduces `[gc.bindings.*]` and `[system_packs.*.bindings]` to resolve symbolic targets (like `core.maintenance_worker` or `gc.run_target_binding`), but fails to specify their precedence order against the progressive activation levels (Levels 0-8) or standard TOML overrides. 
-- **The Assumption**: Reviewers assume bindings will resolve cleanly.
-- **The Reality**: Lacking an explicit resolution owner and pre-flight empty/`/` validation, typos in a city's symbolic bindings will lead to runtime panics or silent dispatch failures, violating the **NDI (Nondeterministic Idempotence)** and **Bitter Lesson** principles.
-
-### 2. Required Provider Packs Sit Outside the "Core" De-roling Sweep
-The plan limits its strict de-roling scope to "Core-owned behavior." However, the embedded `dolt` pack (`examples/dolt`) is a required provider pack returned by the system registry (`builtinpacks/registry.go`). 
-- **The Assumption**: Reviewers assume de-roling only matters for Core templates.
-- **The Reality**: The `dolt` provider's formulas and scripts explicitly hardcode `mayor/` and `deacon/` mail/nudge targets (e.g., `examples/dolt/formulas/mol-dog-doctor.toml:76,140` and `examples/dolt/formulas/mol-dog-stale-db.toml:162,258`). In a non-Gastown city running the dolt provider, these escalation targets resolve to roles that do not exist, leading to unhandled failures. The plan provides no config-key or resolution site for binding these escalation recipients.
-
-### 3. Hardcoded Branch Heuristics in `internal/sling/sling.go`
-`internal/sling/sling.go:888` and `internal/sling/sling.go:894` contain compilation-level heuristics that tie formula prefixes like `"mol-polecat-"` and `"mol-refinery-patrol"` to specific branch variable configurations (`SlingFormulaUsesBaseBranch` and `SlingFormulaUsesTargetBranch`).
-- **The Assumption**: Moving `mol-polecat-*` to public Gastown removes the formula from Core, resolving the issue.
-- **The Reality**: The Go binary itself still retains the hardcoded string matching. This is a severe ZFC violation—the Core SDK binary contains explicit knowledge of Gastown-specific behavior and formula prefixes, violating the **Layering Invariant** and the **City-as-directory** model.
+Specifically, the plan invents a new symbolic binding system while ignoring the prefix-only `binding_prefix` mechanism currently in the code, which leaves all role suffixes hardcoded as literals in prompt templates. Furthermore, the plan fails to name key Go-side ownership boundaries (such as `internal/runtime/tmux/theme.go` and `internal/dispatch/fanout.go`), excludes `dog` from the scanned denied set, and lacks an enforcement gate for expired allowlist rows. We must address these vulnerabilities before approving the transition to implementation.
 
 ---
 
@@ -51,64 +24,62 @@ The plan limits its strict de-roling scope to "Core-owned behavior." However, th
 
 ### Q1: After binding indirection, does any Go, prompt asset, script, formula, order, generated help, or API route still branch on dog, Mayor, Maintenance, or another concrete role name?
 
-**Answer: Yes.** A rigorous source audit reveals multiple active compiled-in role-bias points:
-1. **Tmux Theme Hardcoding (`internal/runtime/tmux/theme.go:31-47`)**:
-   ```go
-   func MayorTheme() Theme { return Theme{Name: "mayor", BG: "#3d3200", FG: "#ffd700"} }
-   func DeaconTheme() Theme { return Theme{Name: "deacon", BG: "#2d1f3d", FG: "#c0b0d0"} }
-   func DogTheme() Theme { return Theme{Name: "dog", BG: "#3d2f1f", FG: "#d0c0a0"} }
-   ```
-   This is a compile-time role bias. If the maintenance worker is renamed to `"caretaker"`, it loses its warm worker aesthetic because the theme logic is bound to the exact string `"dog"`.
-2. **Sling Heuristics (`internal/sling/sling.go:885-895`)**:
-   Branches on `"mol-polecat-"` and `"mol-refinery-patrol"` to determine branch-variable dependencies, linking the core SDK's binary behavior to specific external Gastown formula names.
-3. **API Type Documentation examples (`internal/api/huma_types_agents.go`)**:
-   Contains hardcoded example strings like `"deacon-1"` inside openapi schema annotations, which leak into generated TS types and dashboard schemas.
-
----
+**Answer: Yes.** While the Attempt 4 plan introduces `[gc.bindings.*]` and `[system_packs.*.bindings]` to resolve symbolic targets, it leaves several critical role-bias points compile-bound or unneutralized in the asset space:
+1. **The `BindingPrefix` / `binding_prefix` Paradox**: The live codebase uses `Agent.BindingPrefix()` (`internal/config/config.go:91-93`), `binding_prefix` (`internal/sling/sling.go:1003`), and template variables (e.g., `{{ .BindingPrefix }}dog` in witness/boot/deacon prompts and `{{binding_prefix}}dog` in formulas). Under the current plan, `binding_prefix` is completely ignored (mentioned zero times). If the plan is decomposed as-is, the role *suffix* (`dog`, `deacon`, etc.) remains a hardcoded literal in the prompt template or formula asset (e.g., `{{ .BindingPrefix }}dog`), meaning the assets still branch on concrete role names. Suffixes must also become fully symbolic bindings.
+2. **Compile-bound Tmux Theme Heuristics**: `internal/runtime/tmux/theme.go:34-47` still returns hardcoded theme styles for `"mayor"`, `"deacon"`, and `"dog"`. This represents compilation-level role bias in shared SDK Go code.
+3. **Dolt Pack Mail/Nudge Routes**: Required provider pack `dolt` (`examples/dolt`) still hardcodes nudge/mail targets like `gc mail send mayor/` and `gc session nudge deacon/` inside its shell scripts and formulas, which will fail at runtime in any non-Gastown city where these roles do not exist.
+4. **API Types & Examples**: `internal/api` still contains OpenAPI types referencing hardcoded example role names like `"deacon-1"`, which leak into generated TS types and dashboard schemas.
 
 ### Q2: Can controller-owned SDK operations still run when the configured maintenance worker is renamed or omitted, with no dependency on a user agent entry?
 
-**Answer: Yes, but with unmitigated edge-case risks.** 
-- If the `maintenance_worker` is renamed (e.g., from `dog` to `reconciler`), the framework resolves the target at runtime via `gc.run_target_binding` / `target_binding` mapping to the configured agent, which works perfectly.
-- If the `maintenance_worker` is omitted entirely from the config, SDK operations (health patrol, order dispatch) continue running. However, if the dispatch system attempts to route a required system task and finds no bound agent, the dispatcher's behavior is unstated. Does it fallback to a pure transport thread, block, or fail-closed? Under **ZFC**, the Go code must not make a judgment call here; the config must mandate a valid transport fallback or raise a descriptive pre-flight error during config load.
-
----
+**Answer: Yes, but with unmitigated edge-case risks.**
+- If the `maintenance_worker` is renamed (e.g., from `dog` to `reconciler`), the framework resolves the target at runtime via `gc.run_target_binding` / `target_binding`, which works perfectly.
+- However, if the `maintenance_worker` is omitted entirely from the config, the plan's behavior is unstated. Line 354 states: `"Missing optional bindings skip user-agent work with a typed diagnostic."` But under **ZFC**, the Go code must not make a judgment call about omitting required system-level transport workers; the config parser must fail-closed during pre-flight configuration validation or raise a descriptive pre-flight error rather than letting the dispatcher make an ad-hoc runtime judgment.
 
 ### Q3: Are role-name allowlists narrow, time-bounded, and failing when compatibility fixtures leak into live behavior?
 
-**Answer: Partially.** 
-The proposed `role-surface.generated.yaml` manifest is narrow and documented, but its verification scanner is vulnerable.
-- **The Vulnerability**: Scanners often focus exclusively on Go files. A shallow grep search will miss concatenation, case changes, or role leakage inside raw template assets, Bash helper scripts, front-end dashboard static pages, and generated JSON schemas.
-- **The Mitigation**: The scanner must tokenize and lowercase all assets in the repository, checking markdown files, templates, scripts, schemas, and Go code, failing the build on any unapproved role literal.
+**Answer: No.**
+1. **The Scanner ignores `dog`**: The plan's proposed list of denied tokens (`mayor, deacon, witness, refinery, polecat, boot, crew, gastown`) completely omits `dog`. While `dog` is allowed in the Core default pack config, omitting it from the denied set means developers can silently hardcode `dog` in Go source code or script bodies without triggering a build failure.
+2. **Missing Expiry Enforcement**: While the plan mentions that allowlist rows require an `expiry` date, it specifies no CI enforcement gate that fails the build when a row is past its expiry date. Without this, allowlists will grow indefinitely.
 
 ---
 
-## Critical Risks & Architectural Inconsistencies
+## Critical Risks & Architectural Inconsistencies (DeepSeek V4 Flash Style)
 
-### 1. [Major] Hardcoded Tmux Theme Logic as a Role Leakage Vector
-- **The Risk**: `internal/runtime/tmux/theme.go` hardcodes `MayorTheme()`, `DeaconTheme()`, and `DogTheme()`.
-- **The Impact**: If a city is initialized without these roles (or under a renamed symbolic worker), the terminal status bar loses distinct branding.
-- **Recommended Action**: Deprecate specific role-theme functions. Add an optional `theme` field directly to `config.Agent` (e.g., `theme = "earthy"`, `theme = "ecclesiastical"`). If omitted, the tmux provider must dynamically pick an elegant palette from `DefaultPalette` using a consistent hash over the agent's name (`AssignTheme(agentName)`), ensuring 100% role-neutrality while preserving visual distinction.
+### 1. [Blocker] Suffix Binding Ignored: The `BindingPrefix` Blocker
+- **The Risk:** The plan introduces a net-new binding system but completely ignores the existing `BindingPrefix` / `binding_prefix` routing variable. Today, assets are structured as `{{ .BindingPrefix }}dog` or `{{binding_prefix}}dog`.
+- **The Impact:** Because `binding_prefix` only namespaces the *import prefix*, the role name *suffix* (e.g., `dog`, `deacon`, `witness`) remains a hardcoded literal in the prompt template or formula asset. The new `gc.run_target_binding` / symbolic bindings are never reconciled with how these template variables resolve. Without explicit design stating that (a) the role *suffix* also becomes symbolic, and (b) how the new bindings map to the existing `BindingPrefix` resolution, the decomposer will ship code that still hardcodes the literal suffixes, failing the core goal of the de-roling migration.
+- **Resolution:** Explicitly specify that all role-name suffixes in prompt templates and assets are replaced by symbolic bindings (e.g., `{{ .Bindings.maintenance_worker }}` or a unified config-driven binding map). Clarify the resolution precedence and deprecate the prefix-only `binding_prefix` mechanism in favor of fully symbolic bindings.
 
-### 2. [Major] Unresolved Mail/Nudge Targets in Required Provider Packs (`dolt`)
-- **The Risk**: Required provider pack `dolt` (`examples/dolt`) uses hardcoded `mayor/` and `deacon/` mail/nudge targets in its formulas.
-- **The Impact**: In a non-Gastown city that selects the dolt provider, these targets resolve to non-existent roles, breaking crucial database health and monitoring flows.
-- **Recommended Action**: Extend the de-roling scope to include all Gas-City-owned required packs. Introduce a recipient-binding mechanism (config-key + resolution site) so that `dolt`'s mail/nudge targets can be rebound to symbolic roles (e.g., `escalation_recipient = "core.maintenance_worker"`).
+### 2. [Blocker] Un-de-roled Go: Tmux Theme Constants
+- **The Risk:** `internal/runtime/tmux/theme.go:34,40,46` contains hardcoded functions (`MayorTheme()`, `DeaconTheme()`, `DogTheme()`) returning styles for literal Gastown roles. This is core SDK Go code that cannot move to a pack.
+- **The Impact:** If a city runs with a renamed or omitted maintenance worker, it loses warm tmux visual branding because the theme is hardcoded to the string `"dog"`. This is a compile-time role bias.
+- **Resolution:** Explicitly de-role `theme.go`. Theme styles must become pack or config data keyed by the symbolic binding (or a generic aesthetic token like `"earthy"`, `"warm"`), with a consistent hash fallback (`AssignTheme(agentName)`) for any unbound agent. Name `internal/runtime/tmux/theme.go` and `theme_test.go` as forbidden-removal / de-roling sites.
 
-### 3. [Minor] Formula-to-Branch Association Heuristics in Sling
-- **The Risk**: `internal/sling/sling.go` checks prefix `"mol-polecat-"` and name `"mol-refinery-patrol"`.
-- **The Impact**: Retaining these checks keeps legacy Gastown knowledge compiled directly inside the Core SDK binary.
-- **Recommended Action**: Eliminate the hardcoded Go heuristics. Instead, allow formulas to declare branch-variable use declaratively in their TOML definitions (e.g., `uses_base_branch = true` / `uses_target_branch = true`). The sling package can then inspect these flags on the parsed formula object, preserving a completely role-neutral core.
+### 3. [Blocker] Unnamed Go Ownership & Undefined Empty Binding Behavior (ZFC Violation)
+- **The Risk:** The parser and resolver support for `[gc.bindings.*]` is described in prose, but no owning packages or files are named (e.g., `internal/config`, `internal/dispatch/fanout.go`). Furthermore, the behavior of an empty or unresolved optional binding is left to runtime judgment.
+- **The Impact:** If the Go dispatcher makes a judgment call to skip or proceed under an empty binding, it violates the **Zero Framework Cognition (ZFC)** principle. The resolution must be structurally handled at the edges.
+- **Resolution:** Specify the Go packages that own parsing (`internal/config`) and resolution (`internal/dispatch/fanout.go`). Define the empty-binding contract clearly: the bead remains in `open` or `unassigned` state in the task store, and a clear diagnostic event is appended to the event bus; no Go-side role substitution or ad-hoc skipping occurs.
+
+### 4. [Major] Dolt Pack Escalation Targets Missing from Scope
+- **The Risk:** The required provider pack `dolt` (`examples/dolt`) is registered in `builtinpacks/registry.go` and is essential for databases. However, its shell scripts and formulas hardcode nudge/mail targets like `gc mail send mayor/` and `gc session nudge deacon/`.
+- **The Impact:** In a non-Gastown city running the dolt provider, these escalation targets will fail to resolve because the roles do not exist.
+- **Resolution:** Bring all required provider packs (`dolt`, `bd`) into the strict de-roling scope. Require that `dolt`'s escalation targets are rebound using symbolic bindings (e.g., `escalation_recipient = "core.maintenance_worker"` or config-mapped keys), and add a CI positive control proving that any hardcoded literal role route (`mayor/` or `deacon/`) in a required provider pack fails the build.
+
+### 5. [Major] Scanner Excludes `dog` and Lacks Expiry Failures
+- **The Risk:** The scanner's denied token set (337-338) excludes `dog`.
+- **The Impact:** Go source files, shell scripts, and templates can still hardcode the literal string `"dog"` for routing, prompting, or logic without failing CI.
+- **Resolution:** Add `dog` to the scanned denied token set, allowing it *only* in the designated Core default pack configuration file and its associated tests. Additionally, add a CI enforcement check: any allowlist row whose `expiry` date is in the past must fail the build.
 
 ---
 
 ## Evaluation against Lane Anti-patterns
 
-| Anti-pattern / Risk | Mitigation in Attempt 1 Design | Status |
+| Anti-pattern / Risk | Mitigation in Attempt 4 Design | Status |
 | :--- | :--- | :--- |
-| **`gc.routed_to`, mail, nudge, warmup, or theme logic still hardcodes `dog` or Gastown roles** | **Vulnerable.** Tmux themes (`theme.go`) still hardcode `dog`/`mayor`/`deacon` status styles. Scaffolding/warmup default templates require strict de-roling audits. Required provider pack `dolt` uses hardcoded escalation targets. | **Fail (Tmux Themes & Dolt Escalation)** |
-| **Default binding behavior encodes a Go judgment call instead of pure transport** | **Excellent.** Core SDK operations (health, dispatch) are decoupled from agent configuration, treating roles as pure string variables. | **Pass** |
-| **Scanner coverage excludes scripts, overlays, docs, dashboard types, or generated fixtures** | **Vulnerable.** The current scanner design primarily targets Go source files. It must be explicitly broadened to cover scripts, templates, markdown, and JSON schemas. | **Fail-Closed Risk** |
+| **`gc.routed_to`, mail, nudge, warmup, or theme logic still hardcodes `dog` or Gastown roles** | **Vulnerable.** `dog` is not in the denied tokens list. Tmux themes still hardcode role styles. Dolt scripts still hardcode `mayor`/`deacon` routes. Prompt templates still hardcode role suffixes behind `binding_prefix`. | **Fail** |
+| **Default binding behavior encodes a Go judgment call instead of pure transport** | **Excellent.** Core SDK operations (health, dispatch) are decoupled from agent configuration. However, empty/unresolved binding behavior must be structurally fail-closed. | **Pass-with-Risks** |
+| **Scanner coverage excludes scripts, overlays, docs, dashboard types, or generated fixtures** | **Good.** The proposed manifest covers Go, TOML, shell, markdown, templates, OpenAPI, and tmux helpers. But must explicitly enforce suffix de-roling. | **Pass-with-Risks** |
 
 ---
 
@@ -116,18 +87,17 @@ The proposed `role-surface.generated.yaml` manifest is narrow and documented, bu
 
 Before the design can transition to implementation, the following changes must be incorporated into the proposed implementation plan:
 
-1. **Deprecate Role Theme Functions**: Remove `MayorTheme`, `DeaconTheme`, and `DogTheme` from `internal/runtime/tmux/theme.go`. Replace with an optional declarative `theme` field in `config.Agent` and a hash-based `AssignTheme(agentName)` fallback.
-2. **Rebind Required Provider Escalations**: Map all `mayor` and `deacon` mail/nudge targets inside required provider packs (`dolt`) to configurable symbolic recipients. Prove with a CI test that any hardcoded `mayor`/`deacon` target in a system pack fails the build.
-3. **Decouple Sling Branch Heuristics**: Move the `SlingFormulaUsesBaseBranch` and `SlingFormulaUsesTargetBranch` heuristics from hardcoded strings in `sling.go` into declarative TOML fields on the formula itself.
-4. **Broaden CI Scanner Scope**: Specify that the CI scanner must tokenize all workspace assets (Go, TOML, Bash, Markdown, TS, JSON) and fail-closed if unapproved role literals are found outside the `role-surface.generated.yaml` allowlist.
+1. **Suffix-Level Symbolic Bindings:** Explicitly require that all role-name suffixes in prompt templates and formula assets are replaced by symbolic bindings, deprecating the prefix-only `binding_prefix` mechanism in favor of fully symbolic config-driven bindings.
+2. **De-role Tmux Themes:** Deprecate `MayorTheme()`, `DeaconTheme()`, and `DogTheme()` in `internal/runtime/tmux/theme.go`. Drive status themes dynamically from config/pack keys or a consistent hash fallback (`AssignTheme(agentName)`).
+3. **Explicit Go Ownership & Empty Binding Contract:** Identify `internal/config` and `internal/dispatch/fanout.go` as the code boundaries for parsing and resolving bindings. Define the empty-binding contract to keep operations pure transport (the bead remains visible/diagnosable, and an event is emitted).
+4. **De-role Required Provider Packs (`dolt`):** Map all hardcoded `mayor`/`deacon` mail/nudge escalation routes inside `examples/dolt` to configurable symbolic recipients, and fail CI on any hardcoded literal role route in a required provider pack.
+5. **Add `dog` to Denied Set and Enforce Expiry:** Add `dog` to the denied token list (with narrow allowlists for Core defaults and tests). Enforce that any allowlist row with an expired `expiry` date fails the build in CI.
+6. **Sling Heuristics Cleanup:** Specify the exact replacement for hardcoded Gastown prefix heuristics in `internal/sling/sling.go`: formulas declare branch-variable use in TOML (`uses_base_branch`/`uses_target_branch`), and Sling reads these fields from the parsed formula object, removing all compile-time Gastown string matching.
 
 ---
 
 ## Questions
 
-1. **Where does `core.maintenance_worker` resolution live?**
-   - *Recommendation*: It must live in `internal/config` (for parsing and layered precedence) and resolve inside `internal/dispatch/fanout.go` to keep resolution pure transport rather than a Go judgment call.
-2. **Are required provider packs (`bd`, `dolt`) in scope for de-roling in this migration?**
-   - *Recommendation*: Yes. Because `dolt` is a required pack in the registry, its hardcoded role targets must be rebound through symbolic keys to prevent runtime failures in non-Gastown cities.
-3. **What is the exact fallback behavior if `core.maintenance_worker` is omitted from `city.toml`?**
-   - *Recommendation*: The dispatcher must fail-closed during pre-flight configuration validation rather than making an ad-hoc runtime judgment call.
+1. How does the plan reconcile the existing `binding_prefix` prefix-only system with the new symbolic binding system to avoid hardcoded suffixes in prompt templates?
+2. Are all required provider packs (`bd`, `dolt`) and shared Go utilities (like `internal/runtime/tmux/theme.go`) brought into the de-roling scope, and what is the exact configuration mechanism to map their escalation routes?
+3. Does the CI scanner enforce a strict build failure if any allowlist row has expired?

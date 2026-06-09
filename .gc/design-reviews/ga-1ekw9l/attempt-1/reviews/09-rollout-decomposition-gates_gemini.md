@@ -1,85 +1,109 @@
-# Iris Kowalski - DeepSeek V4 Flash (Gemini Run)
+# Iris Kowalski — Gemini (Rollout & Decomposition Gates Reviewer, Attempt 4, Independent DeepSeek V4 Flash Style)
 
 **Verdict:** block
 
-**Lane:** independently deployable slices, decomposition readiness, prerequisite honesty, exact gates, cross-repo sequencing and test coverage.
-
-Reviewed against the Iteration 2 / Attempt 2 draft of `plans/core-gastown-pack-migration/implementation-plan.md` and `plans/core-gastown-pack-migration/requirements.md` in the active repository workspace.
-
----
-
-## Executive Summary
-
-As Iris Kowalski, conducting the **Rollout Decomposition Gates (DeepSeek V4 Flash)** review, my verdict is **Verdict: block**.
-
-The Iteration 2 (Attempt 2) draft has made exceptional progress in structural compliance. It fully restructured the plan into the required Mayor schema sections, added the critical `## Data And State` segment, and purged the previous attempt-resolution ledgers and commentary. It also defines outstanding transactional safety mechanisms for the doctor (such as the `FixIntent` coordinator and CST-based TOML preservation).
-
-However, from the perspective of rollout slicing, test-suite integrity, and decomposition readiness, the design contains several critical blocker gaps that make it impossible to safely cut implementation beads. The most severe issues are a total lack of explicit sequencing for the runtime-state migration, unresolved architectural contradictions regarding active controller triggers and locking, and an active test-suite breakage vector from narrowing `GC_BOOTSTRAP=skip` without providing lightweight test fixtures. We must resolve these concerns before unblocking decomposition.
+> **Lane:** independently deployable slices, decomposition readiness, prerequisite honesty, exact gates, cross-repo sequencing, and test coverage.
+>
+> Reviewed against the Attempt 4 design document (`.gc/design-reviews/ga-1ekw9l/attempt-4/design-before.md`, 657 lines, `updated_at: 2026-06-09T07:28:00Z`) — §"Rollout And Recovery" (lines 561–647), §"Testing" (lines 487–560), §"Bootstrap Fixture Isolation" (lines 370–396), §"Doctor And Runtime-State Mutation Safety" (lines 286–327), and the parent `requirements.md` (`updated_at: 2026-06-09T08:58:00Z`).
+>
+> This independent review is produced using the DeepSeek V4 Flash persona. It focuses on cross-document consistency, latent edge cases, and assumptions that other reviewers may accept too quickly.
 
 ---
 
-## Top Strengths
+## 1. Executive Summary
 
-- **Strict Mayor Schema Compliance (§1–11, §344–392, §453–529)**: The document now perfectly matches the `gc.mayor.implementation-plan.v1` layout. Restructuring `## Data And State` and renaming sections directly resolves the Iteration 1 schema blocker.
-- **Purged Historical Commentary and Provenance Debt**: Moving the oversized, non-schema attempt resolution logs out of the implementation plan leaves a clean, highly readable, and focused engineering specification.
-- **Phenomenal Transactional Doctor Safety (§246–264)**: Transitioning from legacy direct check mutations to a single `FixIntent` coordinator with advisory lock-before-preflight, TOCTOU closure, and CST-based comment/formatting preservation represents stellar first-principles systems engineering.
-- **Rigorously Gated Transitional Loader Invariant (§180–186)**: Rejecting test-only loader bypasses for the no-Maintenance gate and requiring candidate branches to validate real production loading paths prevents silent regressions.
+As Iris Kowalski, the **Rollout & Decomposition Gates Reviewer**, I have performed a rigorous, first-principles independent review of the Attempt 4 implementation plan. My final determination is **Verdict: block**.
 
----
+This iteration (Attempt 4) represents a massive leap forward in addressing previous rollout and decomposition hazards. Specifically, splitting the previously batched rollout into granular, distinct slices (Slices 1a–1c and Slices 4a–4c, 5a–5b) and placing the runtime-state migration explicitly into the timeline (Slice 4c) provides a highly structured and logical rollout framework.
 
-## Critical Risks & Gaps (The Blockers)
+However, several critical bootstrapping paradoxes, deployment deadlocks, and cross-document inconsistencies remain unaddressed:
+1. **The `GC_BOOTSTRAP=skip` / Gate 1 Paradox:** Requiring Gate 1 fileset validation to run unconditionally under `GC_BOOTSTRAP=skip` breaks fast isolated unit tests, as no materialized Core pack exists in those isolated environments.
+2. **Slice 5a Rollout Deadlock:** Loading the public activation pin while local legacy sources are still present on disk will trigger the strict `zero-duplicate-active` gate, crashing every city load during this transition step and halting the upgrade.
+3. **Cross-Document Release Matrix Gap:** The Release Compatibility Matrix completely omits the "old binary + new activation pack" scenario explicitly mandated in AC15 of `requirements.md`.
+4. **The "Manual Guidance Only" Upgrade Dead-End:** Over-relying on manual guidance for legacy pack imports will break non-interactive CI/CD pipelines, locking them in degraded states.
 
-### 1. [Blocker] Complete Absence of Runtime-State Migration in Rollout Slices (§266–274 vs §453–503)
-- **The Gap**: While Proposed Implementation (§266–274) and Data And State (§377–381) describe the runtime-state migration (JSONL archives, spawn-storm ledgers, refs/remotes, etc.) in detail, **the Rollout And Recovery timeline (§453–503) completely fails to sequence or execute it.**
-- **The Impact**: Slices 1–7 do not mention where the runtime-state migration script/logic is introduced, nor when the active migration is triggered on existing cities. A decomposer cannot cut beads from this plan because it is undefined whether migration is a Slice 4 (coordinator introduction) or Slice 5 (activation pin & Maintenance removal) responsibility, or if it requires a dedicated intermediate slice. 
-
-### 2. [Blocker] Unresolved Concurrency and Trigger Contradictions in Migration Domain (§256–257 vs §268–269)
-- **The Gap**: The plan mandates that the mutation coordinator "refuses automatic fix with manual guidance" if "a controller for the same city is running" (§256–257). However, runtime-state migration is a startup-time concern. When a new-binary controller boots, it must migrate legacy old-path state before running.
-- **The Conflict**: If the controller triggers the coordinator at startup, then the controller is active, which violates the coordinator's own rule to refuse automatic fixes.
-- **The Decomposition Failure**: The locking and trigger domains are self-contradictory. The design must explicitly define a safe bypass for the controller's own startup-migration path under the shared advisory lock, or explicitly mandate that migration is strictly offline and doctor-only, with the controller refusing to run on legacy un-migrated paths.
-
-### 3. [Blocker] Narowed `GC_BOOTSTRAP=skip` Test-Suite Breakage (§318–322)
-- **The Gap**: The plan narrows `GC_BOOTSTRAP=skip` so that it may only skip empty bootstrap fixture materialization, explicitly prohibiting it from skipping `internal/systempacks` materialization, Core file-set integrity, retired-source classification, or typed participation validation (§318–322).
-- **The Conflict**: Fast unit tests in `main_test.go` and testscripts run in isolated, empty directories or fake environments lacking Core packs or global caches.
-- **The Risk**: Forcing every fast unit test to execute production validation and materialization gates will cause massive failures across hundreds of previously green tests, destroying the fast unit test baseline. The plan must specify lightweight, mapFS-backed, or pre-populated in-memory fixtures specifically for test isolation under narrowed skip semantics.
-
-### 4. [Major] Slogan-Level "Push-Cursor Reconciliation" (§267, §378)
-- **The Gap**: The plan names "push-cursor reconciliation" as a recorded field but never defines the actual rule or algorithm to make duplicate offsite pushes impossible when upgraded and downgraded binaries alternate. Suppressing diagnostics is not a sufficient safeguard against corrupting shared remote git refs.
-
-### 5. [Major] Spawn-Storm Ledger Split-Brain Throttling Bypass (§380–381)
-- **The Gap**: If the new binary ignores the legacy ledger count during version skew, neither old nor new binaries see the combined spawn-storm count. A genuine spawn storm driven by both binaries will stay under their respective individual thresholds, bypassing the throttling safety mechanism. The design must specify that the new binary's threshold evaluator read-unions the retained legacy ledger counts during the skew window.
-
-### 6. [Major] Overpromised "Deterministic Re-Upgrade Flow" (§271–273, §379–380)
-- **The Gap**: If both legacy append-style stores and the new Core-owned stores have post-marker writes, their histories have diverged. Merging them automatically is mathematically impossible without data loss. The design must restrict "deterministic re-upgrade" strictly to cases where the new Core-owned paths are untouched (pure rollback-then-re-upgrade), and enforce manual operator intervention if both sides have diverged.
+This block is constructive. Resolving these four critical issues will provide a flawless, production-ready rollout plan.
 
 ---
 
-## Missing Evidence
-
-- **Checked-in Asset Migration Ledger (AC6) and Behavior-Preservation Manifest (AC7)**: The plan states these are stored under `plans/core-gastown-pack-migration/artifacts/` during planning. However, no such directory or files exist in the active repository workspace.
-- **Proof of Fast Unit Test Preservation**: There is no proof-of-concept or schema showing how offline/fake-backend tests will remain green and fast without full Core materialization under the narrowed `GC_BOOTSTRAP` semantics.
-- **Source Grounding of Runtime-State Migration**: The plan fails to ground the migration in concrete script names (e.g., `jsonl-export.sh`, `spawn-storm-detect.sh`), Go files, specific JSON fields (`pending_archive_push`), or paths (`.gc/jsonl-archive`).
-
----
-
-## Required Changes
-
-1. **Explicitly Sequence Runtime-State Migration**: Clearly sequence the runtime-state migration within the rollout slices (e.g., as part of Slice 4, Slice 5, or an explicit Slice 4b), and define its exact gating and rollback invariants.
-2. **Reconcile Trigger and Locking Domains**: Define how the controller's startup migration bypasses the coordinator's "running controller" check under the shared advisory lock, or declare the migration strictly offline.
-3. **Provide Lightweight Test Fixtures for Systempacks**: Specify lightweight, mapFS-backed or pre-populated memory mocks for `internal/systempacks` specifically for unit test suites to preserve test isolation.
-4. **Define Push Reconciliation and Read-Union Throttling Rules**: Explicitly define the duplicate push prevention rule and the read-union algorithm for the spawn-storm ledger.
-5. **Limit Re-Upgrade and Clarify Copy-vs-Move**: Define migration as a non-destructive copy-then-mark protocol, and restrict automatic re-upgrade to untouched new paths, requiring manual operator reconciliation for diverged states.
-6. **Ground Implementation Details**: Restore concrete filenames, JSON fields, and paths to the Proposed Implementation section.
-
----
-
-## Lane-Specific Questions
+## 2. Detailed Responses to Lane-Specific Questions
 
 ### Q1: Can tasks be cut so each slice names concrete files, acceptance gates, cross-repo prerequisites, and a revert or one-way upgrade boundary before merge?
-**Answer**: No, not yet. Because the runtime-state migration is completely unsequenced in the rollout timeline (§453–503), and because the transition rules for `ensureBootstrapForDoctor` and `dolt-target.sh` are undefined or generalized out of the slices, a decomposer cannot cut safe beads from this plan. Slices 4 and 5 must be expanded to explicitly place these tasks and define their rollback boundaries.
+
+**Answer:** 
+Yes, the proposed slicing framework (Slices 1a–7) successfully establishes clear, sequential boundaries. Revert boundaries are explicitly named (e.g., Slices 2, 3, 4a, and 6), and one-way upgrade boundaries are identified (such as Slice 5b removing Maintenance). 
+
+However, the plan still lacks a **direct file-to-slice mapping** and does not explicitly bind each slice to its exact validation commands or required artifacts (see Critical Risks). Without this, a decomposer cannot safely generate independent, self-contained beads.
 
 ### Q2: Are open questions truly resolved, or are ownership audits, generated artifacts, and gascity-packs branch availability deferred as hidden blockers?
-**Answer**: They are deferred as hidden blockers. The requirements are in `status: questions`, and the required AC6 asset ledger and AC7 behavior manifest are absent in the planning directory. Saying "Open Questions: None" while these planning-phase artifacts do not exist violates prerequisite honesty. The plan must remain in `status: blocked` / `blocked:prerequisite` until the planning artifacts are checked-in or generated.
 
-### Q3: Does each intermediate commit pass the documented local gates and exercise production loaders rather than copied fixtures or direct `config.Load` shortcuts?
-**Answer**: As written, they would fail. Narrowing `GC_BOOTSTRAP=skip` without specifying lightweight mocks or mapFS fixtures for the required loader will break the fast unit baseline (`make test-fast-parallel`) across intermediate commits, violating the rollout's own test-green invariant.
+**Answer:** 
+They are partially resolved in design, but remain **physically absent** from the repository, creating a major rollout risk. While the plan declares `Open Questions: None` (line 649), it relies on the physical creation of multiple complex artifacts (e.g., `test/packcompat`, the Behavior Evidence manifest, the public pin ledger) during "decomposition" or as "external prerequisites" (lines 652-656).
+
+By deferring the creation of these generator scripts and schemas, the plan risks a scenario where the implementation proceeds without a validated, executable baseline. True "decomposition readiness" requires that the schema, generator, and test harness exist *before* the first implementation beads are executed.
+
+### Q3: Does each intermediate commit pass the documented local gates and exercise production loaders rather than copied fixtures or direct config.Load shortcuts?
+
+**Answer:** 
+The design successfully mandates that production paths and intermediate slices route exclusively through `LoadRuntimeCity` or `LoadRuntimeCityNoRefresh` (lines 205-211) and provides AST-based scanners to reject direct `config.Load` bypasses (lines 235-242).
+
+However, as highlighted in Critical Risk #1, this requirement creates an immediate deadlock for isolated unit tests running under `GC_BOOTSTRAP=skip`, as they will be unable to satisfy the mandatory pre-resolution fileset validation (Gate 1).
+
+---
+
+## 3. Critical Risks & Architectural Inconsistencies
+
+### 3.1. [Blocker] The `GC_BOOTSTRAP=skip` / Gate 1 Bootstrapping Paradox
+* **The Vulnerability:** Under §"Bootstrap Fixture Isolation" (lines 391–396), the plan specifies that `GC_BOOTSTRAP=skip` "must not skip `internal/systempacks` materialization, strict required Core file-set integrity...". However, the core purpose of `GC_BOOTSTRAP=skip` in unit and testscript tests is to execute in a lightweight, isolated environment *without* materializing or embedding a production Core fileset.
+* **The Impact:** If Gate 1 (Pre-Resolution fileset validation) is strictly mandatory and cannot be bypassed or mocked under `GC_BOOTSTRAP=skip`, then any test executed with this environment variable will immediately fail Gate 1 because the required Core fileset is physically absent from disk. This introduces a bootstrapping deadlock: we cannot run fast unit/testscript tests without materializing the production Core, which completely defeats the purpose of test isolation and the `GC_BOOTSTRAP=skip` escape hatch, breaking CI.
+* **Resolution:** Specify that in test mode under `GC_BOOTSTRAP=skip`, the file-set validator (Gate 1) must validate against the empty/minimal mock bootstrap fixture or accept a pre-computed test digest, rather than demanding a full production Core fileset.
+
+### 3.2. [Blocker] Slice 5a / Compatibility Window Rollout Deadlock (Duplicate Active Behaviors)
+* **The Vulnerability:** Slice 5a (lines 605–609) "consumes the public activation pin in a candidate branch and runs packcompat in no-Maintenance production-loader mode while local sources are still present."
+* **The Impact:** If local sources (the legacy `examples/gastown/packs/maintenance` etc.) are still present on disk, and we load the public activation pin (which contains the newly migrated Maintenance and Gastown assets), the strict `zero-duplicate-active` gate (lines 277-279) will detect the same behavior IDs from both the local disk paths and the imported public pack. This will cause an immediate loader crash on every single city load during this transition step. Slices 2–5a will be completely unrunnable, deadlocking the entire rollout.
+* **Resolution:** Specify that in Slice 5a, when running the `no-Maintenance` loader mode, the classifier in `internal/packsource` must actively ignore the local legacy Maintenance/Gastown directories even if they are present on disk, preventing them from being scanned and triggering duplicate behavior collisions.
+
+### 3.3. [Major] Cross-Document Inconsistency: Release Compatibility Matrix Omission
+* **The Vulnerability:** Under `requirements.md` (AC15, lines 89-91), it is explicitly stated: *"Old binary plus activation pin is unsupported and must fail closed with downgrade guidance."*
+* **The Impact:** The Release compatibility matrix in `implementation-plan.md` (lines 632-641) lists "new binary + old locked pack", "new binary + new activation pack", and "rollback from new to old", but completely omits the **"old binary + new activation pack"** (old binary + activation pin) scenario. This is a direct cross-document inconsistency that risks a developer omitting the required fail-closed implementation on the older binary.
+* **Resolution:** Add an explicit row to the Release compatibility matrix for `old binary + new activation pack` showing that it fails closed with explicit downgrade or re-upgrade guidance.
+
+### 3.4. [Major] The "Manual Guidance Only" Upgrade Dead-End
+* **The Vulnerability:** Under §"Doctor And Runtime-State Mutation Safety" (lines 292-294), the plan states: *"Existing doctor checks either return a structured intent through that API or are marked report-only with manual guidance."*
+* **The Impact:** If critical legacy configurations (such as retired Maintenance pack imports or legacy Gastown local imports) are marked "report-only with manual guidance" rather than being automated through the mutation coordinator, then running `gc doctor --fix --non-interactive` in automated deployment pipelines will fail to resolve the issue. The loader will remain in `read_only_degraded` or `blocked` mode, but the automated pipeline has no way to apply "manual guidance," leading to permanent automated-deployment failures.
+* **Resolution:** The plan must guarantee that all standard, non-custom legacy import shapes (including default Maintenance and Gastown paths) have fully automated, idempotent, and non-interactive `FixIntent` implementations, reserving "manual guidance" strictly for highly customized, unclassifiable user-fork configurations.
+
+### 3.5. [Major] Lack of Formal Gate-to-Slice Binding Tables
+* **The Vulnerability:** While §"Testing" lists various tests and §"Rollout and Recovery" lists slices, the plan fails to provide a structured table mapping each rollout slice to its exact merge-blocking proof commands, required artifacts, and validation tests.
+* **The Impact:** Decomposers creating beads for Slices 1a through 7 have no formal contract stating what exact verification checks must pass before a slice can be merged. This creates a high risk that intermediate slices (such as Slice 3 or 4a) will be merged with under-tested loader or doctor changes, causing regressions.
+* **Resolution:** Add a structured Rollout Gate Table under §"Rollout and Recovery" that binds every slice to its exact verification commands, required artifacts, and rollback scripts.
+
+---
+
+## 4. Evaluation against Lane Anti-patterns
+
+| Anti-pattern / Risk | Mitigation in Attempt 4 Design | Status |
+| :--- | :--- | :--- |
+| **Tasks batch pin changes, source deletion, doctor mutation, docs, and activation into one fragile landing** | **Resolved.** Slices 2, 4a, 4b, 4c, 5a, 5b, 6, and 7 cleanly separate these phases. | **Pass** |
+| **Status says decomposition-ready while required generators or public pack commits do not exist** | **Vulnerable.** The schemas, generators, and test harnesses do not physically exist in the workspace, yet the plan states "Open Questions: None". | **Fail-Closed Risk** |
+| **Fast unit tests are used as the only proof for loader, doctor, runtime-state, and cross-repo behavior changes** | **Resolved.** §Testing (lines 513–530) explicitly incorporates `packcompat`, `packlint`, and sharded process/integration tests. | **Pass** |
+
+---
+
+## 5. Required Plan Updates
+
+To achieve decomposition readiness, the implementation plan must be updated with the following:
+
+1. **Test-Specific Gate 1 Exception:** Clarify that under `GC_BOOTSTRAP=skip` in test environments, the fileset validator (Gate 1) runs against the mock/empty bootstrap fixture rather than the production Core fileset.
+2. **Slice 5a Local Source Ignorance:** Mandate that during Slice 5a's `no-Maintenance` loader verification, the classifier explicitly ignores local legacy directories to prevent duplicate-active behavior collisions.
+3. **Explicit Release Matrix Entry:** Add the `old binary + new activation pack` row to the Release compatibility matrix, confirming it fails closed with downgrade/re-upgrade guidance.
+4. **Automated Fix Guarantee:** Require that all standard legacy import and cache shapes must be automated via `FixIntent` rather than falling back to report-only manual guidance.
+5. **Structured Rollout Gate Table:** Embed a table mapping each slice (1a to 7) to its exact gate verification commands, required artifacts, and rollback steps.
+
+---
+
+## 6. Questions
+
+1. How can a test running with `GC_BOOTSTRAP=skip` pass Gate 1 fileset validation if the required Core fileset is not materialized or embedded?
+2. How does Slice 5a avoid the `zero-duplicate-active` gate crash when both the public activation pin and local legacy directories contain the migrated Maintenance/Gastown assets?
+3. What is the explicit fail-closed outcome and operator guidance when an older binary attempts to load a city pinned to the new activation-level public Gastown pack?
