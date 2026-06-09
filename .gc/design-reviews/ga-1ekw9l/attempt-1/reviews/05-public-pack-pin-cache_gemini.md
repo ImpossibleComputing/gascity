@@ -1,10 +1,10 @@
-# Lena Hoffmann — Public Pack Pin Cache Reviewer (Attempt 7, Independent DeepSeek V4 Flash Style)
+# Lena Hoffmann — Public Pack Pin Cache Reviewer (Attempt 8, Independent DeepSeek V4 Flash Style)
 
 **Verdict:** block
 
 > **Lane:** Public Gastown pin integrity, immutable content hash, `RepoCacheKey` identity, synthetic-alias retirement, offline and rollback behavior.
 >
-> Reviewed against the Attempt 7 design document (`.gc/design-reviews/ga-1ekw9l/attempt-7/design-before.md`, 835 lines, `updated_at: 2026-06-09T13:20:59Z`) — specifically §"Pack Registry, Cache, And Retired Source Authority" (lines 313–357), §"Testing" (lines 640–686), and §"Rollout And Recovery" (lines 687–825).
+> Reviewed against the Attempt 8 design document (`.gc/design-reviews/ga-1ekw9l/attempt-8/design-before.md`, 835 lines, `updated_at: 2026-06-09T13:20:59Z`) — specifically §"Pack Registry, Cache, And Retired Source Authority" (lines 313–357), §"Testing" (lines 603–686), and §"Rollout And Recovery" (lines 687–825).
 >
 > This independent review is produced using the DeepSeek V4 Flash persona, focusing specifically on first-principles trust boundaries, cross-document state consistency, and unstated runtime assumptions.
 
@@ -18,43 +18,48 @@ Conforms to `gc.mayor.implementation-plan.v1`. Front matter carries the required
 
 ## Top Strengths of the Design
 
-- **End-to-End Cryptographically Bound Keys (Lines 329–331):** Upgrading the ordinary cache key from a commit-only string to a subpath-aware, fully normalized `RepoCacheKey` (containing normalized source, exact commit SHA, and subpath) shuts down directory conflation vectors across repositories.
-- **Strict Pin-Coherence Gate (Lines 341–344):** Requiring a single-command preflight checking `PublicGastownPackVersion`, `public-gastown-pins.yaml` ledger entries, fresh-init output, lockfile provenance, cache proof, pack digest, and behavior-manifest digest in one go before the pin is consumed ensures cross-repository consistency and prevents drift across the Gas City ↔ `gascity-packs` seam.
-- **Fail-Closed Offline Security (Lines 668–670):** The inclusion of comprehensive offline cache test specifications—explicitly covering exact-pin hits, digest mismatches, missing subpaths, stale synthetic alias rejections, promotions, and fail-closed miss behaviors under network-disabled execution—prevents regressions from quietly slipping through in CI.
+- **Immutable Pin Security (Lines 329–331):** Anchoring `PublicGastownPackVersion` to an immutable `sha:` constant (line 331) and declaring branch/tag refs as non-authoritative fetchability metadata (line 331) successfully eliminates the risk of silent behavior drift on remote changes.
+- **Fail-Closed Offline Assertions (Lines 668–670):** Specifying network-disabled tests for exact cache hits, digest mismatches, missing subpaths, and stale alias rejections guarantees that the cache boundaries remain secure in restricted or offline execution environments.
+- **Zero-Duplicate-Active Loader Gate (Lines 347–351):** Comparing active bundled and public packs prior to execution and failing closed on behavior-row overlap ensures that retired or custom/forked source conflicts cannot execute.
 
 ---
 
 ## Critical Risks & Consensus Blockers (DeepSeek V4 Flash Style)
 
-### 1. [Blocker] Concurrent Cache-Write Corruption and Race Conditions (No Locking on Promotions)
-- **The Risk:** Lines 330–331 specify that "Promotion and read hits verify source, commit, subpath, pack digest, and manifest digest" and that remote packs are written during checkout. However, there is no specification for concurrent write-synchronization or file-system locking during directory promotions.
-- **The Impact:** In multi-agent, concurrent, or parallel testing environments (e.g., `make test-fast-parallel` or parallel tick runs), multiple processes may attempt to write to or promote cache bytes for the exact same `RepoCacheKey` simultaneously. This will lead to file-system write collisions, partial directory checkouts, and corrupt cache states that will subsequently trigger read-time digest verification failures and brick the runner.
-- **Required Resolution:** Explicitly mandate that all cache writes, checkouts, and promotions are safety-atomic:
-  - Cache writes must be staged in a temporary sibling directory (e.g., `.gc/cache/tmp/write-<uuid>`).
-  - Once checkout/promotion is fully complete and verified, the directory must be promoted to the final target `RepoCacheKey` directory using a single, atomic POSIX rename (`os.Rename`).
-  - If the target directory already exists and is valid (proven by digest check), the writer must abort gracefully to avoid duplicate write overhead.
+### 1. [Blocker] Timing Contradiction on Subpath Cache Key Enforcement (Slice 2 vs Slice 6)
+- **The Risk:** Lines 336–337 state that the "subpath-aware lock/cache proof lands before the first Gas City slice that updates `internal/config/PublicGastownPackVersion`" (which is consumed at Slice 2, line 739). However, Slice 6 (lines 781–782) still reads "enforce subpath-aware ordinary cache keys", and the Slice 6 gate row (line 807) lists "subpath cache proof" as a must-pass gate.
+- **The Impact:** If subpath enforcement is deferred to Slice 6, then during Slices 2-5, `gascity-packs` cache entries for the compatibility pin (which carries subpath `//gastown`, line 742) can conflate with other subpaths from the same repository and commit. Today, `RepoCacheKey(source, commit)` lacks subpath awareness, so they would resolve to the same physical cache directory—violating the logical identity this lane is designed to protect.
+- **Required Resolution:** Resolve this contradiction by enforcing subpath-aware ordinary cache keys and the expanded `LockedPack` schema in Slice 2 (first pin consumption). Re-word Slice 6 (line 781) and its gate row (line 807) to "retire aliases and re-verify subpath keys" rather than "enforce."
 
-### 2. [Blocker] Read-Hit Digest Verification Performance Bottleneck
+### 2. [Blocker] Concurrent Cache-Write Corruption and Race Conditions (AC16 Gap)
+- **The Risk:** Lines 330–331 specify that "Promotion and read hits verify source, commit, subpath, pack digest, and manifest digest" and that remote packs are written during checkout. However, there is no physical file-system write locking or atomic promotion mechanism specified in the design body.
+- **The Impact:** In parallel testing (e.g., `make test-fast-parallel`) or concurrent CLI execution environments, multiple processes may simultaneously attempt to write to or promote cache bytes for the same `RepoCacheKey`. Without synchronization, this will result in write collisions, truncated directory checkouts, and corrupt cache states that fail read-time digest verification.
+- **Required Resolution:** Explicitly specify the atomic concurrent promotion protocol in the Data And State section:
+  - Cache checkouts and promotions must stage into process-unique or randomized temporary directories (e.g., `.gc/cache/tmp/promote-<uuid>`).
+  - Upon successful checkout and digest verification, publish to the final `RepoCacheKey` path using a single, atomic POSIX rename (`os.Rename`).
+  - If a concurrently running process has already published a valid directory at that target path, gracefully abort and treat it as a success.
+
+### 3. [Blocker] Read-Hit Digest Verification Performance Bottleneck
 - **The Risk:** Lines 330–331 state that "Promotion and read hits verify source, commit, subpath, pack digest, and manifest digest."
 - **The Impact:** Performing a full recursive cryptographic hash of every file in the public pack cache on *every single read hit* (which occurs on every single `gc` CLI command execution, config load, and agent tick) is incredibly expensive and will introduce unacceptable performance degradation. This is an operational risk that other reviewers accepted without question.
 - **Required Resolution:** Specify a two-tiered validation model:
   - **First-Write Validation:** On first cache-write, promotion, or install, calculate and verify the complete recursive content digest and write an immutable, tamper-evident marker file (e.g., `.gc_cache_validated`) containing the computed manifest digest.
   - **Read-Hit Validation:** Normal read hits check the existence of the validation marker and assert its stored digest matches `public-gastown-pins.yaml`. Optionally, perform a lightweight check (e.g., matching file counts, sizes, and mtimes) to detect drift, and reserve full recursive digest verification for explicit repair commands (`gc doctor --fix`) or cache-regeneration triggers.
 
-### 3. [Blocker] Slice 5b Rollback Can Trigger Fatal Duplicate-Definition Conflict (Un-folding Defect)
-- **The Risk:** Slice 5b moves Core-owned Maintenance assets into Core, removes Maintenance from required packs (lines 772–775), and defines its rollback as "restore the compatibility pin and re-enable Maintenance" (lines 775–776).
-- **The Impact:** If a rollback occurs, re-enabling Maintenance while the newly folded Maintenance assets still reside in Core will result in duplicate definitions of behaviors, prompts, and templates. This will trigger a fatal loader conflict under the zero-duplicate-active gate (lines 347–351).
-- **Required Resolution:** The Slice 5b rollback must explicitly un-fold the moved Core assets or declare the fold one-way with manual recovery instructions, ensuring that duplicate behavior definitions cannot co-exist in Core and Maintenance during downgrade.
+### 4. [Blocker] Omission of Authoritative Gas City Pin Ledger in Coherence Gate (AC15 Gap)
+- **The Risk:** The pin-coherence gate (lines 341–344) compares `PublicGastownPackVersion` with `public-gastown-pins.yaml` (external), fresh-init output, lockfile provenance, and cache proof.
+- **The Impact:** It completely omits the authoritative internal ledger `support/public-gastown-pin-ledger.yaml` (which the plan lists as a support artifact on lines 561 and 720). If the external pins ledger drifts from Gas City's internal ledger, or if the `packcompat` witness uses an independent commit, the gate will fail to detect the divergence across the repo boundary.
+- **Required Resolution:** Expand the pin-coherence gate definition (line 341) to include and compare `support/public-gastown-pin-ledger.yaml`, the external `public-gastown-pins.yaml`, the `packcompat` transcript's pin, and the version-skew matrix, and explicitly state that the internal ledger is the authoritative source for the Go constant.
 
-### 4. [Major] Deferred Subpath Keying Timing Mismatch
-- **The Risk:** Subpath-aware `RepoCacheKey` enforcement is deferred to Slice 6 (lines 781–782), yet Slice 2 already consumes the public compatibility pin with subpath `//gastown` (lines 739–742).
-- **The Impact:** During the window of Slices 2-5, cache keys lacking subpath normalization can conflate two distinct subpaths from the same repository and commit, violating cache correctness.
-- **Required Resolution:** Move subpath-aware `RepoCacheKey` enforcement into Slice 2, when the first subpathed public pin is consumed. Let Slice 6 only clean dead aliases.
+### 5. [Major] Digest Determinism and Canonicalization Remain Undefined
+- **The Risk:** The design references "canonical pack-tree `sha256`" and "behavior-manifest `sha256`" (line 338) but does not define the canonicalization rules (sorting order, permission treatment, excluded volatile fields).
+- **The Impact:** `public-gastown-pins.yaml` contains a `generated-at` timestamp (line 132). If the behavior-preservation manifest or pack-tree also embeds a timestamp or volatile field, regeneration will produce a different hash, breaking offline comparison and triggering false positives.
+- **Required Resolution:** Define the deterministic canonicalization rules (stable file list ordering, permission bit treatment, and exclusion of generated-at and other volatile fields) for both the pack-tree and behavior-manifest digests.
 
-### 5. [Major] No Build-Time or CI Gate Enforces Pin-Consistency Across the Cross-Repo Seam
-- **The Risk:** Each surface is bound internally—manifest rows carry "immutable public Gastown commit" and "consuming `PublicGastownPackVersion` value" as separate fields; `RepoCacheKey` carries commit+subpath; pins.yaml names compatibility/activation commits—but nothing asserts `PublicGastownPackVersion` == `public-gastown-pins.yaml` entry == packcompat-consumed pin == resolved `RepoCacheKey` commit, all on one subpath.
-- **The Impact:** The seam between Gas City's Go constant (`internal/config/public_packs.go`) and the public ledger in `gascity-packs` remains ungated, risking silent drift across repositories.
-- **Required Resolution:** Add a dedicated CI gate (e.g., `TestPublicGastownPinCoherence`) that cross-checks and asserts `PublicGastownPackVersion` == `public-gastown-pins.yaml` entry == packcompat-consumed pin == resolved `RepoCacheKey` commit at build-time. CI must fail if there is divergence across the Gas City ↔ `gascity-packs` seam.
+### 6. [Major] Slice 5b Rollback Duplicate-Definition Conflict (Un-folding Defect)
+- **The Risk:** Slice 5b (lines 772–775) folds Maintenance assets into Core, and defines its rollback as "restore the compatibility pin and re-enable Maintenance" (lines 775–776).
+- **The Impact:** Rolling back a city that has folded Maintenance assets into Core by re-enabling Maintenance will result in duplicate active definitions of behaviors and templates. This will trigger a fatal loader conflict under the zero-duplicate-active gate (lines 347–351), bricking the system.
+- **Required Resolution:** Specify that Slice 5b rollback must either explicitly un-fold the moved Core assets back to Maintenance or declare the fold one-way with documented manual recovery instructions.
 
 ---
 
@@ -63,21 +68,21 @@ Conforms to `gc.mayor.implementation-plan.v1`. Front matter carries the required
 ### Q1: Are PublicGastownPackVersion, pins.yaml, registry source, packcompat, and direct cache proof all bound to the same immutable commit and subpath?
 
 **Answer:**
-Yes, they are bound to the single source of truth in `public-gastown-pins.yaml` and the `PublicGastownPackVersion` Go constant. However, to guarantee absolute alignment, the "durable public ref" (line 331) must be strictly non-authoritative and exist solely to ensure the commit SHA remains fetchable (preventing Git garbage collection). After fetch, the system must assert that the resolved SHA equals `PublicGastownPackVersion`. The pin-coherence gate (lines 341-344) must run in CI and block commits if any surface diverges.
+Yes. Under lines 329–331 and 336–344, they are logically bound to the single source of truth defined in the pins ledger and the `PublicGastownPackVersion` constant. However, to guarantee cross-repo consistency, the "durable public ref" (line 331) must be strictly non-authoritative and exist solely to prevent remote garbage collection. The pin-coherence gate (line 341) must cross-check all these surfaces in CI to prevent drift across the repo seam.
 
 ---
 
 ### Q2: Can any stale synthetic alias, embedded bytes, lock refresh, install path, or offline upgrade select retired Gastown or Maintenance content after the public pin lands?
 
 **Answer:**
-No, because the design successfully isolates active materialization from retired diagnostics. Under lines 328–334, synthetic Gastown or Maintenance cache entries are completely ignored by active discovery, and `All()` is correctly pruned to Core/`bd`/`dolt` (lines 316–318). New lock generation and runtime resolution will ignore legacy embedded or synthetic entries, preventing retired behavior from leaking into active runs.
+No. Under lines 328–334, synthetic Gastown/Maintenance cache entries are completely ignored, and the embedded set returned by `All()` is correctly pruned to Core, `bd`, and `dolt` (lines 316–318). New lock generation and runtime resolution paths will refuse to select retired or legacy embedded entries, successfully isolating them.
 
 ---
 
 ### Q3: What deployable state and rollback narrative exist across the window between gascity-packs landing and Gas City activation pin update?
 
 **Answer:**
-The transition uses compatibility-pin adoption in Slices 2-4 (lines 739–755) and activation-pin adoption in Slice 5a (lines 766–771). However, the downgrade path from an activation-pinned city to an older binary must require rolling the lock back to the compatibility commit, which must be clearly documented in the release matrix (lines 810–819). Rollback from Slice 5b (Maintenance fold) is highly risky due to duplicate definition conflicts, which is why a clean un-folding mechanism must be specified.
+The transition relies on compatibility-pin adoption in Slices 2-4 (lines 739–755) and activation-pin adoption in Slice 5a (lines 766–771). Downgrading an activation-pinned city to an older binary requires rolling back the lockfile to the compatibility commit, which is handled in the release matrix (lines 810–818). However, rollback from Slice 5b (Maintenance fold) remains a critical gap due to the duplicate-definition risk, which requires either un-folding or a one-way rollback policy.
 
 ---
 
@@ -85,13 +90,13 @@ The transition uses compatibility-pin adoption in Slices 2-4 (lines 739–755) a
 
 | Anti-pattern / Red Flag | Mitigation in Current Design | Status |
 | :--- | :--- | :--- |
-| **Mutable branch/tag drift** | **Excellent.** Pins are bound to immutable commit SHAs in `PublicGastownPackVersion` and the pins ledger (lines 329–331, 337–338). | **Pass** |
-| **Cache promotion laundering** | **Excellent.** Handled. Both promotion and read hits must verify the full source, commit, subpath, and digests (lines 330–331). | **Pass** |
-| **Offline silent fallback** | **Excellent.** Handled at the test level (lines 668–670), but implementation logic must be made explicit. | **Pass** |
-| **Concurrent Cache Corruption** | **Missing.** No directory write locking or atomic sibling temp renames are specified. | **Fail (Blocker)** |
+| **Mutable branch/tag drift** | **Excellent.** Pinned to immutable commit SHAs in `PublicGastownPackVersion` and the ledger (lines 331, 337). | **Pass** |
+| **Cache promotion laundering** | **Excellent.** Both promotion and read hits must verify source, commit, subpath, and digests (lines 330–331). | **Pass** |
+| **Offline silent fallback** | **Excellent.** Handled by offline test coverage (lines 668–670) and zero-duplicate gates. | **Pass** |
+| **Concurrent Cache Corruption** | **Missing.** No directory locking, staging paths, or atomic rename specified. | **Fail (Blocker)** |
 
 ---
 
 ## Final Verdict: Block
 
-The Attempt 7 public pack pin cache design is highly structured, and the inclusion of explicit subpath-aware keys, pin-coherence gates, and comprehensive offline test matrices are monumental improvements. However, because the design introduces severe **concurrent cache-write corruption risks**, a fatal **read-hit verification performance bottleneck**, a critical **rollback duplicate-definition conflict** in Slice 5b, and a **subpath keying mismatch** between Slice 2 and Slice 6, I must **Block** the plan. Requiring atomic temporary staging for promotions, introducing a two-tiered validation model, specifying un-folding rules for Slice 5b rollbacks, and shifting subpath keying to Slice 2 are necessary to make this caching architecture robust, performant, and secure.
+The Attempt 8 public pack pin cache design is extremely structured and shows great progress, particularly on immutable SHA pinning and offline test specifications. However, because it contains an **internal timing contradiction** regarding subpath enforcement, lacks **concurrent write locking and staging on promotions**, presents a **fatal read-hit verification performance bottleneck**, omits the **internal pin ledger** in the pin-coherence gate, and presents a **fatal duplicate-definition rollback conflict** in Slice 5b, I must **Block** the plan. Enforcing subpaths at Slice 2, specifying atomic concurrent promotion staging, introducing a two-tiered read-hit validation model, expanding the coherence gate inputs, and clarifying the fold-rollback path are necessary to make this caching architecture robust, performant, and secure.
