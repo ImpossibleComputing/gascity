@@ -1,0 +1,16 @@
+issue_prefix: ga
+issue-prefix: ga
+backup.enabled: false
+dolt.auto-start: false
+export.auto: false
+no-push: true
+dolt.auto-commit: "batch"
+dolt.auto-push: false
+dolt.sync-cli-remotes: false
+types.custom: molecule,convoy,message,event,gate,merge-request,agent,role,rig,session,spec,convergence,step
+dolt.host: 127.0.0.1
+dolt.port: 3307
+gc.endpoint_origin: explicit
+gc.endpoint_status: unverified
+dolt:
+  disable-event-flush: true

@@ -132,6 +132,7 @@ func releaseOrphanedPoolAssignments(
 			legacyOpenIdentifiers[id] = struct{}{}
 		}
 	}
+	liveSessionValidator := newLiveOpenSessionAssignmentValidator(store)
 
 	var released []releasedPoolAssignment
 	for i, wb := range assignedWorkBeads {
@@ -165,7 +166,7 @@ func releaseOrphanedPoolAssignments(
 			if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
-			if liveOpenSessionAssignmentExists(store, assignee) {
+			if liveSessionValidator.Exists(assignee) {
 				continue
 			}
 		}
@@ -196,6 +197,75 @@ func releaseOrphanedPoolAssignments(
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
 	return released
+}
+
+type liveOpenSessionAssignmentValidator struct {
+	store      beads.Store
+	indexed    bool
+	indexErr   error
+	identities map[string]struct{}
+}
+
+func newLiveOpenSessionAssignmentValidator(store beads.Store) *liveOpenSessionAssignmentValidator {
+	return &liveOpenSessionAssignmentValidator{store: store}
+}
+
+func (v *liveOpenSessionAssignmentValidator) Exists(assignee string) bool {
+	assignee = strings.TrimSpace(assignee)
+	if v == nil || v.store == nil || assignee == "" {
+		return false
+	}
+	if liveSessionBeadExistsByIdentity(v.store, assignee) {
+		return true
+	}
+	return v.indexedSessionAssignmentExists(assignee)
+}
+
+func (v *liveOpenSessionAssignmentValidator) indexedSessionAssignmentExists(assignee string) bool {
+	v.ensureIndex()
+	if v.indexErr != nil {
+		return true
+	}
+	_, ok := v.identities[assignee]
+	return ok
+}
+
+func (v *liveOpenSessionAssignmentValidator) ensureIndex() {
+	if v.indexed {
+		return
+	}
+	v.indexed = true
+	v.identities = make(map[string]struct{})
+	// NOTE: this call site intentionally keeps a label-only query — not
+	// the Type+Label union from session.ListAllSessionBeads. The
+	// orphan-release tests (TestReleaseOrphanedPoolAssignments_*) set up
+	// city session beads with Type=session but no gc:session label and
+	// assert that rig work pointing at a session_name only reachable via
+	// the typed bead IS released. Switching this query to the union
+	// would surface those typed beads as "live" and cause the work to
+	// be skipped instead of released, regressing
+	// ReopensRigStoreMissingPoolAssignee and
+	// ReleasesRigWorkAssignedToUnreachableOpenSession. The label-loss
+	// bug this PR is fixing manifests in the snapshot/list/reconciler
+	// paths; orphan release continues to treat the label as the
+	// authoritative liveness signal.
+	sessions, err := v.store.List(beads.ListQuery{
+		Label: sessionBeadLabel,
+		Live:  true,
+	})
+	if err != nil {
+		v.indexErr = err
+		log.Printf("releaseOrphanedPoolAssignments: live session validation failed: %v", err)
+		return
+	}
+	for _, sb := range sessions {
+		if sb.Status == "closed" || !isSessionBead(sb) {
+			continue
+		}
+		for _, id := range sessionBeadAssigneeIdentities(sb) {
+			v.identities[id] = struct{}{}
+		}
+	}
 }
 
 func detachedProbeAllowsOrphanRelease(wb beads.Bead) (bool, bool) {
@@ -354,49 +424,8 @@ func releaseOrphanedPoolAssignment(store beads.Store, id string, clearDetached b
 	return true
 }
 
-func liveOpenSessionAssignmentExists(store beads.Store, assignee string) bool {
-	assignee = strings.TrimSpace(assignee)
-	if store == nil || assignee == "" {
-		return false
-	}
-	if liveSessionBeadExistsByIdentity(store, assignee) {
-		return true
-	}
-	// NOTE: this call site intentionally keeps a label-only query — not
-	// the Type+Label union from session.ListAllSessionBeads. The
-	// orphan-release tests (TestReleaseOrphanedPoolAssignments_*) set up
-	// city session beads with Type=session but no gc:session label and
-	// assert that rig work pointing at a session_name only reachable via
-	// the typed bead IS released. Switching this query to the union
-	// would surface those typed beads as "live" and cause the work to
-	// be skipped instead of released, regressing
-	// ReopensRigStoreMissingPoolAssignee and
-	// ReleasesRigWorkAssignedToUnreachableOpenSession. The label-loss
-	// bug this PR is fixing manifests in the snapshot/list/reconciler
-	// paths; orphan release continues to treat the label as the
-	// authoritative liveness signal.
-	sessions, err := store.List(beads.ListQuery{
-		Label: sessionBeadLabel,
-		Live:  true,
-	})
-	if err != nil {
-		log.Printf("releaseOrphanedPoolAssignments: live session validation failed for assignee %q: %v", assignee, err)
-		return true
-	}
-	for _, sb := range sessions {
-		if sb.Status == "closed" || !isSessionBead(sb) {
-			continue
-		}
-		for _, id := range sessionBeadAssigneeIdentities(sb) {
-			if assignee == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func liveSessionBeadExistsByIdentity(store beads.Store, assignee string) bool {
+	store = livePointLookupStore(store)
 	for _, id := range directSessionBeadIDCandidates(assignee) {
 		sb, err := store.Get(id)
 		if err != nil {
@@ -431,21 +460,27 @@ func liveWorkAssignmentStillReleasable(store beads.Store, id, assignee string) b
 	if store == nil || id == "" {
 		return false
 	}
-	work, err := store.List(beads.ListQuery{
-		Status: "in_progress",
-		Live:   true,
-	})
+	work, err := livePointLookupStore(store).Get(id)
 	if err != nil {
 		log.Printf("releaseOrphanedPoolAssignments: live work validation failed for %q: %v", id, err)
 		return false
 	}
-	for _, wb := range work {
-		if wb.ID != id {
-			continue
-		}
-		return strings.TrimSpace(wb.Assignee) == strings.TrimSpace(assignee)
+	if work.Status != "in_progress" {
+		return false
 	}
-	return false
+	return strings.TrimSpace(work.Assignee) == strings.TrimSpace(assignee)
+}
+
+func livePointLookupStore(store beads.Store) beads.Store {
+	type backingStore interface {
+		Backing() beads.Store
+	}
+	if wrapped, ok := store.(backingStore); ok {
+		if backing := wrapped.Backing(); backing != nil {
+			return backing
+		}
+	}
+	return store
 }
 
 func assigneePreservesNamedSessionRoute(cfg *config.City, cityPath, template, assignee, workStoreRef string, storeRefAware bool) bool {

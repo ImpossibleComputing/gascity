@@ -13,6 +13,44 @@ import (
 
 const testDetachedPoolProbeSpec = "tmux:gascity:soak-loop"
 
+type poolReleaseCountingStore struct {
+	beads.Store
+	workStatusListCalls   int
+	sessionLabelListCalls int
+	getCalls              int
+}
+
+func (s *poolReleaseCountingStore) Get(id string) (beads.Bead, error) {
+	s.getCalls++
+	return s.Store.Get(id)
+}
+
+func (s *poolReleaseCountingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if query.Live && query.Status == "in_progress" {
+		s.workStatusListCalls++
+	}
+	if query.Live && query.Label == sessionBeadLabel {
+		s.sessionLabelListCalls++
+	}
+	return s.Store.List(query)
+}
+
+type noListPointLookupStore struct {
+	beads.Store
+	getCalls  int
+	listCalls int
+}
+
+func (s *noListPointLookupStore) Get(id string) (beads.Bead, error) {
+	s.getCalls++
+	return s.Store.Get(id)
+}
+
+func (s *noListPointLookupStore) List(_ beads.ListQuery) ([]beads.Bead, error) {
+	s.listCalls++
+	return nil, errors.New("unexpected broad list")
+}
+
 func TestSessionBeadAssigneeIdentities(t *testing.T) {
 	tests := []struct {
 		name string
@@ -970,6 +1008,69 @@ func TestReleaseOrphanedPoolAssignments_ReopensUnassignedInProgressPoolWork(t *t
 	}
 	if got.Assignee != "" {
 		t.Fatalf("assignee = %q, want empty", got.Assignee)
+	}
+}
+
+func TestLiveWorkAssignmentStillReleasableUsesPointLookup(t *testing.T) {
+	base := beads.NewMemStore()
+	store := &noListPointLookupStore{Store: base}
+	work, err := base.Create(beads.Bead{
+		Title:    "claimed pool work",
+		Assignee: "worker-old",
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+	if err := base.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("Set work status: %v", err)
+	}
+
+	if !liveWorkAssignmentStillReleasable(store, work.ID, "worker-old") {
+		t.Fatalf("liveWorkAssignmentStillReleasable returned false, want true")
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("List calls = %d, want 0 point lookup", store.listCalls)
+	}
+	if store.getCalls != 1 {
+		t.Fatalf("Get calls = %d, want 1", store.getCalls)
+	}
+}
+
+func TestReleaseOrphanedPoolAssignmentsAvoidsPerWorkBroadLiveScans(t *testing.T) {
+	base := beads.NewMemStore()
+	store := &poolReleaseCountingStore{Store: base}
+	cfg := &config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(5)}}}
+	var work []beads.Bead
+	var stores []beads.Store
+	for _, assignee := range []string{"worker-old-1", "worker-old-2", "worker-old-3"} {
+		created, err := base.Create(beads.Bead{
+			Title:    "claimed pool work",
+			Assignee: assignee,
+			Metadata: map[string]string{"gc.routed_to": "worker"},
+		})
+		if err != nil {
+			t.Fatalf("Create work bead: %v", err)
+		}
+		if err := base.Update(created.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+			t.Fatalf("Set work status: %v", err)
+		}
+		current, err := base.Get(created.ID)
+		if err != nil {
+			t.Fatalf("Reload work bead: %v", err)
+		}
+		work = append(work, current)
+		stores = append(stores, store)
+	}
+
+	released := releaseOrphanedPoolAssignments(store, cfg, "", nil, work, stores, nil, nil)
+	if len(released) != len(work) {
+		t.Fatalf("released %d work beads, want %d", len(released), len(work))
+	}
+	if store.workStatusListCalls != 0 {
+		t.Fatalf("live in-progress List calls = %d, want 0 point lookups", store.workStatusListCalls)
+	}
+	if store.sessionLabelListCalls != 1 {
+		t.Fatalf("live session label List calls = %d, want 1 per release pass", store.sessionLabelListCalls)
 	}
 }
 
