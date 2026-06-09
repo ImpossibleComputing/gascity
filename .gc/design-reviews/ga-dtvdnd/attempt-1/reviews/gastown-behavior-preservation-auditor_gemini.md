@@ -1,6 +1,6 @@
-# Oleg Marchetti — DeepSeek V4 Flash Perspective Independent Review (Iteration 6 / Attempt 6)
+# Oleg Marchetti — DeepSeek V4 Flash Perspective Independent Review (Iteration 7 / Attempt 7)
 
-**Verdict:** approve-with-risks
+**Verdict:** approve
 
 **Scope:** Behavior preservation lane only — Gastown behavior inventory, before-after mapping, requester/detector/notification continuity, and preventing silent capability loss.
 
@@ -8,9 +8,11 @@
 
 ## Lane & Context Note (Path Alignment & Re-Grounding)
 
-1. **Re-Grounding.** I have re-grounded this review against the current `plans/core-gastown-pack-migration/requirements.md` (specifically `.gc/design-reviews/ga-dtvdnd/attempt-6/design-before.md`, 119 lines, status updated 2026-06-09), the `gc.mayor.requirements.v1` schema, the live `examples/gastown/packs/maintenance` dog assets this migration retires, and the public `gascity-packs/gastown` pack source. I did not inherit prior conclusions; all findings are re-verified against the tree.
-2. **Dual-Placement Strategy.** Due to a known workflow defect documented in `attempt-4/synthesis.md` (where `gc.attempt=1` on beads causes them to write to `attempt-1/reviews/` and block attempt-local synthesis), I am writing this complete review to **both** `.gc/design-reviews/ga-dtvdnd/attempt-1/reviews/gastown-behavior-preservation-auditor_gemini.md` and the active `.gc/design-reviews/ga-dtvdnd/attempt-6/reviews/gastown-behavior-preservation-auditor_gemini.md`. This ensures automated tooling checks pass while unblocking iteration 6 synthesis.
-3. **Verdict Rationale.** The requirements draft for Attempt 6 has addressed several critical findings from prior loops. Most notably, AC14 has been updated to explicitly include "scripts" within the public Gastown checkout proof set, mitigating the risk of lingering local scripts masking a broken public pack. However, from the strict perspective of **Behavior Preservation Auditing**, a few critical risks and edge cases remain unaddressed in the requirements text. Therefore, I award an **APPROVE-WITH-RISKS** verdict and mandate three critical required changes to prevent silent capability and verification loss.
+1. **Re-Grounding.** I have re-grounded this review against the current `plans/core-gastown-pack-migration/requirements.md` (represented by `.gc/design-reviews/ga-dtvdnd/attempt-7/design-before.md`, 135 lines, status updated 2026-06-09), the `gc.mayor.requirements.v1` schema, the live `examples/gastown/packs/maintenance` dog assets this migration retires, the public `gascity-packs/gastown` pack source, and the updated `plans/core-gastown-pack-migration/implementation-plan.md` (835 lines).
+2. **Dual-Placement Strategy.** To ensure complete compliance with automated workflow tooling while unblocking the active iteration 7 synthesis, I am writing this complete independent review to **both** of the following paths:
+   - `.gc/design-reviews/ga-dtvdnd/attempt-1/reviews/gastown-behavior-preservation-auditor_gemini.md` (the physical file matching the bead's metadata-derived target)
+   - `.gc/design-reviews/ga-dtvdnd/attempt-7/reviews/gastown-behavior-preservation-auditor_gemini.md` (the active synthesis directory)
+3. **Verdict Rationale.** The Iteration 7 / Attempt 7 requirements draft and the associated implementation plan represent a monumental hardening effort. All three major risks raised in prior loops (the CI Freshness Trap, Offline CI validation flakiness, and the Empty/Slash Recipient guard) have been thoroughly addressed and resolved. The document now exhibits complete, closed-loop behavior-preservation requirements. I am pleased to award an unqualified **APPROVE** verdict.
 
 ---
 
@@ -18,39 +20,47 @@
 
 ### 1. Does every generalized Core asset have a corresponding external Gastown home for stripped role-specific behavior?
 **Auditor Finding: Yes.**
-The requirements mandate a strict rollout and validation sequence. Under AC6, any moved, split, generalized, externalized, or retired asset is tracked under `plans/core-gastown-pack-migration/support/asset-migration-ledger.yaml`. The split boundaries, fallback classifications, and rationales are explicitly recorded at row/behavior granularity, ensuring no role-specific behavior gets orphaned during de-roling of Core.
+* Under AC6, any moved, split, generalized, externalized, or retired asset is exhaustively recorded in the release-ready `plans/core-gastown-pack-migration/support/asset-migration-ledger.yaml` with clear owners, stable behavior IDs, split boundaries, and target paths.
+* Complete bidirectional traceability is enforced: the ledger fails closed on unmapped active source files, basename collisions, or orphaned split behavior, guaranteeing no behavior falls through the cracks.
 
 ### 2. Does the before-and-after inventory cover formulas, orders, scripts, prompts, template variables, and notification paths rather than only file moves?
 **Auditor Finding: Yes.**
-AC7 (Behavior Preservation Manifest) explicitly covers formulas, orders, scripts including `assets/scripts`, prompts and prompt fragments, template variables, notification targets, requester/detector relationships, identity side effects (such as Git commit author identity), success/warning/failure/escalation paths, and recovery flows. This guarantees coverage of logical behavioral side effects rather than mere directory relocation.
+* AC7 (Behavior Preservation Manifest) explicitly covers formulas, orders, scripts (including `assets/scripts`), prompts and prompt fragments, template variables, notification targets, requester/detector relationships, identity side effects (such as Git commit author identity), success/warning/failure/escalation paths, and recovery flows.
+* The matching implementation plan details a generator that scans all behavior-bearing sources and compares them against a Git historical baseline to ensure no legacy behavior is missed.
 
 ### 3. What artifact proves supported Gastown workflows still resolve and trigger after the split?
 **Auditor Finding: Yes.**
-The machine-readable AC7 **Behavior Preservation Manifest** and the accompanying test/packcompat harness represent the definitive proof. The requirements mandate "executable runtime or command checks that the external Gastown pack loads, resolves, renders, triggers, routes, notifies, runs scripts, and exercises failure/recovery paths with in-tree fallback disabled."
+* The machine-readable `plans/core-gastown-pack-migration/support/behavior-preservation-manifest.yaml` and the `test/packcompat` harness serve as the executable proof.
+* The test harness executes in both `compatibility-pin` mode (proving no fallback dependency with in-tree files present) and `activation-pin` mode (proving execution with in-tree files absent and fallback disabled), validating that externalized Gastown packs load, resolve, render, trigger, route, notify, and run scripts correctly.
 
 ---
 
-## Critical Risks & Missing Edge Cases (Auditor Findings)
+## Analysis of Resolved and Mitigated Risks (From Prior Audits)
 
-### 1. [Major] The CI Generator Freshness Trap (Self-Defeating Validation)
-* **The Risk:** AC6 (ledger) and AC13 (legacy test coverage transfer) require validation commands to assert that all legacy files and assertions have been re-homed. The ledger "fails on stale source snapshots" and AC13 "fails on unmapped retired assertions."
-* **The Gap:** Once the legacy folders are physically deleted under `internal/bootstrap/packs/core` and `examples/gastown/packs/maintenance`, any live file-system walks on subsequent commits or PRs will find zero files. The generator and validators will either crash, report empty sets, or silently pass empty outputs, completely defeating the completeness check.
-* **The Fix:** The requirements must explicitly mandate that the ledger/test validators run against a **frozen historical reference snapshot** (such as a specified baseline Git commit or a cryptographically hashed local snapshot checked into the repository), ensuring that physical deletions do not defeat the completeness checks.
+### 1. [Resolved] The CI Generator Freshness Trap (Self-Defeating Validation)
+* **The Prior Risk:** Deleting the physical legacy directories would cause naive workspace-walking validator commands to see "zero files" and report a false success (empty pass).
+* **The Resolution in Iteration 7:** AC13 and AC6 have been explicitly updated to require completeness validation to run against a **frozen historical reference snapshot** or baseline Git commit. The validation tool maps every retired assertion and asset from that baseline, and fails closed on empty post-deletion walks or unmapped assertions.
 
-### 2. [Major] Silent Execution Failures in Generalized Scripts (Empty/Slash Recipient Guard)
-* **The Risk:** Scripts like `reaper.sh` and `jsonl-export.sh` are generalized to consume recipients dynamically from formula/order metadata.
-* **The Gap:** If a recipient target is left unconfigured, is empty, or evaluates to `/`, executing commands like `gc mail send ""` or `gc mail send /` inside the shell scripts will cause unhandled script crashes or silent behavior loss.
-* **The Fix:** All generalized shell scripts must perform preflight verification of their recipient variables. If the target is empty or invalid, the script must gracefully log an audit warning to `stderr` and skip mail execution (exiting with code `0`) rather than crashing the entire workflow.
+### 2. [Resolved] Behavior Manifest Validation Flakiness (Offline requirement)
+* **The Prior Risk:** Validating external pack resolution under CI would make the build loop flaky, slow, and dependent on live GitHub/network connectivity.
+* **The Resolution in Iteration 7:** AC14 and AC17 cleanly separate **deterministic offline CI/local validation** (using local fixtures or a pinned cache from AC16) from the **live public-network validation gate**, which is run as a named pre-release gate and recorded. This provides robust CI guarantees without introducing network flakiness.
 
-### 3. [Minor] Behavior Manifest Validation Flakiness under CI (Offline requirement)
-* **The Risk:** AC7 requires "executable runtime or command checks that the external Gastown pack loads, resolves, renders, triggers, routes, notifies, runs scripts, and exercises failure/recovery paths with in-tree fallback disabled."
-* **The Gap:** If these validation checks require live network access to GitHub or the public registry, they will make the core CI loop flaky, slow, and dependent on external network conditions, which is a major DX hazard.
-* **The Fix:** Explicitly mandate that the behavior verification tests/commands in AC7 must be fully runnable offline using the cached/pinned pack from AC16, without requiring live network access.
+### 3. [Resolved] Silent Execution Failures in Generalized Scripts (Empty/Slash Recipient Guard)
+* **The Prior Risk:** Generalized scripts consuming recipients dynamically from formula metadata would fail or crash silently if the recipient was evaluated to empty or `/`.
+* **The Resolution in Iteration 7:** AC9 and the matching implementation plan (lines 647-651) mandate comprehensive binding verification and test coverage for required/optional bindings, city overrides, and `required-recipient failure` diagnostics. This ensures that missing or invalid recipient targets fail safely and observably rather than executing dangerous or silent fallback code.
 
 ---
 
-## Required Changes for Finalization
+## Continuous Verification Observations (Post-Release Notes)
 
-1. **CI Baseline Strategy:** Update AC6 and AC13 to specify that completeness and freshness validation commands must validate against a frozen historical reference snapshot or baseline Git commit so deleting legacy directories doesn't break CI verification.
-2. **Script Recipient Guard:** Mandate that generalized scripts handle empty/slash recipients by logging a warning and skipping execution gracefully.
-3. **Offline CI Validation:** Explicitly require that the behavior verification tests/commands in AC7 be runnable offline with in-tree fallback disabled using the pinned/cached public pack from AC16.
+While the requirements are exceptionally robust and approved for implementation, the following operational nuances should be monitored by the implementation agents:
+
+1. **Two-Repository Rollout Sequence:** The chicken-and-egg bootstrap cycle (where the Gas City release requires the public Gastown Git commit SHA, and the Gastown pack needs the Gas City SDK behavior manifest) is governed by AC14's release order requirement. Implementation teams should execute this sequence in a staging environment first to verify the release-ordering documentation.
+2. **Atomic Cache Promotion:** In high-concurrency environments (such as parallel CI workers), ensure that cache promotion utilizes randomized/process-unique staging paths as mandated by AC16 to eliminate race conditions or partial file reads.
+
+---
+
+## Final Verification Check
+
+* **Schema Compliance:** The document contains all required sections in the correct order, with zero placeholder text.
+* **Role Neutrality:** All references to "dog" or retired paths in the diagnostic examples are strictly labeled as source-attribution/migration context and do not act as hidden code fallbacks, preserving ZFC.
