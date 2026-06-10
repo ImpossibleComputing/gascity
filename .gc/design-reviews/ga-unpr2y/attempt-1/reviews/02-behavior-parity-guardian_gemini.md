@@ -1,14 +1,14 @@
-# Natasha Volkov — DeepSeek V4 Flash (Independent Review, Attempt 19)
+# Natasha Volkov — Gemini (Independent Review, Attempt 20)
 
 **Verdict:** block
 
-**Scope:** REQUIREMENTS scenario parity, regression prevention, characterization tests, proof freshness — with evidence drawn from verification of `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md` and the active workspace.
+**Scope:** REQUIREMENTS scenario parity, regression prevention, characterization tests, proof freshness — with evidence drawn from verification of `.gc/design-reviews/ga-unpr2y/attempt-20/design-before.md` and the active workspace.
 
 ---
 
 ## Overview
 
-Attempt 19 represents a highly mature and structured iteration that incorporates significant architectural improvements over prior attempts. By establishing the Slice 0 contract and its associated inventories (including `SESSION_BOUNDARY_SYMBOLS.yaml`, `WORKER_BOUNDARY_EXCEPTIONS.yaml`, and `SESSION_EVENT_INVENTORY.yaml`) as non-normative, schema-only preflights (DESIGN.md:230-237), the design successfully avoids premature enforcement while ensuring strict validation at the point of adoption. The formalized **Refactor Rules** (DESIGN.md:978-993) are exceptional and represent a massive step toward guaranteeing behavior-preserving extractions.
+Attempt 20 represents a highly mature and structured iteration that incorporates significant architectural improvements over prior attempts. By establishing the Slice 0 contract and its associated inventories (including `SESSION_BOUNDARY_SYMBOLS.yaml`, `WORKER_BOUNDARY_EXCEPTIONS.yaml`, and `SESSION_EVENT_INVENTORY.yaml`) as non-normative, schema-only preflights (DESIGN.md:230-237), the design successfully avoids premature enforcement while ensuring strict validation at the point of adoption. The formalized **Refactor Rules** (DESIGN.md:978-993) are exceptional and represent a massive step toward guaranteeing behavior-preserving extractions.
 
 However, from the perspective of the Behavior Parity Guardian, several critical **traceability loops**, **verification contradictions**, and **brittle assertion paths** remain unresolved. Most notably, the **Stale Evidence Paradox** continues to trap the strictly non-mutating Slice 0 in a circular requirement to repair complex Layer 2-4 reconciler and provider-health integration tests. Additionally, the design still lacks design-time traceability of scenario-to-slice allocations, and the lack of a strict black-box mandate for characterization tests leaves the refactor highly vulnerable to silent behavioral drift.
 
@@ -26,7 +26,7 @@ However, from the perspective of the Behavior Parity Guardian, several critical 
 ## Blocking Findings
 
 ### 1. [Blocker] The Stale Evidence Paradox remains active in Slice 0
-- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md` lines 245-251.
+- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-20/design-before.md` lines 245-251.
 - **Why it matters:** The design still mandates that the non-mutating, session-only Slice 0 "must repair or owner-retire the evidence for `SESSION-RECON-002`, `SESSION-RECON-003`, `SESSION-RECON-006`, and `SESSION-RECON-007` before a later slice cites those rows." 
 
 This requirement contains a fatal architectural contradiction:
@@ -45,7 +45,7 @@ Because Slice 0 cannot mutatively restore Layer 2-4 reconciler integration tests
 ---
 
 ### 2. [Blocker] Deferred design-time traceability prevents backlog verification
-- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md` lines 994-1021.
+- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-20/design-before.md` lines 994-1021.
 - **Why it matters:** The backlog slices (Slices 1 to 6) still lack scenario-row mapping. By deferring the row-to-slice allocation to a future `SCENARIO_PARITY.yaml` file to be created during Slice 0 implementation, we cannot verify at this design gate that the refactor backlog is comprehensive. 
 
 There is no structural proof in `DESIGN.md` that critical scenario rows (such as `SESSION-LIFE-001` legacy state projection, `SESSION-LIFE-002` pending-create claim, `SESSION-LIFE-008` user-facing projection guard, or `SESSION-RUNTIME-004` stop turn) are actually covered by any future slice.
@@ -55,7 +55,7 @@ There is no structural proof in `DESIGN.md` that critical scenario rows (such as
 ---
 
 ### 3. [Blocker] Lack of Black-Box Assertion Rules for Characterization Tests
-- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md` lines 978-993.
+- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-20/design-before.md` lines 978-993.
 - **Why it matters:** Refactor Rule 3 states that "The test should prove the behavior the user sees, not every internal branch." However, this is too weak to prevent regression. 
 
 Without a strict prohibition against white-box mock assertions (such as mocking internal store interfaces or asserting internal function call chains), developers or agents will write brittle mocks that pass during the refactor even if the user-visible product behavior (exit codes, output payloads, or database commit states) is completely broken.
@@ -68,7 +68,7 @@ Without a strict prohibition against white-box mock assertions (such as mocking 
 ## Major Findings
 
 ### [Major] Lack of assertion-level verification in Proof-Freshness validation
-- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md` lines 249-251 and lines 259-266.
+- **Evidence:** `.gc/design-reviews/ga-unpr2y/attempt-20/design-before.md` lines 249-251 and lines 259-266.
 - **Why it matters:** The Slice 0 validator `TestScenarioParityFreshness` checks if cited file paths exist. However, a file-existence check cannot detect if the tests inside that file have been renamed, gutted, or bypassed using `t.Skip()`. The fact that reconciler requirements were allowed to go completely missing while their citations remained in `REQUIREMENTS.md` proves that path-level checks are insufficient to prevent proof rot.
 
 - **Required change:** Require that `SCENARIO_PARITY.yaml` specifies both the file path and the **exact test function symbol(s)** (e.g., `TestSessionLifecycle/Wake_Held_Until`). The Slice 0 freshness validator must dynamically parse or execute the tests to verify that the named test functions exist and do not contain hardcoded skips.
