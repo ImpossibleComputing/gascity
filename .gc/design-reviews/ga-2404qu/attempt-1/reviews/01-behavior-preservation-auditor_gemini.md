@@ -1,80 +1,56 @@
-# Nadia Volkov — DeepSeek V4 Flash Perspective Independent Review (Iteration 18 / Attempt 18)
+# Nadia Volkov — DeepSeek V4 Flash Perspective Independent Review (Iteration 21 / Attempt 1)
 
-**Verdict:** approve
+**Verdict:** Major revision required (BLOCK)
 
 **Scope:** Behavior preservation lane only — Gastown behavior inventory, cross-repo evidence chains, requester/detector/notification continuity, and preventing silent capability loss.
 
 ---
 
-### Executive Summary
+## Executive Summary
 
-The Iteration 18 design represents the definitive, highly matured, and structurally complete specification for the Core and Gastown Pack Split. It successfully translates all behavioral safety requirements into concrete, enforceable contracts, executable scanner rules, and rigid CI/CD validation gates.
+As Nadia Volkov, the Behavior Preservation Auditor, I am issuing a **Verdict of Major revision required (BLOCK)** for the Attempt 1 design draft. While the transition from in-tree dependencies to an external `gascity-packs/gastown` pack is directionally correct, the current design fails to protect against silent capability loss and lacks operationalized gates for critical execution-level behaviors. 
 
-This iteration incorporates the highly detailed resolution contracts established in Attempt 17, which systematically address and resolve all critical risks of silent capability loss, boundary leakage, and untraced asset drift. 
-
-Specifically, this review evaluates the design's effectiveness against the four major behavior-preservation risks identified in previous iterations:
-1. **The AST Parser vs. Dynamic Shell Eval Discovery Gap:** Resolved by the mandate under §2597–2600 requiring independent baseline transcript comparison from VCS history, ensuring that dynamically evaluated commands or notification targets are never pruned or omitted from the behavior manifest.
-2. **Multi-Layer Configuration Override Ambiguities:** Mitigated through explicit collision rules in §2471–2472. Conflicting duplicate global names across host Core and public Gastown evaluate cleanly as a fatal error unless an explicit alias is declared in the behavior manifest.
-3. **Stale Synthetic Cache Risks:** Resolved by §2538–2542, ordering legacy synthetic cache handling before git validation, so retired synthetic public Gastown/Maintenance entries are cleanly detected and ignored rather than causing partial-materialization version skew.
-4. **Provider-Pack Terminology and Post-Cleanup Regression:** Prevented via continuous linting under §2638–2640, where the wording linter remains a permanent CI gate spanning Markdown, MDX, JSON, TXT, TOML, Go strings, and TypeScript files.
-
-Furthermore, the global blockers from the Attempt 17 overall synthesis are elegantly and thoroughly addressed from the perspective of behavior preservation. The creation of the importable system-pack boundary (`internal/systempacks`) in §2425 and the CST-preserving doctor mutation coordinator in §2556 ensure that both runtime loading and offline repairs remain fully deterministic, protecting existing operator state.
+Specifically, this review highlights major gaps in cross-repo version skew proof, silent notification swallows, un-operationalized trigger changes on moved orders, and witness floor loopholes for rewritten assets.
 
 ---
 
-### Top Strengths
+## Critical Risks & Gaps (The Blockers)
 
-- **VCS-Independent Manifest Oracle (§2597–2600):** By comparing generated behavior manifest rows with old-tree VCS moves, deletions, and old baseline transcripts, Gas City prevents the static discovery tool from silently missing dynamically constructed script paths or dynamic evaluations (e.g. `eval "gc session nudge $target"`).
-- **Comprehensive Provider Continuity Witness Matrix (§2670–2685):** Enforces explicit, execution-level witnesses for non-trivial provider file rewrites. This includes configured and empty recipient handling, `pool = "dog"` symbolic overrides, `DOG_DONE` nudges, and health JSON consumer schemas.
-- **Hermetic Packcompat Offline Execution (§2009–2010):** Prevents external network dependencies in restricted or air-gapped CI pipelines by guaranteeing that `test/packcompat` can run using local-fixture or pre-populated remote-cache entries.
-- **The Behavior Witness Floor (§1393–1401):** Mandates that any behavior possessing old execution-level coverage must receive execution-level replacement coverage. Count-only or path-presence validations are strictly rejected.
+### 1. Old-Binary / New-Pack Rollout Deadlock and Lack of Gated Compatibility
+- **The Risk:** The release matrix promises compatibility when running an `old binary | new pack` configuration (the new public pack remains compatible with host Core and the absence of Maintenance). However, the design does not require any execution-level gate to prove this matrix cell.
+- **The Gap:** The new public pack could easily depend on newly moved Core assets, new loader/provenance behavior, or lack old Maintenance semantics, which will pass the new-binary packcompat test but fail for active operators loading the new pack on older binaries.
+- **Required Change:** Add an explicit compatibility gate to the candidate public Gastown slice forcing the new public `gascity-packs/gastown` commit to run and pass load, initialization, and basic script execution with the current pre-migration Gas City binary before the pin is treated as immutable.
 
----
+### 2. Silent Notification Loss under the Optional-Recipient Model
+- **The Risk:** Current Maintenance scripts (`jsonl-export.sh` and `reaper.sh`) explicitly mail the `mayor/` on escalation/anomalies. Transitioning these to config-lookup-based bindings under the attempt-9 role-surface decision converts these active alert paths into silent no-ops when unset.
+- **The Gap:** The current witness floor only checks evidence *level* (e.g., verifying "script tolerates empty recipient" satisfies the floor), while the actual alert delivery silently vanishes.
+- **Required Change:** Add a mandatory `recipient-binding` field to the behavior-manifest row schema for any row with hardcoded notifications/nudges/mail targets. Force the packcompat witness to assert that alerts actually fire to the configured equivalent recipient in a Gastown-city fixture.
 
-### Prior Risks & Gaps Resolution
+### 3. Order Trigger Semantics are Not Operationalized
+- **The Risk:** The design states that packcompat must "exercise the original trigger," but provides no schema field or validation ensuring old-vs-new equality for actual trigger fields (e.g., `trigger = "cooldown"` or `interval = "15m"` on `mol-dog-jsonl`).
+- **The Gap:** An order can move to Core or public Gastown, pass composition/script-execution witnesses, yet fire on a weakened interval, a different trigger type, or an exec-vs-pool shape change.
+- **Required Change:** Extend manifest rows for moved orders to include trigger-identity fields (trigger type, interval/schedule, gate conditions, exec-vs-pool shape, and enabled state) and require packcompat to assert old == new (or document an approved semantic delta).
 
-#### 1. Discovery Blind Spots (AST vs. Dynamic Eval)
-- **The Prior Risk:** Discovery tools using regex or AST parsing could miss dynamically generated notification paths or dynamic target lookups in shell scripts, allowing behaviors to be deleted from Core without corresponding replacement in public Gastown.
-- **The Resolution:** Under §2597–2600, the manifest verification is decoupled from current-tree generation. It enforces cross-referencing against independent old-tree file moves, deletions, and baseline execution transcripts, failing the build if an executed path is unrepresented in the manifest.
-
-#### 2. Multi-Layer Configuration Precedence
-- **The Prior Risk:** Multi-layer config overrides (such as user-provided `city.toml`, system packs, and host includes) could collide on symbolic target bindings, silently misrouting alerts or escalations.
-- **The Resolution:** Section §2471–2472 establishes that duplicate active global names across Core and public Gastown are fatal unless a manifest row explicitly defines a safe alias, preventing silent resolution drift.
-
-#### 3. Stale Synthetic Cache Pollution
-- **The Prior Risk:** A stale, partially updated synthetic cache could load outdated prompt templates alongside new Core logic, resulting in silent runtime errors.
-- **The Resolution:** Section §2538–2542 orders legacy synthetic cache handling before ordinary git validation, ensuring retired synthetic entries are detected, classified, and ignored cleanly.
-
-#### 4. Post-Cleanup Provider Terminology Drift
-- **The Prior Risk:** Future updates to independent provider packs could accidentally re-introduce legacy Maintenance references or violate role neutrality after the split.
-- **The Resolution:** The docs and wording linter under §2638–2640 is codified as a permanent CI gate. It continuously scans all operator-facing code, scripts, CLI help, schemas, and provider pack assets to ensure role names (`dog`, `mayor`, etc.) remain confined post-split.
+### 4. Witness-Floor Loophole for Rewritten, Un-tested Assets
+- **The Risk:** For script branches and prompt fragments whose only old witness is "explicit source assertion," the attempt-9 floor permits a moved and role-cleaned asset (digest changed) to land with source-existence witnesses on both ends plus an unverified human "semantic-equivalence assertion."
+- **The Gap:** This allows modified assets to escape actual execution-level behavior tests, creating a critical risk of undetected regressions during role-cleaning rewrites.
+- **Required Change:** Mandate that any row whose asset content changed during the move (normalized digest mismatch) requires an execution-level final witness regardless of its old evidence level.
 
 ---
 
-### Evaluation of the Three Key Questions
+## Evaluation of the Three Key Questions
 
-#### 1. Does the behavior inventory enumerate every Gastown-specific requester, detector, notification path, formula, order, script branch, and prompt fragment removed from Core?
-- **Auditor Finding: Yes.**
-- **Evidence & Justification:**
-  - The behavior manifest is anchored as an executable gate under the `Source-Derived Behavior Manifest` contract (§88–121) and the `Generated Artifact Contracts And Independent Completeness` table (§2580–2596).
-  - This is reinforced by §2144–2175 (`Role-Surface Ownership And Host-Core Patch Model`), which maps all legacy surfaces (including Go literals, prompt fragments, and provider-pack `dog` routes) to distinct final owners.
-  - No source file can be deleted or moved until every old behavior has a designated manifest row (§2479–2481).
-
-#### 2. Which concrete gascity-packs/gastown tests prove each restored behavior fires under the same trigger conditions rather than merely existing?
-- **Auditor Finding: Yes.**
-- **Evidence & Justification:**
-  - The design requires `go test ./test/packcompat` with sharded targets running the `TestPinnedPublicGastownBehavior` suite (§2627, §3108).
-  - This is validated under the `Behavior Evidence Witness Floor` (§1393–1401), which forbids count-only or file-existence proofs, requiring full execution-level old and final witnesses.
-  - Section §2654–2685 (`Witness Rows For Behavior And Provider Continuity`) specifies exact witness requirements for branch pruning, Polecat formulas, shutdown-dance requesters/detectors, and `DOG_DONE` nudges under simulation.
-
-#### 3. Can reviewers trace each high-risk Maintenance or Core move to old path, new path, landing commit, and observable test evidence?
-- **Auditor Finding: Yes.**
-- **Evidence & Justification:**
-  - Reviewers can trace all asset relocations through `plans/core-gastown-pack-migration/slice-gates.generated.yaml` (§2591), which serves as the single source of truth for rollout gates.
-  - The sequential 7-slice rollout plan (§2627–2685) and the 6-phase green intermediate commit ladder (§2261–2271) guarantee a continuous chain of custody. Every intermediate commit is verified test-green before destructive file removals occur.
+1. **Does the behavior inventory enumerate every Gastown-specific requester, detector, notification path, formula, order, script branch, and prompt fragment removed from Core?**
+   - **Auditor Finding: No.** The current design lacks a concrete generated manifest (first-slice deliverable), and does not specify a generated source-manifest starting point, allowing behaviors to be silently omitted from the inventory.
+2. **Which concrete `gascity-packs/gastown` tests prove each restored behavior fires under the same trigger conditions rather than merely existing?**
+   - **Auditor Finding: Unsatisfactory.** The design lacks trigger-field equality validations and permits empty-recipient tolerance to satisfy witness requirements, bypassing actual firing assertions.
+3. **Can reviewers trace each high-risk Maintenance or Core move to old path, new path, landing commit, and observable test evidence?**
+   - **Auditor Finding: No.** The tracing mechanisms are vague; there is no frozen old-tree baseline commit designated for the independent completeness check, and role-surface rows are not cross-linked with behavior-manifest rows.
 
 ---
 
-### Required Changes for Finalization
+## Questions & Clarifications Needed
 
-**None.** All critical behavior preservation risks, terminal boundary edge cases, and provider-pack rewrite exceptions have been fully and robustly codified into the design as concrete, non-negotiable contracts and test gates. The design is fully approved from the Behavior Preservation perspective.
+1. **What is the designated baseline old-tree commit?** There must be a specific, immutable Gas City commit designated as the reference for old-tree file states and baseline transcripts to make independent auditing meaningful.
+2. **Are there any other hardcoded notification paths in Maintenance or Core?** Beyond `reaper.sh` and `jsonl-export.sh`, we need a complete scan to ensure no other embedded alert pathways (like `DOG_DONE` nudges or DB compactors) are silently converted into optional config lookups.
+3. **What blocks Slice 1 from declaring manifest completeness?** If all execution-level proof is deferred to Gas City's `test/packcompat`, does `gascity-packs` have any test suite capable of validating moved behavior on its own at Slice 1?
