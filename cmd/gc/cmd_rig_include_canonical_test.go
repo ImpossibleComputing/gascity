@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/builtinpacks"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/packman"
 )
 
 // TestRigAddIncludeCanonicalizesBuiltinPackSource reproduces gascity#3137:
@@ -33,6 +35,7 @@ func TestRigAddIncludeCanonicalizesBuiltinPackSource(t *testing.T) {
 
 	t.Setenv("GC_DOLT", "skip")
 	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("GC_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 
 	var stdout, stderr bytes.Buffer
@@ -68,6 +71,25 @@ func TestRigAddIncludeCanonicalizesBuiltinPackSource(t *testing.T) {
 	wantVersion := "sha:" + commit
 	if !strings.Contains(cityToml, `version = "`+wantVersion+`"`) {
 		t.Fatalf("city.toml import version did not pin builtin source to %q:\n%s", wantVersion, cityToml)
+	}
+	lock, err := readImportLockfile(fsys.OSFS{}, cityPath)
+	if err != nil {
+		t.Fatalf("reading packs.lock after rig add: %v", err)
+	}
+	if got, ok := lock.Packs[wantSource]; !ok {
+		t.Fatalf("packs.lock missing builtin rig import %q: %#v", wantSource, lock.Packs)
+	} else if got.Commit != commit {
+		t.Fatalf("packs.lock[%q].Commit = %q, want %q", wantSource, got.Commit, commit)
+	}
+	cacheDir, err := packman.RepoCachePath(wantSource, commit)
+	if err != nil {
+		t.Fatalf("RepoCachePath: %v", err)
+	}
+	if err := builtinpacks.ValidateSyntheticRepo(cacheDir, commit); err != nil {
+		t.Fatalf("builtin rig import cache was not materialized at %s: %v", cacheDir, err)
+	}
+	if _, _, err := config.LoadWithIncludes(fsys.OSFS{}, filepath.Join(cityPath, "city.toml")); err != nil {
+		t.Fatalf("LoadWithIncludes after rig add: %v", err)
 	}
 }
 

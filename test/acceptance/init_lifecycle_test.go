@@ -33,9 +33,15 @@ func TestMain(m *testing.M) {
 	if err := os.MkdirAll(gcHome, 0o755); err != nil {
 		panic("acceptance: creating GC_HOME: " + err.Error())
 	}
+	if err := os.Setenv("GC_HOME", gcHome); err != nil {
+		panic("acceptance: setting GC_HOME: " + err.Error())
+	}
 	runtimeDir := filepath.Join(tmpDir, "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		panic("acceptance: creating XDG_RUNTIME_DIR: " + err.Error())
+	}
+	if err := os.Setenv("XDG_RUNTIME_DIR", runtimeDir); err != nil {
+		panic("acceptance: setting XDG_RUNTIME_DIR: " + err.Error())
 	}
 	if err := helpers.WriteSupervisorConfig(gcHome); err != nil {
 		panic("acceptance: " + err.Error())

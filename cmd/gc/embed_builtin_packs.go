@@ -220,7 +220,10 @@ func ensureBuiltinImportsInstalledForConfigLoad(cityPath string) error {
 	if err != nil {
 		return err
 	}
+	return ensureBuiltinImportsInstalled(cityPath, allImports)
+}
 
+func ensureBuiltinImportsInstalled(cityPath string, allImports map[string]config.Import) error {
 	builtinLock := &packman.Lockfile{
 		Schema: packman.LockfileSchema,
 		Packs:  make(map[string]packman.LockedPack),

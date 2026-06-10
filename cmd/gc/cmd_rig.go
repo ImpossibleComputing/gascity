@@ -366,6 +366,17 @@ func doRigAddWithResult(fs fsys.FS, cityPath, rigPath string, includes []string,
 			return config.Rig{}, 1
 		}
 	}
+	if usesOSFS(fs) {
+		pendingImports, err := collectRigConfigImports(nextCfg)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc rig add: loading imports: %v\n", err) //nolint:errcheck // best-effort stderr
+			return config.Rig{}, 1
+		}
+		if err := ensureBuiltinImportsInstalled(cityPath, pendingImports); err != nil {
+			fmt.Fprintf(stderr, "gc rig add: installing builtin imports: %v\n", err) //nolint:errcheck // best-effort stderr
+			return config.Rig{}, 1
+		}
+	}
 
 	if !rigPathExists {
 		if err := fs.MkdirAll(rigPath, 0o755); err != nil {
@@ -753,6 +764,23 @@ func composeDefaultRigImports(root []config.BoundImport, legacyIncludes []string
 		out = append(out, config.BoundImport{Binding: binding, Import: imp})
 	}
 	return out
+}
+
+func collectRigConfigImports(cfg *config.City) (map[string]config.Import, error) {
+	imports := make(map[string]config.Import)
+	if cfg == nil {
+		return imports, nil
+	}
+	for _, rig := range cfg.Rigs {
+		merged, err := effectiveRigBoundImports(&rig, cfg.Packs)
+		if err != nil {
+			return nil, fmt.Errorf("rig %q: %w", rig.Name, err)
+		}
+		for _, bound := range merged {
+			imports["rig:"+rig.Name+":"+bound.Binding] = bound.Import
+		}
+	}
+	return imports, nil
 }
 
 func sortedBoundImports(imports []config.BoundImport) []config.BoundImport {
