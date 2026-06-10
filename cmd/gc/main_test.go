@@ -630,6 +630,27 @@ func TestFindCity(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy_runtime_at_explicit_ceiling_is_not_city", func(t *testing.T) {
+		root := t.TempDir()
+		ceiling := filepath.Join(root, "ceiling")
+		if err := os.MkdirAll(filepath.Join(ceiling, ".gc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		child := filepath.Join(ceiling, "child")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GC_CEILING_DIRECTORIES", ceiling)
+
+		_, err := findCity(child)
+		if err == nil {
+			t.Fatal("findCity() should fail when only the discovery ceiling has .gc")
+		}
+		if !strings.Contains(err.Error(), "not in a city directory") {
+			t.Errorf("error = %q, want 'not in a city directory'", err)
+		}
+	})
+
 	t.Run("checks_explicit_ceiling_dir_last", func(t *testing.T) {
 		root := t.TempDir()
 		parent := filepath.Join(root, "parent")

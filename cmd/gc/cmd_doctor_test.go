@@ -529,6 +529,7 @@ func TestDoDoctorRegistersStaleLocalPackDirCheckForRemoteImport(t *testing.T) {
 	cityDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
 	source := "https://github.com/gastownhall/gc-actual-packs"
 	commit := writeDoctorRemotePackFixture(t, homeDir, source)
 
@@ -564,6 +565,7 @@ func TestDoDoctorRegistersStaleLocalPackDirCheckForRigRemoteImport(t *testing.T)
 	cityDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
 	source := "https://github.com/gastownhall/gc-actual-packs"
 	commit := writeDoctorRemotePackFixture(t, homeDir, source)
 
@@ -606,6 +608,7 @@ func TestDoDoctorRegistersStaleLocalPackDirCheckForDefaultRigRemoteImport(t *tes
 	cityDir := t.TempDir()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
 	source := "https://github.com/gastownhall/gc-actual-packs"
 	commit := writeDoctorRemotePackFixture(t, homeDir, source)
 

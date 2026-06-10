@@ -470,7 +470,9 @@ func TestEffectiveCityNameUsesWorkspaceSiteBinding(t *testing.T) {
 func writeCityWithBuiltinGastownImport(t *testing.T) string {
 	t.Helper()
 
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(t.TempDir(), "gc-home"))
 	cityPath := filepath.Join(t.TempDir(), "bright-lights")
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
 		t.Fatal(err)

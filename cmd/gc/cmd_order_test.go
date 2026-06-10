@@ -368,6 +368,7 @@ schedule = "*/5 * * * *"
 func TestScanAllOrdersRemoteImportedFlatPackOrders(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 
 	cityDir := t.TempDir()
 	source := "https://github.com/example/orders-pack.git"
@@ -2453,6 +2454,9 @@ prefix = "ct"
 }
 
 func TestOrderRunExecHonorsOrdersMaxTimeout(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+
 	cityDir := t.TempDir()
 	cfg := &config.City{
 		Orders: config.OrdersConfig{MaxTimeout: "50ms"},

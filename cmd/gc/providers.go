@@ -689,6 +689,10 @@ func isManagedGcBeadsBdScriptPath(cityPath, script string) bool {
 	if samePath(script, gcBeadsBdScriptPath(cityPath)) || samePath(script, legacyGcBeadsBdScriptPath(cityPath)) {
 		return true
 	}
+	managed, err := managedGcBeadsBdScriptPath()
+	if err == nil && samePath(script, managed) {
+		return true
+	}
 	cached, err := cachedGcBeadsBdScriptPath()
 	return err == nil && samePath(script, cached)
 }

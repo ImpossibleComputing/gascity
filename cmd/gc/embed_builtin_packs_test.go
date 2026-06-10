@@ -876,8 +876,7 @@ func TestPruneStaleGeneratedPackFiles_PreservesPackHashManifestFiles(t *testing.
 
 func TestLoadCityConfigUsesBundledPackCache(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -906,8 +905,7 @@ func TestLoadCityConfigUsesBundledPackCache(t *testing.T) {
 
 func TestLoadCityConfigForRegistryUsesBundledPackCache(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -926,8 +924,7 @@ func TestLoadCityConfigForRegistryUsesBundledPackCache(t *testing.T) {
 
 func TestLoadCityConfigFSUsesBundledPackCacheForOSFS(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -946,8 +943,7 @@ func TestLoadCityConfigFSUsesBundledPackCacheForOSFS(t *testing.T) {
 
 func TestLoadCityConfigImplicitlyInstallsBuiltinRemoteImport(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +991,7 @@ version = "` + config.PublicGastownPackVersion + `"
 
 func TestLoadCityConfigStillRequiresInstallForNonBuiltinRemoteImport(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", t.TempDir())
+	requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -1043,8 +1039,7 @@ func TestLoadCityConfigWithoutBuiltinPackRefreshFSDoesNotMaterializeBuiltinPacks
 
 func TestLoadCityConfigRepairsBundledPackCache(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -1081,8 +1076,7 @@ func TestLoadCityConfigRepairsBundledPackCache(t *testing.T) {
 
 func TestLoadCityConfigRevalidatesRequiredBuiltinPacksAfterReadyCacheSuccess(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -1107,8 +1101,7 @@ func TestLoadCityConfigRevalidatesRequiredBuiltinPacksAfterReadyCacheSuccess(t *
 
 func TestLoadCityConfigRevalidatesRequiredBuiltinPackContentsAfterReadyCacheSuccess(t *testing.T) {
 	dir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	requireTempHome(t)
 	if err := writeBuiltinPackLoadTestCity(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -1170,6 +1163,7 @@ func requireTempHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 	return home
 }
 

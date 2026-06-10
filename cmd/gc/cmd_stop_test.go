@@ -842,10 +842,13 @@ func TestStopCityManagedBeadsProviderAfterSuccessfulStopStopsDefaultBD(t *testin
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc", "runtime", "packs", "dolt"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := gcBeadsBdScriptPath(cityDir)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
 
 	logFile := filepath.Join(t.TempDir(), "ops.log")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" >> \""+logFile+"\"\nexit 0\n"), 0o755); err != nil {

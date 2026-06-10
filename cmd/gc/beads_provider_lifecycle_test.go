@@ -1111,7 +1111,11 @@ backend = "doltlite"
 
 func TestEnsureBeadsProvider_bdAcceptsHealthyServerAfterStartError(t *testing.T) {
 	dir := t.TempDir()
-	script := gcBeadsBdScriptPath(dir)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
+
 	callLog := filepath.Join(dir, "provider.log")
 	marker := filepath.Join(dir, "started")
 	port := reserveRandomTCPPort(t)
@@ -4713,7 +4717,11 @@ func TestHealthBeadsProviderWaitsForStorePingAfterRecovery(t *testing.T) {
 	}
 
 	opsFile := filepath.Join(t.TempDir(), "provider-ops.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
+
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -156,12 +156,11 @@ func resolveLockedRemoteImport(source, cityRoot string) (string, bool, error) {
 		return "", false, nil
 	}
 
-	home, err := os.UserHomeDir()
+	cacheRoot, err := installedRemoteRepoCacheRoot()
 	if err != nil {
-		return "", false, fmt.Errorf("resolving home dir: %w", err)
+		return "", false, err
 	}
 
-	cacheRoot := filepath.Join(home, ".gc", "cache", "repos")
 	cacheDir := filepath.Join(cacheRoot, RepoCacheKey(source, entry.Commit))
 	if err := validateInstalledRemoteCacheLocked(source, cacheRoot, cacheDir, entry.Commit); err != nil {
 		return "", false, err
@@ -188,17 +187,27 @@ func resolveInstalledRemoteImport(source, cityRoot string) (string, error) {
 		return "", fmt.Errorf("remote import %s is not installed (missing packs.lock entry); run \"gc import install\"", source)
 	}
 
-	home, err := os.UserHomeDir()
+	cacheRoot, err := installedRemoteRepoCacheRoot()
 	if err != nil {
-		return "", fmt.Errorf("resolving home dir: %w", err)
+		return "", err
 	}
 
-	cacheRoot := filepath.Join(home, ".gc", "cache", "repos")
 	cacheDir := filepath.Join(cacheRoot, RepoCacheKey(source, entry.Commit))
 	if err := validateInstalledRemoteCacheLocked(source, cacheRoot, cacheDir, entry.Commit); err != nil {
 		return "", err
 	}
 	return cacheDir, nil
+}
+
+func installedRemoteRepoCacheRoot() (string, error) {
+	if gcHome := strings.TrimSpace(ImplicitGCHome()); gcHome != "" {
+		return filepath.Join(gcHome, "cache", "repos"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home dir: %w", err)
+	}
+	return filepath.Join(home, ".gc", "cache", "repos"), nil
 }
 
 // remoteCacheValidationCache memoizes successful remote-cache validations. The

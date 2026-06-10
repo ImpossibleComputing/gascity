@@ -83,6 +83,7 @@ func TestRawBeadsProviderNormalizesManagedExecEnv(t *testing.T) {
 func TestBeadsProviderUsesBundledCacheScript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 	cityPath := t.TempDir()
 
 	provider := beadsProvider(cityPath)

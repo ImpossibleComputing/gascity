@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -203,6 +204,10 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 		}
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
+	}
+	if strictMode && !citylayout.HasCityConfig(cityPath) {
+		fmt.Fprintf(stderr, "gc prime: no city config found: %s has .gc/ runtime state but no city.toml\n", cityPath) //nolint:errcheck
+		return 1
 	}
 	cfg, err := loadCityConfig(cityPath, stderr)
 	if err != nil {

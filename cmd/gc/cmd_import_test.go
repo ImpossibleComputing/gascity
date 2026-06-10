@@ -1782,6 +1782,7 @@ func TestDoImportAddRemoteEndToEndLoadsImportedPack(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 
 	repo := initImportBarePackRepo(t, "remote-pack", "v1.2.3", `
 [pack]
@@ -1827,6 +1828,7 @@ func TestDoImportAddRemoteSubpathEndToEndLoadsImportedPack(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 
 	repo := initImportBarePackRepo(t, "mono", "v1.2.3", `
 [pack]
@@ -1888,6 +1890,7 @@ func TestDoImportAddRemoteSHAPinEndToEndLoadsImportedPack(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
 
 	repo := initImportBarePackRepo(t, "sha-pack", "", `
 [pack]
@@ -2132,6 +2135,7 @@ func TestHasRepositoryRefInSource(t *testing.T) {
 func TestResolveImportRootFallsBackToStandalonePackDir(t *testing.T) {
 	clearGCEnv(t)
 	dir := t.TempDir()
+	t.Setenv("GC_CEILING_DIRECTORIES", dir)
 	writePackToml(t, dir, `[pack]
 name = "demo-pack"
 schema = 1
@@ -2175,6 +2179,7 @@ schema = 1
 func TestImportAddCommandWorksInStandalonePackDir(t *testing.T) {
 	clearGCEnv(t)
 	dir := t.TempDir()
+	t.Setenv("GC_CEILING_DIRECTORIES", dir)
 	writePackToml(t, dir, `[pack]
 name = "demo-pack"
 schema = 1
@@ -2264,6 +2269,7 @@ schema = 1
 	clearGCEnv(t)
 
 	dir := t.TempDir()
+	t.Setenv("GC_CEILING_DIRECTORIES", dir)
 	writePackToml(t, dir, `[pack]
 name = "demo-pack"
 schema = 1

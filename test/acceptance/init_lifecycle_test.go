@@ -106,12 +106,14 @@ func TestInitGastown(t *testing.T) {
 }
 
 // TestInitGastownResumeAfterFailure simulates the scenario where gc init wrote
-// city.toml and pack.toml but failed before builtin packs were materialized. A
-// subsequent gc init (resume) should materialize packs before loading config.
+// city.toml and pack.toml but failed before builtin imports were cached. A
+// subsequent gc init (resume) should install builtin remote imports before
+// loading config, without writing generated pack content under .gc/system/packs.
 func TestInitGastownResumeAfterFailure(t *testing.T) {
 	c := helpers.NewCity(t, testEnv)
 
-	// Simulate partial PackV2 init but DON'T create .gc/system/packs.
+	// Simulate partial PackV2 init but DON'T pre-create packs.lock or
+	// .gc/system/packs.
 	c.WriteConfig(`[workspace]
 name = "partial"
 `)
@@ -120,10 +122,12 @@ name = "partial"
 schema = 2
 
 [imports.gastown]
-source = ".gc/system/packs/gastown"
+source = "` + config.PublicGastownPackSource + `"
+version = "` + config.PublicGastownPackVersion + `"
 
 [defaults.rig.imports.gastown]
-source = ".gc/system/packs/gastown"
+source = "` + config.PublicGastownPackSource + `"
+version = "` + config.PublicGastownPackVersion + `"
 `
 	if err := os.WriteFile(filepath.Join(c.Dir, "pack.toml"), []byte(packToml), 0o644); err != nil {
 		t.Fatalf("writing pack.toml: %v", err)
@@ -144,9 +148,12 @@ source = ".gc/system/packs/gastown"
 		t.Fatalf("gc init resume failed with missing packs — Bug 4 regression:\n%s", out)
 	}
 	t.Cleanup(c.CleanupRuntime)
-	// Positive assertion: packs must have been materialized.
-	if !c.HasFile(".gc/system/packs/gastown/pack.toml") {
-		t.Fatal(".gc/system/packs/gastown/pack.toml not materialized after resume — Bug 4 regression")
+	packsLock := c.ReadFile("packs.lock")
+	if !strings.Contains(packsLock, `[packs."`+config.PublicGastownPackSource+`"]`) {
+		t.Fatalf("packs.lock missing implicitly installed builtin gastown import:\n%s", packsLock)
+	}
+	if c.HasFile(".gc/system/packs/gastown/pack.toml") {
+		t.Fatal(".gc/system/packs/gastown/pack.toml was materialized during resume; builtin imports should use packs.lock + shared cache")
 	}
 }
 

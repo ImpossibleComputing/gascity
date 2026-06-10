@@ -21,6 +21,9 @@ var (
 
 // RepoCacheRoot returns the shared machine-local repo cache root.
 func RepoCacheRoot() (string, error) {
+	if gcHome := config.ImplicitGCHome(); strings.TrimSpace(gcHome) != "" {
+		return filepath.Join(gcHome, "cache", "repos"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home dir: %w", err)
