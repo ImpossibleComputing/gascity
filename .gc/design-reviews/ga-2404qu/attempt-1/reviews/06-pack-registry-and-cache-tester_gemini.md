@@ -1,70 +1,53 @@
-# Marcus Driscoll — DeepSeek V4 Flash Perspective Independent Review (Iteration 20 / Attempt 20)
+# Marcus Driscoll - DeepSeek V4 Flash
 
-**Verdict:** approve-with-risks
+**Verdict:** block
 
-**Scope:** Builtin registry identity, synthetic cache pruning, system pack materialization, and provider-dependent pack continuity.
-
-This review evaluates the Iteration 20 / Attempt 20 draft of the Core and Gastown Pack Split design (`design.md` / `design-before.md`) against `requirements.md` and the existing codebase behavior.
-
----
-
-## Executive Summary
-
-The Iteration 20 design document represents a highly disciplined iteration that successfully integrates feedback from prior cycles. It establishes a robust, fail-closed model for system pack materialization, explicitly addresses the `IsSource` call-site behaviors, and cleans up the builtin registry's identity. 
-
-From the perspective of **Pack Registry and Cache Testing**, the design is functionally complete and demonstrates a solid understanding of content-and-provenance validation. However, several subtle edge cases around offline cache-orphaning during upgrade, `SyntheticContentHash` invalidation side-effects, and provider script falling back are critical risks that need close attention before the registry and cache slice lands. 
-
-Accordingly, I am recommending an **approve-with-risks** verdict, with specific actionable mitigations provided below.
+**Top strengths:**
+- **Robust review-gated migration invariants:** The explicit invariants (line 42) and slice-by-slice gates establish a highly disciplined rollout process. This prevents team members from skipping verification steps on complex multi-repository shifts.
+- **Deterministic and clean registry isolation:** Retiring legacy `gastown` and `maintenance` aliases from `All()` and updating `syntheticPackLayouts` is precisely scoped. The negative tests on `IsSource`, `NameForSource`, and lock generation ensure legacy interface boundaries fail closed.
+- **Fail-closed system pack materialization:** Shifting system pack loading to `internal/systempacks` with a mandatory `assertRequiredSystemPackProvenance` gate guarantees that the orchestrator never boots on a corrupt or partially materialized Core pack.
 
 ---
 
-## Top Strengths (Lane Verification)
+**Critical risks:**
 
-1. **Explicit Registry Identity and Alias Retirement (§2937–2941):**
-   The registry identity is now tightly pinned: `All()` returns only `core` (at `internal/packs/core`), `bd`, and `dolt`, with historical `gastown` and `maintenance` aliases explicitly retired. This addresses **Lane Q1** directly. The inclusion of negative tests for `IsSource`, `NameForSource`, and install-lock generation to reject the retired paths (§2968–2970) prevents silent reintroduction.
+- **[Blocker] Offline/air-gapped upgrade failure due to un-namespaced `RepoCacheKey` transition.**
+  Once `IsSource(PublicGastownPackSource)` returns `false` (as public Gastown is no longer embedded), `RepoCacheKey` will compute an un-namespaced cache key instead of the synthetic namespaced key (`bundled-synthetic-v1\x00...`). In an offline/air-gapped environment, existing cities upgrading to the new binary will compute the new key, fail to find the cache, and fail to boot because the network is unreachable to fetch the pack. The correct Gastown files are already present on disk in the old namespaced synthetic cache directory, but the new binary will completely ignore them.
+  *Evidence:* `RepoCacheKey` at `pack_include.go:302–309`, `EnsureRepoInCache` at `cache.go:63`.
 
-2. **Required-Pack Materialization Fail-Closed and Recovery (§3004–3010):**
-   The shift of system-pack loading to `internal/systempacks` with fatal gates (integrity checks before resolution and `RequiredSystemPackParticipation` validation after resolution) is excellent. It ensures that behavior discovery never runs on a partially materialized or corrupt Core pack, satisfying **Lane Q2**.
+- **[Blocker] Git-validation crash on stale synthetic caches at legacy `IsSource` branches.**
+  `validateInstalledRemoteCache` (pack_include.go:213) and `ReadCachedPackImports` (install.go:49) branch on `IsSource(source)` to decide whether to run synthetic validation or git-checkout validation. After migration, public Gastown is no longer recognized as `IsSource`, but stale synthetic cache directories still exist on disk. When checking or installing, the new binary will attempt `git checkout` or `git rev-parse` validation on these synthetic directories, which lack a `.git` repository, crashing with raw Git errors rather than raising a clean migration diagnostic.
+  *Evidence:* Five distinct `IsSource` branches mapped across `pack_include.go`, `cache.go`, and `install.go`.
 
-3. **Content-and-Provenance Preserved (§2942–2946):**
-   The design retains the strong existing validation models where integrity is driven by file manifests, content digests, and strict tamper tests, rather than path-count heuristics. This addresses the "tamper tests count paths" red flag.
+- **[Major] Global `SyntheticContentHash` invalidation cascade on first startup.**
+  Removing `maintenance` and `gastown` from `All()` alters the output of `SyntheticContentHash()`, which hashes all bundled packs. This change invalidates all existing synthetic caches (including `bd` and `dolt`). While `MaterializeSyntheticRepo` is safe-by-construction and will self-heal by re-materializing them from the new embeds, this cascade creates a one-time startup CPU and IO overhead that is undocumented and untested.
+  *Evidence:* `SyntheticContentHash()` at `registry.go:252–274`, global cache-mismatch rejection at `ValidateSyntheticRepo:225`.
 
----
+- **[Major] Ambiguity in `dog` pool-name contract vs. Core role-neutrality.**
+  Core asserts that the `dog` maintenance agent is purely configurable, and renaming/omitting it must not break SDK behavior. However, `examples/dolt/orders/mol-dog-stale-db.toml` hardcodes `pool = "dog"`. If `dog` is freely renameable, Dolt's database maintenance breaks. If `dog` is a stable contract that provider packs must bind to, Core is not fully role-neutral. The design fails to specify how provider dependencies resolve this pool name without creating Go-level or pack-level special cases.
+  *Evidence:* `examples/dolt/pack.toml:6` and dolt's database maintenance orders.
 
-## Critical Risks and Edge Cases
-
-### [Major] Offline Operator Cache-Orphan Data Loss (Cache Namespace Switch)
-The design specifies that the public Gastown cache key (`RepoCacheKey`) will transition from a namespaced synthetic key (`bundled-synthetic-v1\x00...`) to an ordinary remote-pack cache path keyed by repository source and the immutable `PublicGastownPackVersion` (§2945–2947). It also declares that stale synthetic cache entries for public Gastown or Maintenance are ignored/rejected (§2951–2953, §2994).
-* **The Risk:** In an offline/air-gapped upgrade scenario, an existing city's lock file references public Gastown. On the new binary, the cache manager computes the new non-synthetic key. Since we are offline, the new binary cannot fetch the pack from the remote. Even though the correct Gastown files are already cached on disk (under the old namespaced synthetic directory), they will be ignored as stale, and the offline run will fail because it cannot access the network.
-* **Mitigation:** The cache resolver should support a **one-time offline fallback/migration**. If lookup at the new remote-cache key fails due to being offline, and the old namespaced synthetic cache directory exists for that same source and commit, the cache manager should copy/promote those assets to the new cache path rather than immediately failing.
-
-### [Major] `SyntheticContentHash` Invalidation Cascade
-Removing `maintenance` and `gastown` from `All()` modifies the return value of `SyntheticContentHash()` (§2943–2944), which is global over all bundled packs.
-* **The Risk:** This global hash mismatch will invalidate *all* synthetic caches, including those for `bd` and `dolt`, on the very first start of the new binary. While `MaterializeSyntheticRepo` is safe-by-construction and will self-heal by re-materializing them from the new embeds, this cascade creates a one-time startup I/O and CPU overhead.
-* **Mitigation:** The design must explicitly document this one-time self-heal re-materialization as a known and accepted behavior, and verify it with a dedicated test proving that the `bd`/`dolt` caches successfully re-materialize offline without losing provider-specific custom data.
-
-### [Minor] Position-Dependent Script Fallback in `dolt-target.sh`
-When `dolt-target.sh` is moved from the retired Maintenance pack to Core, its directory depth changes.
-* **The Risk:** `dolt-target.sh` has a relative fallback path (`$SCRIPT_DIR/../../../../../dolt/assets/scripts`) to locate the dolt provider's `port_resolve.sh`. Moving it to `internal/packs/core/...` breaks this relative depth. Additionally, `examples/dolt/port_resolve_test.go` contains a hardcoded reference to the old Maintenance script location.
-* **Mitigation:** Ensure the moved script in Core resolves provider scripts purely via the environment variable `GC_SYSTEM_PACKS_DIR`, update the relative co-location fallback to match the new Core directory depth, and migrate the hardcoded path in `port_resolve_test.go`.
+- **[Minor] Residual relative fallbacks in `dolt-target.sh`.**
+  Moving `dolt-target.sh` to `internal/packs/core` alters its directory depth. Its relative fallback path (`$SCRIPT_DIR/../../../../../dolt/assets/scripts`) to locate `port_resolve.sh` will break unless updated. Additionally, `examples/dolt/port_resolve_test.go` still contains hardcoded paths to the legacy Maintenance script location.
+  *Evidence:* `dolt-target.sh:153-157` and `port_resolve_test.go:148`.
 
 ---
 
-## Lane-Specific Questions & Answers
-
-### 1. Do registry and embed tests assert that only the intended built-in packs remain, with Core sourced from the new path and no Gastown or Maintenance aliases?
-* **Answer:** Yes, the design specifies updating `internal/builtinpacks/registry_test.go` to assert that the expected identities are exactly `core=internal/packs/core`, `bd=examples/bd`, and `dolt=examples/dolt` (§2962–2963), and adds negative tests to reject retired aliases (§2968–2970).
-
-### 2. Does MaterializeBuiltinPacks repair missing or tampered Core while preserving provider-dependent bd and dolt behavior exactly as before?
-* **Answer:** Yes, §3008–3010 specifies that required-pack materialization repairs missing/corrupt expected files and prunes/quarantines unexpected files before validation, ensuring that `bd` and `dolt` bytes and provenance are preserved.
-
-### 3. Do synthetic cache tests reject modified manifests, unexpected files, and stale retired pack sources rather than checking file existence only?
-* **Answer:** Yes, §2942 specifies keeping synthetic cache validation for the remaining bundled packs, and §2971–2974 requires stale-cache tests to verify rejection of old synthetic public Gastown caches.
+**Missing evidence:**
+- **Offline test-strategy resolution:** The design accepts that network-required public install is acceptable for Gastown, but does not specify how offline-only tests like `TestSyncLockUsesBundledFallbackForPublicGastownWhenRemoteUnavailable` will be re-written or replaced without failing on network-less CI paths.
+- **Materialization pruning vs. quarantine details:** The design wants operator-edited files under required packs (`core`, `bd`, `dolt`) quarantined rather than deleted, but does not define the staging folder structure or how the content-integrity gate handles quarantined file-sets.
 
 ---
 
-## Actionable Requirements for downstream slices
+**Required changes:**
+1. **Implement dual-read offline cache fallback:** Update the cache lookup in `internal/config/pack_include.go` so that if an un-namespaced public Gastown lookup fails offline, the cache manager checks for the presence of the old namespaced synthetic cache. If found, it should copy-promote those assets to the new un-namespaced cache path to prevent boot failure.
+2. **Explicitly handle legacy synthetic directories at Git validation boundaries:** Ensure that `validateInstalledRemoteCache` verifies the presence of a `.git` directory before executing Git commands on the path, raising a clean migration advisory if it detects a legacy synthetic cache structure.
+3. **Resolve the `dog` pool-name contract:** Declare `dog` as a stable pool-name contract for provider-bound maintenance, or update dolt's orders to resolve the pool dynamically from the Core pack configuration.
+4. **Specify and test `SyntheticContentHash` self-healing:** Document the one-time re-materialization penalty on first boot and add a test in `registry_test.go` proving that `bd` and `dolt` re-materialize successfully offline when a global hash mismatch is encountered.
+5. **Rewire `dolt-target.sh` and `port_resolve_test.go`:** Update the fallback depth inside `dolt-target.sh` to match its new path, and rewrite `port_resolve_test.go` to use `GC_SYSTEM_PACKS_DIR` instead of the hardcoded legacy path.
 
-1. **Offline Dual-Lookup Cache Fallback:** In `internal/config/cache.go`, implement a dual-read fallback for `RepoCacheKey` resolution when running offline, to copy/promote legacy synthetic Gastown caches to the new remote-cache path instead of failing.
-2. **Self-Heal Test Integration:** Add an integration test in `registry_test.go` where an existing city with a stale global `SyntheticContentHash` is started offline, and verify that `bd` and `dolt` re-materialize successfully from the embeds.
-3. **Resolve `dolt-target.sh` Path depth:** Update the relative path depth fallback inside Core's `dolt-target.sh` to match its new path in `internal/packs/core`, and rewire `examples/dolt/port_resolve_test.go` to use the Core path.
+---
+
+**Questions:**
+- Can `normalizeRepository`'s special-case mapping of `gascity-packs` clone URLs to `PublicRepository` be safely removed, or is it still required for ordinary remote URL resolution?
+- Should the doctor check provide a warning-level diagnostic with a manual cleanup hint for the stale `.gc/system/packs/maintenance` and `.gc/system/packs/gastown` directories left on disk?

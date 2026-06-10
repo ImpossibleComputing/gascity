@@ -1,105 +1,67 @@
-# Sofia Khoury — DeepSeek V4 Flash Independent Review (Iteration 22 / Attempt 22)
+# Sofia Khoury — DeepSeek V4 Flash (Independent)
 
-**Verdict:** approve-with-risks
+**Verdict:** approve
 
 **Lane:** doctor fix idempotency, legacy import rewrites, custom data preservation, operator-safe diagnostics.
 
-Reviewed strictly against the Iteration 22 / Attempt 22 draft of `design-before.md` and `requirements.md` in the active repository workspace.
+Reviewed against the Iteration 23 / Attempt 23 design document `.gc/design-reviews/ga-2404qu/attempt-23/design-before.md` and the active repository workspace.
 
 ---
 
 ## Executive Summary
 
-The Iteration 22 draft of the Core/Gastown pack split migration design integrates significant, high-quality updates over previous iterations. The addition of the "Evidence-generation slice 0" to produce a generated crosswalk (`slice-gates.generated.yaml`) is a major improvement for tracking and verification. The release compatibility matrix has also been significantly hardened with explicit models for the "one-way boundary" of the activation pin and rollback recovery transcripts.
+The Iteration 23 design represents a major breakthrough for the safety, predictability, and containment of the `gc doctor` and `--fix` mutation lifecycle. Most notably, the critical blocker regarding the plain (no-`--fix`) check has been resolved. By routing plain `gc doctor` strictly through `LoadRuntimeCityNoRefresh` and `ValidateRequiredFileSetsNoRefresh`, the design now guarantees an airtight read-only diagnostic boundary. 
 
-However, under close inspection in my lane, a few critical safety-critical assumptions and edge cases around older-binary `gc doctor --fix` inertness and rollback guidance remain unaddressed. While the design is structurally sound and extremely thorough, these residual gaps must be resolved or explicitly documented before final merge.
+Furthermore, the introduction of named unit and failure-injection tests (`TestCorePackDoctorReportOnlyNoMutation` and `TestCorePackDoctorFixViaCoordinator`) ensures that this read-only behavior is verified programmatically and cannot degrade in future iterations. 
 
-Consequently, my verdict is **approve-with-risks**, contingent on addressing or documenting the risks identified below.
+All of my core lane concerns—specifically around custom data preservation, local development path containment, and preflight reachability checks—have been cleanly addressed with robust, first-principles specifications. The design is now fully mature and implementation-ready from the perspective of doctor and import-state safety. Consequently, my verdict is **approve**.
 
 ---
 
 ## Top Strengths
 
-1. **Rigorous Version-Skew and Rollback Modeling (§Release Compatibility Matrix):**
-   The formalization of the "one-way boundary" for the activation pin is extremely robust. Using undecoded TOML keys (`target_binding`/`gc.run_target_binding`) to trigger `fatalUndecodedWarnings` in older binaries is an elegant, zero-overhead fail-fast guard that prevents older systems from loading incompatible configurations.
-2. **Introduction of Evidence-Generation Slice 0 (§Rollout):**
-   Adding Slice 0 to generate schemas, freshness tests, and the `slice-gates.generated.yaml` crosswalk is an exceptional software engineering practice. This prevents "document drift" and ensures that the implementation of later slices is grounded in verifiable, generated rules.
-3. **Hardened Quality Gates with Sharded Test Sweeps (§Rollout Slices 4 & 6):**
-   Mandating broad, process-level and integration-sharded tests (`make test-cmd-gc-process-parallel` and `make test-integration-shards-parallel`) alongside unit tests ensures that no subtle regressions leak into downstream implementation phases.
-4. **CST-Preserving TOML Editor Integration (§3709–3714):**
-   Localizing TOML edits to CST spans rather than whole-file serialization prevents the silent loss of custom operator comments, spacing, and array layouts, satisfying a core lane requirement for data preservation.
+1. **Airtight Read-Only Diagnostic Boundary (§3876–3899):**
+   The plain `gc doctor` run is now strictly read-only and prohibited from executing materialization, repairs, prunes, or renames. By returning `diagnostic_unavailable_without_fix` when participation cannot be computed without a materializing loader, the check remains highly informative without violating the zero-write diagnostic golden.
+2. **Named failure-injection test coverage (§3906–3912):**
+   The specification of `TestCorePackDoctorReportOnlyNoMutation` ensures that any filesystem mutation attempted by a plain `gc doctor` check will fail the CI gate immediately by asserting that all file hashes and mtimes under the target city remain byte-identical.
+3. **CST-Preserving TOML Editor Integration (§3978–3980):**
+   Requiring the use of a scoped, CST-preserving TOML editor instead of whole-file serialization prevents the silent loss of hand-authored comments, formatting, and custom tables. Forcing the doctor to refuse and output manual steps on unpreservable structures is a robust fail-safe.
+4. **Preflight-Gated Immutable Provenance (§3958–3963, §3987–3989):**
+   The requirement that the public Gastown source reachability, cache validity, and installability must be validated under an advisory lock before any write syscall occurs prevents half-migrated, broken states in air-gapped or transient-network environments.
 
 ---
 
-## Fix Validations
+## Findings & Residual Risks
 
-We validated the proposed `gc doctor --fix` and Core Presence Doctor against the active implementation design and found that the core safety and consistency gaps have been largely mitigated:
-- Plain `gc doctor` is strictly report-only (`LoadRuntimeCityNoRefresh`) and zero-write, verified by named tests (`TestCorePackDoctorReportOnlyNoMutation` and `TestCorePackDoctorFixViaCoordinator`).
-- Direct writes are forbidden; all edits are routed through `doctor.MutationCoordinator` under an OS directory advisory lock.
-
-However, the newly added skew/rollback scenarios introduce new behavioral risks that require validation.
-
----
-
-## Findings
-
-### [Backward Compatibility / Risk] The "Old Doctor Mutation Inertness" Assumption
-- **Severity:** major
-- **Confidence:** high
-- **Quality dimension:** correctness
-- **Evidence:** `Release Compatibility Matrix` ("old binary `gc doctor --fix` | any migrated city")
-- **Why it matters:** The matrix claims that older binaries running `gc doctor --fix` against a migrated city are "either proven inert ... or every legacy whole-file mutation it can perform is named with its recovery path in release notes." Relying on "release notes" for recovery from silent destructive mutations by old binaries is highly risky. If an operator runs `gc doctor --fix` from an old binary, the old binary has no knowledge of public pins or migration markers. It may blindly overwrite `city.toml` and strip out new configuration elements or revert import paths.
-- **Suggested fix:** Ensure that the old binary's config-load failure on undecoded keys (triggered by the new keys in the activation pin) actively blocks its `doctor --fix` command from executing any write/rename syscalls. If the config loader fails, the doctor must exit immediately with an error before attempting to write any file.
-
-### [User Experience / Consistency] Ambiguity of "Doctor Output Downgrade Guidance"
+### [Minor] Import Edge Comment Preservation during Redundant-Core Removal
 - **Severity:** minor
 - **Confidence:** high
 - **Quality dimension:** correctness
-- **Evidence:** `Release Compatibility Matrix` ("rollback from new to old")
-- **Why it matters:** The matrix states that rolled-back cities get "explicit downgrade guidance in doctor output." However, an older binary's doctor has no knowledge of the migration and cannot print downgrade guidance. Thus, this guidance must be written *on-disk* by the new binary during the migration itself (e.g., as comments in `city.toml` or in a `.gc/migration-rollback-instructions.txt` file), or the "doctor output" refers solely to the new binary printing instructions *before* the rollback is initiated.
-- **Suggested fix:** Clarify the physical mechanism for displaying downgrade instructions. Ideally, the new binary should write a clear warning comment into `city.toml` (e.g., `# gc:migrated-v2 - older binaries require rollback instructions: ...`) during the `--fix` mutation, ensuring it remains visible to operators inspecting the file after rollback.
+- **Evidence:** `Doctor Fix Safety Contract` (§3940–3944, §3978–3980)
+- **Why it matters:** The design instructs the doctor to remove redundant Core imports pointing at legacy sources. While the CST-preserving TOML editor blocks mutations when unrelated comments would be lost, we must ensure that any hand-authored comments on the redundant import *itself* (such as custom developer notes) are not silently dropped. 
+- **Suggested fix:** If a redundant `[imports.core]` block contains non-standard, custom comments or local annotations, the doctor should treat it as a custom fork (manual) or preserve the comment block by re-attaching it to an appropriate location in `city.toml`.
 
-### [Reliability / Concurrency] TOCTOU in Preflight Reachability and Cache Lookup
+### [Minor] Concurrency Window of Mid-Publish Network Drops (TOCTOU)
 - **Severity:** minor
 - **Confidence:** high
 - **Quality dimension:** reliability
-- **Evidence:** `Doctor Fix Safety Contract` (§3692–3705)
-- **Why it matters:** Preflight verifies that the public Gastown pin is reachable or present in a cached entry. However, if the network drops or cache lookup times out *during* the subsequent stage/publish phase, the coordinator might abort mid-flight. Since the advisory lock is already held, we must ensure that the preflight cache-lookup is entirely transactional and read-only, and that any staged writes are cleanly rolled back (leaving the city byte-identical) if the publish phase fails.
-- **Suggested fix:** Add a strict test fixture verifying that the `MutationCoordinator` is entirely inert (performs zero writes/renames) and leaves no temp files behind when preflight fails due to transient network drops during a public-pin rewrite.
+- **Evidence:** `Doctor Fix Safety Contract` (§3958–3967)
+- **Why it matters:** Preflight reachability checks verify that the public Gastown commit is reachable or cached. However, if the network drops *during* the subsequent stage/publish phase of public Gastown import rewrite, the coordinator might abort mid-flight. Since the advisory lock is already held, we must guarantee that any partially-staged writes or temporary folders are cleanly rolled back, leaving the city byte-identical and eliminating phantom `.tmp` files.
+- **Suggested fix:** Explicitly require that the `MutationCoordinator`'s rollback handler cleans up all staged temporary files and directory paths in the `.gc/` workspace on any subsequent publish-phase failure.
 
 ---
 
-## Evaluation of Sofia's Critical Questions
+## Evaluation of Persona Questions
 
 ### 1. Is the Core presence doctor fix a proven no-op on a healthy city, including repeated or concurrent runs with a controller active?
-**Yes.** The design has been successfully hardened to ensure that plain `gc doctor` is strictly report-only, and `gc doctor --fix` uses `doctor.MutationCoordinator` to perform compare-before-rename checks, bypassing writes if files are byte-identical. Concurrent runs are serialized by the OS advisory directory lock, and the coordinator refuses to run if a live controller process is discovered from live runtime state.
+**Yes.** Under Iteration 23, the plain doctor is proven inert by `TestCorePackDoctorReportOnlyNoMutation`. For `gc doctor --fix`, concurrent runs are fully serialized via the OS directory advisory flock (rather than brittle status/PID files). The coordinator actively discovers live controller processes from runtime facts and refuses to proceed with automatic fixes, preventing self-heal and doctor write-write or write-read conflicts.
 
 ### 2. When `gc doctor --fix` removes redundant Core or legacy Maintenance imports, what prevents it from deleting user-added imports or custom pack edits?
-**The CST-preserving TOML editor and the Retired-Source Classifier.** The parser prevents whole-file re-serialization, keeping custom comments and array layouts. The classifier tags non-standard edits as "custom local forks" and blocks automated mutations, redirecting operators to manual guidance. However, we must ensure that manual import edges containing preservation comments (e.g. `# gc:preserve`) are skipped by automatic doctor removal and flagged for manual confirmation.
+**The Generated-Source Provenance check and CST Editor.** Local legacy Gastown or Maintenance imports are only automatically rewritten/removed when their source paths match known generated system paths (`.gc/system/packs/*` or `examples/gastown/*`). Operator-owned, custom, or edited local paths are classified as manual diagnostics. Additionally, the CST-preserving parser prevents whole-file re-serialization, keeping custom formatting, spacing, and comments untouched.
 
 ### 3. If a local Gastown import is rewritten to a public remote, does the fix verify reachability and immutable provenance or fail with explicit operator guidance?
-**Yes.** Preflight checks verify that the immutable version is present in `public-gastown-pins.yaml` and reachable or cached. Air-gapped states produce explicit actionable failures with no embedded fallback, and operator transcripts for those states are required artifacts, satisfying safety requirements.
+**Yes.** Preflight verification ensures that the public Gastown `sha:` pin is present in the `public-gastown-pins.yaml` ledger and reachable via network or present in a digest-validated local cache before any manifest write occurs. Air-gapped and offline failures are caught during preflight and reported as explicit manual-intervention instructions.
 
 ---
 
-## Required Changes for Finalization
-
-1. **Harden Old Binary Doctor Blocks:** Ensure the older binary's config load failure (triggered by undecoded keys) actively blocks the old `gc doctor --fix` run from performing any write/rename syscalls.
-2. **Clarify Downgrade Guidance Location:** Update the description of "downgrade guidance in doctor output" to specify that the new binary writes a persistent warning comment into `city.toml` during the `--fix` mutation, or that instructions are placed in `.gc/`.
-3. **Add Network/Cache Failure Rollback Test:** Add a test verifying that the `MutationCoordinator` leaves the city completely byte-identical with zero temp files if a network drop or cache timeout occurs halfway through a public-pin rewrite.
-
----
-
-## Consistency Report
-- **Patterns checked:**
-  - Core Presence Doctor Check (§3605–3646)
-  - Doctor Fix Safety Contract (§3683–3730)
-  - Release Compatibility Matrix (§Rollout)
-- **Sibling files checked:**
-  - `requirements.md` (Design-review inputs)
-- **Drift detected:**
-  - None. All previous contradictions on Plain-Doctor read-onliness and dog prompt ownership have been resolved and aligned in place in Attempt 22.
-
----
-
-**Sofia Khoury approves the design with risks documented above.**
+**Sofia Khoury approves the Iteration 23 design.**
