@@ -721,7 +721,10 @@ var (
 )
 
 var recoverManagedBDCommand = func(cityPath string) error {
-	script := gcBeadsBdScriptPath(cityPath)
+	script, err := managedGcBeadsBdScriptPath()
+	if err != nil {
+		return err
+	}
 	overrides := cityRuntimeEnvMapForCity(cityPath)
 	setProjectedDoltEnvEmpty(overrides)
 	applyBdCLIRemoteSyncOptOut(overrides)

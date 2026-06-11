@@ -323,7 +323,7 @@ func newInitCmd(stdout, stderr io.Writer) *cobra.Command {
 Runs an interactive wizard to choose a config template and coding agent
 provider. Creates the .gc/ runtime directory plus pack.toml, city.toml,
 the standard top-level directories, and .template.md prompt templates, then
-materializes builtin packs under .gc/system/packs. Use --template with
+loads bundled packs from the shared cache. Use --template with
 --default-provider to create a city non-interactively, or --file to initialize
 from an existing TOML config file.
 

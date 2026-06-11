@@ -36,6 +36,7 @@ func (s *gateTimeoutStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 // must still be skipped (fail closed). Before the fix BOTH orders were skipped
 // on gate timeout, starving the feeders fleet-wide.
 func TestOrderDispatchIdempotentFailsOpenOnGateTimeout(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	prev := orderGateTimeout
 	orderGateTimeout = 20 * time.Millisecond
 	defer func() { orderGateTimeout = prev }()

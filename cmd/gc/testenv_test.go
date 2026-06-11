@@ -78,6 +78,13 @@ var inheritedCityRoutingEnvVars = []string{
 func clearGCEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range liveEnvKeysForTests() {
+		// Preserve the global test-mode dolt skip so tests that call clearGCEnv
+		// don't accidentally trigger the bundled gc-beads-bd.sh health path.
+		// Tests that need real dolt lifecycle override with t.Setenv("GC_DOLT", "").
+		if k == "GC_DOLT" {
+			t.Setenv(k, "skip")
+			continue
+		}
 		t.Setenv(k, "")
 	}
 	t.Setenv("GC_HOME", filepath.Join(t.TempDir(), "gc-home"))

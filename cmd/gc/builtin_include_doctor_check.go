@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/fsys"
 )
@@ -17,16 +16,32 @@ import (
 // writes them, this doctor check repairs them, and config load warns when
 // they are missing. Nothing splices builtin packs into composition.
 
-// missingRequiredBuiltinIncludes reports which required builtin packs are
-// not reachable from the composed config's explicit includes and imports.
-func missingRequiredBuiltinIncludes(fs fsys.FS, cfg *config.City, cityPath string) []string {
-	if cfg == nil {
-		return nil
-	}
-	reachable := config.ReachablePackNames(cfg, fs, cityPath)
+// missingRequiredBuiltinIncludesFromExplicit reports which required builtin
+// packs are not listed in the explicit include paths. This checks the city's
+// stated includes rather than the composed config's reachable packs, so it
+// correctly detects missing includes even when builtin packs are injected
+// into composition through the bundled cache.
+func missingRequiredBuiltinIncludesFromExplicit(cityPath string, explicit []string) []string {
 	var missing []string
 	for _, name := range requiredBuiltinPackNames(cityPath) {
-		if !reachable[name] {
+		canonical := builtinIncludePathForPack(name)
+		found := false
+		for _, inc := range explicit {
+			inc = strings.TrimSpace(inc)
+			if inc == "" {
+				continue
+			}
+			cleaned := filepath.ToSlash(filepath.Clean(inc))
+			abs := cleaned
+			if !filepath.IsAbs(inc) {
+				abs = filepath.ToSlash(filepath.Clean(filepath.Join(cityPath, filepath.FromSlash(inc))))
+			}
+			if cleaned == canonical || strings.HasSuffix(abs, "/"+canonical) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			missing = append(missing, name)
 		}
 	}
@@ -38,19 +53,24 @@ func missingRequiredBuiltinIncludes(fs fsys.FS, cfg *config.City, cityPath strin
 var builtinIncludeWarningCache sync.Map
 
 // warnMissingRequiredBuiltinIncludes emits a once-per-city warning when the
-// composed config does not reach a required builtin pack. The city still
-// loads — it just runs without the builtin content it almost certainly
-// wants — so this is a warning with a doctor-driven repair, not an error.
+// city's explicit city.toml includes are missing a required builtin pack. The
+// city still loads — it just runs without the builtin content it almost
+// certainly wants — so this is a warning with a doctor-driven repair, not an
+// error.
 //
 // Silent loaders (io.Discard) must not consume the once-per-city slot:
 // commands often pre-load config quietly before the user-visible load, and
 // the warning has to reach the visible one.
-func warnMissingRequiredBuiltinIncludes(fs fsys.FS, cfg *config.City, tomlPath string, w io.Writer) {
+func warnMissingRequiredBuiltinIncludes(fs fsys.FS, tomlPath string, w io.Writer) {
 	if w == nil || w == io.Discard || !usesOSFS(fs) {
 		return
 	}
 	cityPath := filepath.Dir(tomlPath)
-	missing := missingRequiredBuiltinIncludes(fs, cfg, cityPath)
+	manifest, err := loadCityImportManifestFS(fs, cityPath)
+	if err != nil {
+		return
+	}
+	missing := missingRequiredBuiltinIncludesFromExplicit(cityPath, manifest.Workspace.LegacyIncludes())
 	if len(missing) == 0 {
 		return
 	}
@@ -118,25 +138,13 @@ func (c *builtinIncludeDoctorCheck) Run(_ *doctor.CheckContext) *doctor.CheckRes
 		r.Message = fmt.Sprintf("reading city.toml manifest: %v", err)
 		return r
 	}
-	stale := retiredBuiltinIncludeEntries(c.cityPath, manifest.Workspace.LegacyIncludes())
+	explicit := manifest.Workspace.LegacyIncludes()
+	stale := retiredBuiltinIncludeEntries(c.cityPath, explicit)
+	missing := missingRequiredBuiltinIncludesFromExplicit(c.cityPath, explicit)
 
-	var missing []string
-	cfg, loadErr := loadCityConfigWithoutBuiltinPackRefresh(c.cityPath, io.Discard)
-	if loadErr == nil {
-		missing = missingRequiredBuiltinIncludes(fsys.OSFS{}, cfg, c.cityPath)
-	}
-
-	if len(stale) == 0 && len(missing) == 0 && loadErr == nil {
+	if len(stale) == 0 && len(missing) == 0 {
 		r.Status = doctor.StatusOK
 		r.Message = "required builtin pack includes present"
-		return r
-	}
-
-	if loadErr != nil && len(stale) == 0 {
-		// Config does not load and no stale builtin include explains it;
-		// other doctor checks own general config errors.
-		r.Status = doctor.StatusError
-		r.Message = fmt.Sprintf("cannot evaluate builtin includes: %v", loadErr)
 		return r
 	}
 
@@ -178,29 +186,7 @@ func (c *builtinIncludeDoctorCheck) Fix(_ *doctor.CheckContext) error {
 		kept = append(kept, inc)
 	}
 
-	missing := requiredBuiltinPackNames(c.cityPath)
-	if cfg, loadErr := loadCityConfigWithoutBuiltinPackRefresh(c.cityPath, io.Discard); loadErr == nil {
-		missing = missingRequiredBuiltinIncludes(fsys.OSFS{}, cfg, c.cityPath)
-	} else {
-		// Config does not compose (possibly because of the stale includes
-		// removed above). Conservatively ensure the canonical paths are
-		// present rather than skipping the repair.
-		var unlisted []string
-		for _, name := range missing {
-			listed := false
-			for _, inc := range kept {
-				if filepath.ToSlash(filepath.Clean(inc)) == builtinIncludePathForPack(name) {
-					listed = true
-					break
-				}
-			}
-			if !listed {
-				unlisted = append(unlisted, name)
-			}
-		}
-		missing = unlisted
-	}
-	for _, name := range missing {
+	for _, name := range missingRequiredBuiltinIncludesFromExplicit(c.cityPath, kept) {
 		kept = append(kept, builtinIncludePathForPack(name))
 		changed = true
 	}

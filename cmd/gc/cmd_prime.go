@@ -205,6 +205,10 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 		writePrimePromptWithFormat(stdout, "", "", defaultPrimePrompt, hookMode, hookFormat, suppressHookPrompt)
 		return 0
 	}
+	if strictMode && !citylayout.HasCityConfig(cityPath) {
+		fmt.Fprintf(stderr, "gc prime: no city config found: %s has .gc/ runtime state but no city.toml\n", cityPath) //nolint:errcheck
+		return 1
+	}
 	cfg, err := loadCityConfig(cityPath, stderr)
 	if err != nil {
 		if strictMode {
@@ -325,22 +329,25 @@ func doPrimeWithHookFormat(args []string, stdout, stderr io.Writer, hookMode boo
 			// (if unusual) minimal config — emit the default fallback.
 		}
 		// Agents without a prompt_template: read a builtin prompt shipped by
-		// the core bootstrap pack, materialized under .gc/system/packs/core/.
-		// When formula_v2 is enabled, all agents use graph-worker.md.
-		// Otherwise pool agents use pool-worker.md.
-		// Pool instances have Pool=nil after resolution, so also check the
-		// template agent via findAgentByName.
+		// the core bootstrap pack from the loaded pack directory. When
+		// formula_v2 is enabled, all agents use graph-worker.md. Otherwise
+		// pool agents use pool-worker.md. Pool instances have Pool=nil after
+		// resolution, so also check the template agent via findAgentByName.
 		if a.PromptTemplate == "" {
-			promptFile := ""
+			promptRel := ""
 			if cfg.Daemon.FormulaV2 {
-				promptFile = citylayout.SystemPacksRoot + "/core/assets/prompts/graph-worker.md"
+				promptRel = filepath.Join("assets", "prompts", "graph-worker.md")
 			} else if a.SupportsInstanceExpansion() || isPoolInstance(cfg, a) {
-				promptFile = citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"
+				promptRel = filepath.Join("assets", "prompts", "pool-worker.md")
 			}
-			if promptFile != "" {
-				if content, fErr := os.ReadFile(filepath.Join(cityPath, promptFile)); fErr == nil {
-					writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt)
-					return 0
+			if promptRel != "" {
+				packDirs := cfg.PackDirsForRig(agentRigScopeName(&a, cfg.Rigs))
+				if coreDir := builtinPackDirFromPackDirs(packDirs, "core"); coreDir != "" {
+					content, fErr := os.ReadFile(filepath.Join(coreDir, promptRel))
+					if fErr == nil {
+						writePrimePromptWithFormat(stdout, cityName, ctx.AgentName, string(content), hookMode, hookFormat, suppressHookPrompt)
+						return 0
+					}
 				}
 			}
 		}

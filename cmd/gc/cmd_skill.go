@@ -117,8 +117,8 @@ func listVisibleSkillEntries(cityPath string, cfg *config.City, store beads.Stor
 	entries := discoverSkillEntries(cityPath, "city")
 	// Legacy implicit-import compatibility packs may still contribute
 	// shared skills on upgraded installs. Keep surfacing them here while
-	// the compatibility path exists; normal launch-time system packs come
-	// from .gc/system/packs and are not part of this listing.
+	// the compatibility path exists; normal builtin pack content is loaded
+	// through config PackDirs and is not part of this listing.
 	entries = append(entries, discoverBootstrapSkillEntries()...)
 	if strings.TrimSpace(agentName) == "" && strings.TrimSpace(sessionID) == "" {
 		entries = append(entries, discoverImportedSkillEntries(sharedSkillCatalogInputs(cfg, currentRigContext(cfg)))...)

@@ -13,7 +13,14 @@
 set -e
 
 : "${GC_CITY_PATH:?GC_CITY_PATH must be set}"
-GC_BEADS_BD_SCRIPT="${GC_BEADS_BD_SCRIPT:-$GC_CITY_PATH/.gc/system/packs/bd/assets/scripts/gc-beads-bd.sh}"
+PACK_DIR="${GC_PACK_DIR:-$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)}"
+if [ -z "${GC_BEADS_BD_SCRIPT:-}" ]; then
+  if [ -n "${PACK_DIR:-}" ] && [ -x "$PACK_DIR/../bd/assets/scripts/gc-beads-bd.sh" ]; then
+    GC_BEADS_BD_SCRIPT=$(CDPATH= cd -- "$PACK_DIR/../bd/assets/scripts" && pwd)/gc-beads-bd.sh
+  else
+    GC_BEADS_BD_SCRIPT="$GC_CITY_PATH/.gc/system/packs/bd/assets/scripts/gc-beads-bd.sh"
+  fi
+fi
 
 if [ ! -x "$GC_BEADS_BD_SCRIPT" ]; then
   echo "gc dolt restart: gc-beads-bd not found" >&2

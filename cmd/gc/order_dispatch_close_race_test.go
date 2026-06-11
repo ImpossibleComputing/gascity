@@ -119,6 +119,7 @@ func (s *latchedCloseStore) List(query beads.ListQuery) ([]beads.Bead, error) {
 // dispatchExec performs no store operation before execRun, so the goroutine's
 // first store touch is forced to occur after the per-tick defer has run.
 func TestOrderDispatchDoesNotCloseStoreWhileDispatchInFlight(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	store := newLatchedCloseStore()
 
 	released := make(chan struct{})

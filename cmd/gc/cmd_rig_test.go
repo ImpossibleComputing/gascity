@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/builtinpacks"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/suspensionstate"
@@ -67,6 +68,16 @@ func writeSchema2RigCityFS(t *testing.T, f *fsys.Fake, cityPath, workspaceName, 
 	}
 	f.Files[filepath.Join(cityPath, "city.toml")] = []byte(cityToml)
 	f.Files[config.SiteBindingPath(cityPath)] = []byte(fmt.Sprintf("workspace_name = %q\n", workspaceName))
+}
+
+func requireBuiltinGastownImport(t *testing.T) (string, string) {
+	t.Helper()
+
+	commit, err := builtinPackSyntheticCommit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return builtinpacks.MustSource("gastown"), "sha:" + commit
 }
 
 func TestDoRigAdd_Basic(t *testing.T) {
@@ -1252,6 +1263,8 @@ func TestDoRigAdd_WithPack(t *testing.T) {
 
 	t.Setenv("GC_DOLT", "skip")
 	t.Setenv("GC_BEADS", "file")
+	t.Setenv("HOME", t.TempDir())
+	wantSource, wantVersion := requireBuiltinGastownImport(t)
 
 	var stdout, stderr bytes.Buffer
 	code := doRigAdd(fsys.OSFS{}, cityPath, rigPath, []string{"packs/gastown"}, "", "", "", false, false, &stdout, &stderr)
@@ -1260,7 +1273,7 @@ func TestDoRigAdd_WithPack(t *testing.T) {
 	}
 
 	output := stdout.String()
-	if !strings.Contains(output, "Import: gastown=./packs/gastown") {
+	if !strings.Contains(output, "Import: gastown="+wantSource) {
 		t.Errorf("output missing import: %s", output)
 	}
 
@@ -1279,8 +1292,11 @@ func TestDoRigAdd_WithPack(t *testing.T) {
 	if len(cfg.Rigs[0].Includes) != 0 {
 		t.Errorf("rig includes should stay empty, got %v; city.toml:\n%s", cfg.Rigs[0].Includes, data)
 	}
-	if got := cfg.Rigs[0].Imports["gastown"].Source; got != "./packs/gastown" {
-		t.Errorf("rig imports[gastown] = %q, want ./packs/gastown; city.toml:\n%s", got, data)
+	if got := cfg.Rigs[0].Imports["gastown"].Source; got != wantSource {
+		t.Errorf("rig imports[gastown].Source = %q, want %q; city.toml:\n%s", got, wantSource, data)
+	}
+	if got := cfg.Rigs[0].Imports["gastown"].Version; got != wantVersion {
+		t.Errorf("rig imports[gastown].Version = %q, want %q; city.toml:\n%s", got, wantVersion, data)
 	}
 }
 
@@ -1500,6 +1516,8 @@ func TestDoRigAdd_DefaultRigIncludes(t *testing.T) {
 
 	t.Setenv("GC_DOLT", "skip")
 	t.Setenv("GC_BEADS", "file")
+	t.Setenv("HOME", t.TempDir())
+	wantSource, wantVersion := requireBuiltinGastownImport(t)
 
 	var stdout, stderr bytes.Buffer
 	// No --include flag → should convert legacy default_rig_includes into
@@ -1510,7 +1528,7 @@ func TestDoRigAdd_DefaultRigIncludes(t *testing.T) {
 	}
 
 	output := stdout.String()
-	if !strings.Contains(output, "Import: gastown=./packs/gastown (default)") {
+	if !strings.Contains(output, "Import: gastown="+wantSource+" (default)") {
 		t.Errorf("output missing default import: %s", output)
 	}
 
@@ -1524,8 +1542,11 @@ func TestDoRigAdd_DefaultRigIncludes(t *testing.T) {
 	if len(cfg.Rigs[0].Includes) != 0 {
 		t.Errorf("rig includes should stay empty, got %v", cfg.Rigs[0].Includes)
 	}
-	if got := cfg.Rigs[0].Imports["gastown"].Source; got != "./packs/gastown" {
-		t.Errorf("rig imports[gastown] = %q, want ./packs/gastown", got)
+	if got := cfg.Rigs[0].Imports["gastown"].Source; got != wantSource {
+		t.Errorf("rig imports[gastown].Source = %q, want %q", got, wantSource)
+	}
+	if got := cfg.Rigs[0].Imports["gastown"].Version; got != wantVersion {
+		t.Errorf("rig imports[gastown].Version = %q, want %q", got, wantVersion)
 	}
 }
 
@@ -1709,6 +1730,7 @@ name = "mayor"
 func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_DOLT", "skip")
+	t.Setenv("HOME", t.TempDir())
 	configureIsolatedRuntimeEnv(t)
 
 	examplePath, err := filepath.Abs(filepath.Join("..", "..", "examples", "gastown"))
@@ -1737,6 +1759,9 @@ func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Import: gastown=packs/gastown (default)") {
 		t.Fatalf("output missing gastown default import: %s", stdout.String())
 	}
+	if strings.Contains(stdout.String(), ".gc/system/packs") {
+		t.Fatalf("output contains repo-local system pack path: %s", stdout.String())
+	}
 	cfg, err := config.Load(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1746,6 +1771,9 @@ func TestDoRigAdd_RealGastownExampleRootPackDefaultRigImport(t *testing.T) {
 	}
 	if got := cfg.Rigs[0].Imports["gastown"].Source; got != "packs/gastown" {
 		t.Fatalf("rig gastown import source = %q, want %q", got, "packs/gastown")
+	}
+	if got := cfg.Rigs[0].Imports["gastown"].Version; got != "" {
+		t.Fatalf("rig gastown import version = %q, want empty local-pack version", got)
 	}
 }
 

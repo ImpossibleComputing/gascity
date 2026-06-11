@@ -49,6 +49,7 @@ suspended = true
 // rig, mirroring the gate used for newDoctorDoltBackupCheck.
 func TestDoDoctorRegistersLocalOnlyRemoteCheckForActiveManagedRigs(t *testing.T) {
 	clearInheritedBeadsEnv(t)
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 
 	cityDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {

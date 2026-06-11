@@ -42,6 +42,14 @@ func clearInheritedBeadsEnv(t *testing.T) {
 		if key == "GC_HOME" {
 			continue
 		}
+		// Preserve the global test-mode dolt skip so tests that call
+		// clearInheritedBeadsEnv don't accidentally trigger the bundled
+		// gc-beads-bd.sh health path. Tests that need real dolt lifecycle
+		// override this with t.Setenv("GC_DOLT", "") after calling this helper.
+		if key == "GC_DOLT" {
+			t.Setenv(key, "skip")
+			continue
+		}
 		t.Setenv(key, "")
 	}
 }

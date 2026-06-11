@@ -10,6 +10,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -76,6 +77,38 @@ func TestRawBeadsProviderNormalizesManagedExecEnv(t *testing.T) {
 
 	if got := rawBeadsProvider(cityPath); got != "bd" {
 		t.Fatalf("rawBeadsProvider() = %q, want bd", got)
+	}
+}
+
+func TestBeadsProviderUsesBundledCacheScript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", filepath.Join(home, ".gc"))
+	cityPath := t.TempDir()
+
+	provider := beadsProvider(cityPath)
+	if !strings.HasPrefix(provider, "exec:") {
+		t.Fatalf("beadsProvider() = %q, want exec provider", provider)
+	}
+	script := strings.TrimPrefix(provider, "exec:")
+	if strings.Contains(script, citylayout.SystemPacksRoot) {
+		t.Fatalf("beadsProvider script = %q, must not point at repo-local system packs", script)
+	}
+	if !strings.HasPrefix(script, filepath.Join(home, ".gc", "cache", "repos")+string(filepath.Separator)) {
+		t.Fatalf("beadsProvider script = %q, want under global repo cache", script)
+	}
+	info, err := os.Stat(script)
+	if err != nil {
+		t.Fatalf("managed gc-beads-bd script missing: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("managed gc-beads-bd script is not executable: %v", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("beadsProvider materialized repo-local system packs: %v", err)
+	}
+	if got := normalizeRawBeadsProvider(cityPath, provider); got != "bd" {
+		t.Fatalf("normalizeRawBeadsProvider(cache provider) = %q, want bd", got)
 	}
 }
 

@@ -3932,7 +3932,7 @@ func InjectImplicitAgents(cfg *City) {
 	// then any custom providers in sorted order.
 	providers := configuredProviderOrder(configured)
 
-	promptTemplate := citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"
+	promptTemplate := implicitAgentPromptTemplate(cfg)
 
 	slingFormula := cfg.AgentDefaults.DefaultSlingFormula
 	if slingFormula == "" {
@@ -3971,6 +3971,15 @@ func InjectImplicitAgents(cfg *City) {
 	}
 
 	injectControlDispatcherAgents(cfg, existing)
+}
+
+func implicitAgentPromptTemplate(cfg *City) string {
+	for _, dir := range cfg.PackDirs {
+		if filepath.Base(filepath.Clean(dir)) == "core" {
+			return filepath.Join(dir, "assets", "prompts", "pool-worker.md")
+		}
+	}
+	return citylayout.SystemPacksRoot + "/core/assets/prompts/pool-worker.md"
 }
 
 // ApplyAgentDefaults applies [agent_defaults] values to all agents that

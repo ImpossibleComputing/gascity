@@ -1682,7 +1682,7 @@ Create a new Gas City workspace in the given directory (or cwd).
 Runs an interactive wizard to choose a config template and coding agent
 provider. Creates the .gc/ runtime directory plus pack.toml, city.toml,
 the standard top-level directories, and .template.md prompt templates, then
-materializes builtin packs under .gc/system/packs. Use --template with
+loads bundled packs from the shared cache. Use --template with
 --default-provider to create a city non-interactively, or --file to initialize
 from an existing TOML config file.
 
@@ -2531,7 +2531,7 @@ Baseline:
   baseline so the LLM iterates on a known-good shape rather than
   designing from scratch. Resolution priority:
     1. &lt;city&gt;/agents/&lt;role&gt;/prompt.template.md     (user customization)
-    2. &lt;city&gt;/.gc/system/packs/*/agents/&lt;role&gt;/    (pack default)
+    2. loaded pack dirs with agents/&lt;role&gt;/          (pack default)
     3. embedded prompts/&lt;role&gt;.md                  (built-in fallback)
     4. embedded prompts/mayor.md                   (structural reference,
                                                      used only when no

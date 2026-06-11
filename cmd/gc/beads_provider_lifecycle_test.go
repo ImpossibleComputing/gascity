@@ -878,6 +878,7 @@ printf 'status=%%s\n' "$status"
 }
 
 func TestEnsureBeadsProviderPublishesManagedDoltRuntimeStateFromProviderState(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "frontend")
 	if err := os.MkdirAll(rigPath, 0o755); err != nil {
@@ -1110,8 +1111,13 @@ backend = "doltlite"
 }
 
 func TestEnsureBeadsProvider_bdAcceptsHealthyServerAfterStartError(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	dir := t.TempDir()
-	script := gcBeadsBdScriptPath(dir)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
+
 	callLog := filepath.Join(dir, "provider.log")
 	marker := filepath.Join(dir, "started")
 	port := reserveRandomTCPPort(t)
@@ -2954,6 +2960,7 @@ func TestInitBeadsForDir_execPassesCanonicalDoltDatabase(t *testing.T) {
 // script itself; that behavior is covered by internal/runtime/k8s tests.
 // Regression for #399.
 func TestInitBeadsForDirExecSetsBEADSDIR(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	for _, tc := range []struct {
 		name       string
 		scriptBase string
@@ -3009,6 +3016,7 @@ func TestInitBeadsForDirExecSetsBEADSDIR(t *testing.T) {
 }
 
 func TestInitBeadsForDirCanonicalRigIgnoresUnresolvableCityPostgres(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	clearAmbientPostgresEnv(t)
 
 	cityDir := t.TempDir()
@@ -3088,6 +3096,7 @@ dolt.port: 4407
 }
 
 func TestInitBeadsForDirCanonicalRigClearsResolvableCityPostgres(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	clearAmbientPostgresEnv(t)
 
 	cityDir := t.TempDir()
@@ -3173,6 +3182,7 @@ dolt.port: 4407
 }
 
 func TestInitBeadsForDirLegacyRigIgnoresUnresolvableCityPostgres(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	clearAmbientPostgresEnv(t)
 
 	cityDir := t.TempDir()
@@ -3248,6 +3258,7 @@ dolt.auto-start: false
 }
 
 func TestInitBeadsForDirLegacyRigClearsResolvableCityPostgres(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	clearAmbientPostgresEnv(t)
 
 	cityDir := t.TempDir()
@@ -3454,6 +3465,7 @@ exit 0
 }
 
 func TestInitBeadsForDirExecGcBeadsBdPreservesCityRuntimeEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	logFile := filepath.Join(t.TempDir(), "env.log")
@@ -3688,6 +3700,7 @@ func TestInitBeadsForDir_execOmitsCanonicalDoltDatabaseWhenUnknown(t *testing.T)
 
 // TestInitBeadsForDir_bd_skip verifies bd provider is no-op when GC_DOLT=skip.
 func TestInitBeadsForDirExecGcBeadsBdPassesComputedCanonicalDoltDatabase(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	logFile := filepath.Join(t.TempDir(), "args.log")
@@ -3746,6 +3759,7 @@ func TestInitBeadsForDir_bd_skip(t *testing.T) {
 }
 
 func TestInitBeadsForDirBdMaterializedScriptPreservesCityPath(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
@@ -3794,6 +3808,7 @@ esac
 }
 
 func TestInitBeadsForDirBdMaterializedScriptIgnoresAmbientCityRuntimeEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityDir := t.TempDir()
 	writeMinimalCityToml(t, cityDir)
 	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
@@ -4355,6 +4370,8 @@ exit 1
 }
 
 func TestGcBeadsBdInitRetriesRootStoreVerification(t *testing.T) {
+	skipSlowCmdGCTest(t, "starts the real gc-beads-bd lifecycle script; run make test-cmd-gc-process for full coverage")
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	writeMinimalCityToml(t, cityPath)
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
@@ -4452,6 +4469,7 @@ esac
 }
 
 func TestInitAndHookDirExecGcBeadsBdProjectsCanonicalExternalCityEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	cityToml := `[workspace]
 name = "demo"
@@ -4502,6 +4520,7 @@ dolt.user: city-user
 }
 
 func TestInitAndHookDirExecGcBeadsBdProjectsCanonicalExplicitRigEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "frontend")
 	if err := os.MkdirAll(filepath.Join(rigPath, ".beads"), 0o755); err != nil {
@@ -4556,6 +4575,7 @@ dolt.user: rig-user
 }
 
 func TestInitAndHookDirExecGcBeadsBdProjectsInheritedExternalRigEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "frontend")
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
@@ -4628,6 +4648,7 @@ dolt.user: city-user
 }
 
 func TestHealthBeadsProviderExecGcBeadsBdProjectsCanonicalExternalCityEnv(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
 		t.Fatal(err)
@@ -4713,7 +4734,11 @@ func TestHealthBeadsProviderWaitsForStorePingAfterRecovery(t *testing.T) {
 	}
 
 	opsFile := filepath.Join(t.TempDir(), "provider-ops.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
+
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -4823,6 +4848,7 @@ func TestHealthBeadsProviderPublishesManagedRuntimeStateWhenHealthyButUnpublishe
 }
 
 func TestEnsureBeadsProviderExecGcBeadsBdProjectsCanonicalPackStateDir(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
 		t.Fatal(err)
@@ -4900,6 +4926,7 @@ dolt.port: 3307
 func TestInitAndHookDirExecGcBeadsBdCanonicalizesScopeFilesInGo(t *testing.T) {
 	cityPath := t.TempDir()
 	writeExecStoreCityConfig(t, cityPath, "demo", "gc", nil)
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 
 	captureFile := filepath.Join(t.TempDir(), "canonical-files-owned")
 	scriptDir := t.TempDir()
@@ -5302,6 +5329,7 @@ esac
 }
 
 func TestInitAndHookDirAdoptsAlreadyInitializedCanonicalExecBdStore(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	rigPath := filepath.Join(cityPath, "rigs", "tincan")
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
@@ -5576,6 +5604,7 @@ exec %q "$@"
 }
 
 func TestGcBeadsBdInitPinsManagedDoltEnvForBdSubcommands(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -10049,7 +10078,7 @@ dolt.auto-start: false
 func TestStartBeadsLifecycleFailsOnCanonicalCompatDoltDrift(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10357,6 +10386,7 @@ exit 0
 	`, callLog, providerState, providerState, os.Getpid(), port, filepath.Join(cityPath, ".beads", "dolt"))
 	script := writeManagedBdTestScript(t, scriptBody)
 	writeExecStoreCityConfig(t, cityPath, "test-city", "", []config.Rig{{Name: "rig", Path: rigPath, Prefix: "rg"}})
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	seedDeferredManagedBeads(cityPath, cityPath, "tc", "hq")
 	seedDeferredManagedBeads(cityPath, rigPath, "rg", "rg")
 	if err := writeDoltRuntimeStateFile(providerState, doltRuntimeState{
@@ -10397,9 +10427,10 @@ exit 0
 }
 
 func TestHealthBeadsProviderDoesNotRecoverExternalLoopbackTarget(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10446,7 +10477,7 @@ dolt.port: "4406"
 func TestShutdownBeadsProviderSkipsExternalLoopbackTarget(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10478,7 +10509,7 @@ dolt.port: "4406"
 func TestShutdownBeadsProviderExternalBdClearsStaleManagedRuntimeState(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10591,6 +10622,7 @@ dolt.auto-start: false
 // ── startBeadsLifecycle skips provider for external ───────────────────
 
 func TestStartBeadsLifecycleSkipsProviderForExternalHost(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	// Install a test script that tracks which operations are called.
 	// "start" should NOT be called (skipped by external host guard).
@@ -11495,7 +11527,7 @@ func writeBreakerAwarePreflightFakes(t *testing.T, cityPath, healthStderr string
 		t.Fatal(err)
 	}
 	opsFile := filepath.Join(t.TempDir(), "provider-ops.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -11518,6 +11550,7 @@ esac
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("GC_BEADS", "exec:"+script)
 	return opsFile
 }
 
@@ -11557,6 +11590,7 @@ func TestIsBreakerOpenError(t *testing.T) {
 }
 
 func TestHealthBeadsProviderSkipsRecoverWhenBreakerOpen(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	writeMinimalCityToml(t, cityPath)
 	opsFile := writeBreakerAwarePreflightFakes(t, cityPath,
@@ -11587,6 +11621,7 @@ func TestHealthBeadsProviderSkipsRecoverWhenBreakerOpen(t *testing.T) {
 }
 
 func TestHealthBeadsProviderBacksOffSecondRecoverWithinCooldown(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	writeMinimalCityToml(t, cityPath)
 	opsFile := writeBreakerAwarePreflightFakes(t, cityPath, "unhealthy")
@@ -11627,6 +11662,7 @@ func TestHealthBeadsProviderBacksOffSecondRecoverWithinCooldown(t *testing.T) {
 }
 
 func TestHealthBeadsProviderAllowsRecoverAfterCooldown(t *testing.T) {
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	cityPath := t.TempDir()
 	writeMinimalCityToml(t, cityPath)
 	opsFile := writeBreakerAwarePreflightFakes(t, cityPath, "unhealthy")

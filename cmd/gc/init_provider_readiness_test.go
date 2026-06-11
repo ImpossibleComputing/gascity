@@ -1432,6 +1432,7 @@ func TestGCDoltSkipTrimsWhitespace(t *testing.T) {
 
 func TestCheckDoltAuthorIdentityReportsPartialMissingKey(t *testing.T) {
 	clearInheritedBeadsEnv(t)
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	t.Setenv("GC_BEADS", "bd")
 	stubInitDependencyChecks(t)
 	stubInitDoltAuthorIdentity(t, map[string]string{"user.name": "Test User"})
@@ -1589,6 +1590,7 @@ dolt.auto-start: false
 
 func TestCheckDoltAuthorIdentityUsesCanonicalManagedCityOverStaleExternalConfig(t *testing.T) {
 	clearInheritedBeadsEnv(t)
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	stubInitDependencyChecks(t)
 
 	cityDir := t.TempDir()
@@ -1627,6 +1629,7 @@ dolt.auto-start: false
 
 func TestCheckDoltAuthorIdentityReportsProbeErrorsSeparately(t *testing.T) {
 	clearInheritedBeadsEnv(t)
+	t.Setenv("GC_DOLT", "") // exercise real dolt lifecycle; global GC_DOLT=skip is overridden here
 	t.Setenv("GC_BEADS", "bd")
 	stubInitDependencyChecks(t)
 

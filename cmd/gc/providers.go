@@ -487,18 +487,19 @@ func scopedBeadsProviderOverride(cityPath, scopeRoot string) (string, bool) {
 	return "", false
 }
 
-// normalizeRawBeadsProvider maps the city-managed gc-beads-bd wrapper back to
+// normalizeRawBeadsProvider maps the gc-managed gc-beads-bd wrapper back to
 // the logical "bd" provider for command-time store selection. Managed sessions
-// set GC_BEADS=exec:<cityPath>/.gc/system/packs/bd/assets/scripts/gc-beads-bd.sh
+// set GC_BEADS=exec:<bundled-cache>/examples/bd/assets/scripts/gc-beads-bd.sh
 // so lifecycle operations stay pinned to the city's Dolt server, but general
-// gc commands still need a CRUD-capable store.
+// gc commands still need a CRUD-capable store. Legacy city-local script paths
+// are still accepted for older sessions and tests.
 func normalizeRawBeadsProvider(cityPath, provider string) string {
 	provider = strings.TrimSpace(provider)
 	if provider == "" || !strings.HasPrefix(provider, "exec:") || execProviderBase(provider) != "gc-beads-bd" || cityPath == "" {
 		return provider
 	}
 	script := strings.TrimSpace(strings.TrimPrefix(provider, "exec:"))
-	if samePath(script, gcBeadsBdScriptPath(cityPath)) || samePath(script, legacyGcBeadsBdScriptPath(cityPath)) {
+	if isManagedGcBeadsBdScriptPath(cityPath, script) {
 		return "bd"
 	}
 	return provider
@@ -644,9 +645,9 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 }
 
 // beadsProvider returns the bead store provider name for lifecycle operations.
-// Maps "bd" → "exec:<cityPath>/.gc/system/packs/bd/assets/scripts/gc-beads-bd.sh"
-// so all lifecycle operations route through the exec: protocol. Other providers
-// pass through unchanged.
+// Maps "bd" to the bundled-cache gc-beads-bd script so all lifecycle operations
+// route through the exec: protocol without materializing pack content under the
+// city .gc directory. Other providers pass through unchanged.
 //
 // Related env vars:
 //   - GC_DOLT=skip — the gc-beads-bd script checks this and exits 2 for all
@@ -654,13 +655,50 @@ func bdProviderMismatchHint(scopeRoot, resolvedProvider string) string {
 func beadsProvider(cityPath string) string {
 	raw := rawBeadsProvider(cityPath)
 	if raw == "bd" {
+		if script, err := managedGcBeadsBdScriptPath(); err == nil {
+			return "exec:" + script
+		}
 		return "exec:" + gcBeadsBdScriptPath(cityPath)
 	}
 	return raw
 }
 
-// gcBeadsBdScriptPath returns the absolute path to the gc-beads-bd script
-// inside the materialized bd pack (.gc/system/packs/bd/assets/scripts/).
+var resolveManagedGcBeadsBdScriptPath = defaultManagedGcBeadsBdScriptPath
+
+func managedGcBeadsBdScriptPath() (string, error) {
+	return resolveManagedGcBeadsBdScriptPath()
+}
+
+func defaultManagedGcBeadsBdScriptPath() (string, error) {
+	packDir, err := ensureBuiltinPackCached("bd")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(packDir, "assets", "scripts", "gc-beads-bd.sh"), nil
+}
+
+func cachedGcBeadsBdScriptPath() (string, error) {
+	packDir, err := bundledBuiltinPackDir("bd")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(packDir, "assets", "scripts", "gc-beads-bd.sh"), nil
+}
+
+func isManagedGcBeadsBdScriptPath(cityPath, script string) bool {
+	if samePath(script, gcBeadsBdScriptPath(cityPath)) || samePath(script, legacyGcBeadsBdScriptPath(cityPath)) {
+		return true
+	}
+	managed, err := managedGcBeadsBdScriptPath()
+	if err == nil && samePath(script, managed) {
+		return true
+	}
+	cached, err := cachedGcBeadsBdScriptPath()
+	return err == nil && samePath(script, cached)
+}
+
+// gcBeadsBdScriptPath returns the legacy city-local gc-beads-bd script path.
+// Production managed providers use managedGcBeadsBdScriptPath instead.
 func gcBeadsBdScriptPath(cityPath string) string {
 	return filepath.Join(cityPath, citylayout.SystemPacksRoot, "bd", "assets", "scripts", "gc-beads-bd.sh")
 }

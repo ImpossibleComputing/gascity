@@ -31,7 +31,8 @@ case "$1" in
 ` + cases.String() + `  *) exit 0 ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(scriptDir, "gc-beads-bd.sh"), []byte(body), 0o755); err != nil {
+	scriptPath := filepath.Join(scriptDir, "gc-beads-bd.sh")
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		t.Fatalf("write fake bd script: %v", err)
 	}
 	enospcHelper := `#!/bin/sh
@@ -67,6 +68,7 @@ func runRestartWithEnv(t *testing.T, cityPath, root string, extraEnv []string, a
 		"PATH="+os.Getenv("PATH"),
 		"GC_CITY_PATH="+cityPath,
 		"GC_PACK_DIR="+root,
+		"GC_BEADS_BD_SCRIPT="+filepath.Join(cityPath, ".gc", "system", "packs", "bd", "assets", "scripts", "gc-beads-bd.sh"),
 		"GC_DOLT_USER=root",
 		"GC_DOLT_PASSWORD=",
 	)

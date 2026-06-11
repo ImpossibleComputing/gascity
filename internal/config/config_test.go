@@ -6297,9 +6297,11 @@ func TestInjectImplicitAgents_NoProviders(t *testing.T) {
 func TestInjectImplicitAgents_WorkspaceProvider(t *testing.T) {
 	// workspace.provider selects a default but the provider catalog creates
 	// implicit agents.
+	corePack := filepath.Join(t.TempDir(), "core")
 	cfg := &City{
 		Daemon:    DaemonConfig{FormulaV2: true},
 		Workspace: Workspace{Provider: "claude"},
+		PackDirs:  []string{corePack},
 		Providers: map[string]ProviderSpec{
 			"claude": BuiltinProviderAlias("claude"),
 		},
@@ -6315,6 +6317,13 @@ func TestInjectImplicitAgents_WorkspaceProvider(t *testing.T) {
 	}
 	if !a.Implicit {
 		t.Error("Implicit = false, want true")
+	}
+	wantPrompt := filepath.Join(corePack, "assets", "prompts", "pool-worker.md")
+	if a.PromptTemplate != wantPrompt {
+		t.Errorf("PromptTemplate = %q, want %q", a.PromptTemplate, wantPrompt)
+	}
+	if strings.Contains(a.PromptTemplate, citylayout.SystemPacksRoot) {
+		t.Errorf("PromptTemplate = %q, should not depend on city-local system packs", a.PromptTemplate)
 	}
 	if got := cfg.Agents[1].Name; got != ControlDispatcherAgentName {
 		t.Errorf("agent[1].Name = %q, want %q", got, ControlDispatcherAgentName)

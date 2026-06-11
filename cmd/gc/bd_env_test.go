@@ -140,7 +140,7 @@ func TestRecoverManagedBDCommandUsesNativeOpenEnvSnapshotGuard(t *testing.T) {
 
 	cityPath := t.TempDir()
 	capture := filepath.Join(t.TempDir(), "recover-env.txt")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +148,9 @@ func TestRecoverManagedBDCommandUsesNativeOpenEnvSnapshotGuard(t *testing.T) {
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return script, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
 
 	if err := recoverManagedBDCommand(cityPath); err != nil {
 		t.Fatalf("recoverManagedBDCommand: %v", err)
@@ -374,7 +377,7 @@ func TestRecoverManagedBDCommandDisablesCLIRemoteSync(t *testing.T) {
 
 	cityPath := t.TempDir()
 	envFile := filepath.Join(cityPath, "recover-env.txt")
-	scriptPath := gcBeadsBdScriptPath(cityPath)
+	scriptPath := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -384,6 +387,9 @@ func TestRecoverManagedBDCommandDisablesCLIRemoteSync(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return scriptPath, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
 
 	if err := recoverManagedBDCommand(cityPath); err != nil {
 		t.Fatalf("recoverManagedBDCommand() error = %v", err)
@@ -464,7 +470,7 @@ func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 
 	cityPath := t.TempDir()
 	envFile := filepath.Join(cityPath, "recover-env.txt")
-	scriptPath := gcBeadsBdScriptPath(cityPath)
+	scriptPath := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -474,6 +480,9 @@ func TestRecoverManagedBDCommandDisablesAutoBackup(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	prevResolver := resolveManagedGcBeadsBdScriptPath
+	resolveManagedGcBeadsBdScriptPath = func() (string, error) { return scriptPath, nil }
+	t.Cleanup(func() { resolveManagedGcBeadsBdScriptPath = prevResolver })
 
 	if err := recoverManagedBDCommand(cityPath); err != nil {
 		t.Fatalf("recoverManagedBDCommand() error = %v", err)
@@ -2074,6 +2083,7 @@ func TestBdCommandRunnerForCityPinsCityStoreEnv(t *testing.T) {
 
 func TestBdCommandRunnerForCityClearsAmbientDoltEnvWhenManagedRuntimeUnavailable(t *testing.T) {
 	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("GC_DOLT", "skip")
 	t.Setenv("GC_DOLT_HOST", "ambient.invalid")
 	t.Setenv("GC_DOLT_PORT", "9999")
 	t.Setenv("GC_DOLT_USER", "ambient-user")

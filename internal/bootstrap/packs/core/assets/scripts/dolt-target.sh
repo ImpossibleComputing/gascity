@@ -170,10 +170,12 @@ if ! core_city_has_dolt_target; then
     exit 0
 fi
 
-DOLT_SYSTEM_PACKS_DIR="${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}"
-DOLT_PORT_RESOLVE_SCRIPT="$DOLT_SYSTEM_PACKS_DIR/dolt/assets/scripts/port_resolve.sh"
-if [ ! -f "$DOLT_PORT_RESOLVE_SCRIPT" ]; then
-    DOLT_PORT_RESOLVE_SCRIPT="$DOLT_SYSTEM_PACKS_DIR/bd/dolt/assets/scripts/port_resolve.sh"
+DOLT_PORT_RESOLVE_SCRIPT=""
+if [ -n "${GC_PACK_DIR:-}" ] && [ -f "$GC_PACK_DIR/../dolt/assets/scripts/port_resolve.sh" ]; then
+    DOLT_PORT_RESOLVE_SCRIPT=$(CDPATH= cd -- "$GC_PACK_DIR/../dolt/assets/scripts" && pwd)/port_resolve.sh
+fi
+if [ -z "$DOLT_PORT_RESOLVE_SCRIPT" ]; then
+    DOLT_PORT_RESOLVE_SCRIPT="${GC_SYSTEM_PACKS_DIR:-$GC_CITY_PATH/.gc/system/packs}/dolt/assets/scripts/port_resolve.sh"
 fi
 if [ ! -f "$DOLT_PORT_RESOLVE_SCRIPT" ] && [ -n "${SCRIPT_DIR:-}" ]; then
     DOLT_SOURCE_SCRIPT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../../../../../examples/bd/dolt/assets/scripts" 2>/dev/null && pwd || true)

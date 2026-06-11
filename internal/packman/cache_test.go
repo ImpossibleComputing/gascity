@@ -23,6 +23,7 @@ func TestRepoCacheKeyDeterministic(t *testing.T) {
 
 func TestRepoCachePathUsesHome(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("GC_HOME", "")
 	t.Setenv("HOME", home)
 	got, err := RepoCachePath("https://github.com/example/repo", "abc123")
 	if err != nil {
@@ -30,6 +31,24 @@ func TestRepoCachePathUsesHome(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, filepath.Join(home, ".gc", "cache", "repos")) {
 		t.Fatalf("RepoCachePath = %q", got)
+	}
+}
+
+func TestRepoCachePathUsesGCHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	gcHome := filepath.Join(t.TempDir(), "gc-home")
+	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", gcHome)
+
+	got, err := RepoCachePath("https://github.com/example/repo", "abc123")
+	if err != nil {
+		t.Fatalf("RepoCachePath: %v", err)
+	}
+	if !strings.HasPrefix(got, filepath.Join(gcHome, "cache", "repos")) {
+		t.Fatalf("RepoCachePath = %q, want under GC_HOME %q", got, gcHome)
+	}
+	if strings.Contains(got, home) {
+		t.Fatalf("RepoCachePath = %q, unexpectedly used HOME %q", got, home)
 	}
 }
 

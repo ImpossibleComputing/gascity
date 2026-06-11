@@ -134,7 +134,7 @@ Baseline:
   baseline so the LLM iterates on a known-good shape rather than
   designing from scratch. Resolution priority:
     1. <city>/agents/<role>/prompt.template.md     (user customization)
-    2. <city>/.gc/system/packs/*/agents/<role>/    (pack default)
+    2. loaded pack dirs with agents/<role>/          (pack default)
     3. embedded prompts/<role>.md                  (built-in fallback)
     4. embedded prompts/mayor.md                   (structural reference,
                                                      used only when no
@@ -263,7 +263,7 @@ func buildMetaPromptCtx(opts promptSynthOpts, cfg *config.City, cityPath, role, 
 	} else {
 		mctx.ContextType = "city"
 	}
-	mctx.Baseline, mctx.BaselineSource, mctx.HasOwnBaseline = loadBaselinePrompt(cityPath, role)
+	mctx.Baseline, mctx.BaselineSource, mctx.HasOwnBaseline = loadBaselinePrompt(cityPath, cfg.PackDirsForRig(mctx.RigName), role)
 	return mctx, nil
 }
 
@@ -595,10 +595,10 @@ func knownRigNames(rigs []config.Rig) string {
 //
 // Resolution priority:
 //  1. <cityPath>/agents/<role>/prompt.template.md (user customization)
-//  2. <cityPath>/.gc/system/packs/<any>/agents/<role>/prompt.template.md (pack default)
+//  2. <packDir>/agents/<role>/prompt.template.md (pack default)
 //  3. embedded prompts/<role>.md (built-in fallback, only mayor today)
 //  4. embedded prompts/mayor.md (structural reference, last resort)
-func loadBaselinePrompt(cityPath, role string) (content, source string, ownToRole bool) {
+func loadBaselinePrompt(cityPath string, packDirs []string, role string) (content, source string, ownToRole bool) {
 	if role == "" {
 		return "", "", false
 	}
@@ -609,15 +609,22 @@ func loadBaselinePrompt(cityPath, role string) (content, source string, ownToRol
 		return string(data), fmt.Sprintf("city customization at agents/%s/prompt.template.md", role), true
 	}
 
-	// 2. Pack defaults — scan all materialized packs.
-	packGlob := filepath.Join(cityPath, ".gc", "system", "packs", "*", "agents", role, "prompt.template.md")
-	if matches, err := filepath.Glob(packGlob); err == nil {
-		sort.Strings(matches)
-		for _, m := range matches {
-			if data, err := os.ReadFile(m); err == nil {
-				rel, _ := filepath.Rel(cityPath, m)
-				return string(data), "pack default at " + rel, true
+	// 2. Pack defaults from the already-loaded pack graph.
+	matches := make([]string, 0, len(packDirs))
+	for _, packDir := range packDirs {
+		if strings.TrimSpace(packDir) == "" {
+			continue
+		}
+		matches = append(matches, filepath.Join(packDir, "agents", role, "prompt.template.md"))
+	}
+	sort.Strings(matches)
+	for _, m := range matches {
+		if data, err := os.ReadFile(m); err == nil {
+			sourcePath := m
+			if rel, relErr := filepath.Rel(cityPath, m); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				sourcePath = rel
 			}
+			return string(data), "pack default at " + sourcePath, true
 		}
 	}
 

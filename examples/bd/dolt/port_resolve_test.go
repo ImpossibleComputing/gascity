@@ -260,8 +260,12 @@ func assertScriptSourcesPortResolveOnce(t *testing.T, scriptPath string) {
 	if err != nil {
 		t.Fatalf("read %s: %v", scriptPath, err)
 	}
-	re := regexp.MustCompile(`(?m)^\.\s+.*port_resolve\.sh`)
-	matches := re.FindAllString(string(data), -1)
+	body := string(data)
+	if !strings.Contains(body, "port_resolve.sh") {
+		t.Fatalf("%s does not reference port_resolve.sh", scriptPath)
+	}
+	re := regexp.MustCompile(`(?m)^\.\s+(?:.*port_resolve\.sh|"?\$DOLT_PORT_RESOLVE_SCRIPT"?)`)
+	matches := re.FindAllString(body, -1)
 	if len(matches) != 1 {
 		t.Fatalf("%s port_resolve.sh source count = %d, want 1\nmatches: %s", scriptPath, len(matches), strings.Join(matches, "\n"))
 	}

@@ -1,5 +1,4 @@
-# Bundled with the gc binary and materialized into each city at
-# .gc/system/packs/core.
+# Bundled with the gc binary and loaded from the shared bundled pack cache.
 #
 # This is the single builtin pack every city needs. `gc init` writes an
 # explicit include for it into city.toml and `gc doctor --fix` repairs a
@@ -13,8 +12,8 @@
 # workers (for example gastown's dog pool or the dolt pack's dog) define
 # their own.
 #
-# Inspect this directory after `gc init` or `gc start` to see the exact
-# behavior your city received from the bundled core pack.
+# Inspect the bundled pack cache to see the exact behavior your city received
+# from the core pack.
 [pack]
 name = "core"
 version = "0.1.0"

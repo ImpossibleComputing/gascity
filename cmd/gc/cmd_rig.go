@@ -11,7 +11,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads/contract"
-	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/builtinpacks"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/git"
@@ -257,13 +257,6 @@ func doRigAddWithResult(fs fsys.FS, cityPath, rigPath string, includes []string,
 		fmt.Fprintf(stderr, "gc rig add: loading config: %v\n", err) //nolint:errcheck // best-effort stderr
 		return config.Rig{}, 1
 	}
-
-	// Canonicalize --include tokens that name a materialized builtin pack so the
-	// flag honors its --help promise of "canonical rig imports". Done after the
-	// config load (so [packs] references are honored) but before the imports are
-	// built and the re-add comparison below, so both the written city.toml and
-	// that comparison use the resolvable path (gascity#3137).
-	includes = canonicalizeBuiltinPackIncludes(fs, cityPath, includes, cfg.Packs)
 
 	explicitRigImports := boundImportsFromLegacySources(includes, cfg.Packs)
 	if cityUsesBdStoreContract(cityPath) && cityDoltConfigHasLifecycleFields(cfg.Dolt) {
@@ -624,49 +617,91 @@ func formatBoundImports(imports []config.BoundImport) string {
 	return strings.Join(parts, ", ")
 }
 
-// canonicalizeBuiltinPackIncludes rewrites --include tokens that name a
-// materialized builtin pack to the resolvable .gc/system/packs/<name> path.
-// Builtin packs are materialized under .gc/system/packs and are not registered
-// in [packs], so a bare "<name>" or "packs/<name>" token (the form documented in
-// `gc rig add --help`) would otherwise be persisted as the non-resolvable literal
-// "./<token>", breaking pack expansion citywide (gascity#3137). Only tokens whose
-// pack is actually materialized (.gc/system/packs/<name>/pack.toml exists) are
-// rewritten; everything else is returned unchanged so genuine local-path imports
-// are preserved. A token whose raw form or derived single-segment name is a key
-// in packs is left unchanged so an explicitly configured [packs] reference keeps
-// its configured source rather than being shadowed by the builtin.
-func canonicalizeBuiltinPackIncludes(fs fsys.FS, cityPath string, includes []string, packs map[string]config.PackSource) []string {
-	out := make([]string, len(includes))
-	for i, inc := range includes {
-		out[i] = inc
-		tok := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(inc)), "./")
-		name := tok
-		if rest, ok := strings.CutPrefix(tok, "packs/"); ok {
-			name = rest
-		}
-		// Only accept a single-segment pack name; arbitrary nested paths are
-		// treated as real local imports, not builtin-pack references.
-		if name == "" || strings.Contains(name, "/") {
-			continue
-		}
-		// Don't shadow an explicitly configured [packs] reference: a token
-		// that names a registered pack keeps its configured source.
-		if _, ok := packs[tok]; ok {
-			continue
-		}
-		if _, ok := packs[name]; ok {
-			continue
-		}
-		packToml := filepath.Join(cityPath, filepath.FromSlash(citylayout.SystemPacksRoot), name, "pack.toml")
-		if _, err := fs.Stat(packToml); err == nil {
-			out[i] = citylayout.SystemPacksRoot + "/" + name
-		}
+func boundImportsFromLegacySources(sources []string, packs map[string]config.PackSource) []config.BoundImport {
+	if !hasBuiltinLegacyImportSource(sources, packs) {
+		return config.BoundImportsFromLegacySources(sources, packs)
 	}
-	return out
+	var bound []config.BoundImport
+	var remaining []string
+	for _, source := range sources {
+		binding, imp, ok := builtinImportFromLegacySource(source, packs)
+		if !ok {
+			remaining = append(remaining, source)
+			continue
+		}
+		bound = appendUniqueBoundImport(bound, config.BoundImport{Binding: binding, Import: imp})
+	}
+	for _, b := range config.BoundImportsFromLegacySources(remaining, packs) {
+		bound = appendUniqueBoundImport(bound, b)
+	}
+	slices.SortFunc(bound, func(a, b config.BoundImport) int {
+		return strings.Compare(a.Binding, b.Binding)
+	})
+	return bound
 }
 
-func boundImportsFromLegacySources(sources []string, packs map[string]config.PackSource) []config.BoundImport {
-	return config.BoundImportsFromLegacySources(sources, packs)
+func hasBuiltinLegacyImportSource(sources []string, packs map[string]config.PackSource) bool {
+	for _, source := range sources {
+		if _, _, ok := builtinImportFromLegacySource(source, packs); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func builtinImportFromLegacySource(source string, packs map[string]config.PackSource) (string, config.Import, bool) {
+	tok := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(source)), "./")
+	name := tok
+	if rest, ok := strings.CutPrefix(tok, "packs/"); ok {
+		name = rest
+	}
+	if name == "" || strings.Contains(name, "/") {
+		return "", config.Import{}, false
+	}
+	if _, ok := packs[tok]; ok {
+		return "", config.Import{}, false
+	}
+	if _, ok := packs[name]; ok {
+		return "", config.Import{}, false
+	}
+	importSource, ok := builtinpacks.Source(name)
+	if !ok {
+		return "", config.Import{}, false
+	}
+	commit, err := builtinPackSyntheticCommit()
+	if err != nil {
+		return "", config.Import{}, false
+	}
+	return name, config.Import{Source: importSource, Version: "sha:" + commit}, true
+}
+
+func appendUniqueBoundImport(bound []config.BoundImport, next config.BoundImport) []config.BoundImport {
+	for _, existing := range bound {
+		if existing.Import.Source == next.Import.Source && existing.Import.Version == next.Import.Version {
+			return bound
+		}
+	}
+	next.Binding = uniqueBoundImportBinding(bound, next.Binding)
+	return append(bound, next)
+}
+
+func uniqueBoundImportBinding(bound []config.BoundImport, base string) string {
+	if strings.TrimSpace(base) == "" {
+		base = "import"
+	}
+	used := make(map[string]struct{}, len(bound))
+	for _, existing := range bound {
+		used[existing.Binding] = struct{}{}
+	}
+	if _, ok := used[base]; !ok {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if _, ok := used[candidate]; !ok {
+			return candidate
+		}
+	}
 }
 
 func boundImportsFromImportMap(imports map[string]config.Import) []config.BoundImport {

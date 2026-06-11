@@ -1124,6 +1124,7 @@ func TestOrderDispatchResolvesImportedPackPoolAgainstSiblingImportCollision(t *t
 }
 
 func TestDoltPackDogOrdersResolveWithNonGastownMaintenanceBinding(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
 	cityDir := t.TempDir()
 	opsDir := filepath.Join(cityDir, "packs", "ops")
 	if err := os.MkdirAll(opsDir, 0o755); err != nil {
@@ -2374,6 +2375,7 @@ prefix = "ct"
 }
 
 func TestOrderDispatchExecManagedDoltUsesTrustedCityRuntimeDir(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	store := beads.NewMemStore()
 	cityDir := t.TempDir()
 	dataDir := filepath.Join(cityDir, ".beads", "dolt")
@@ -2446,6 +2448,7 @@ provider = "bd"
 }
 
 func TestOrderDispatchExecManagedDoltCoercesInCityRuntimeDirForControlTraceDefault(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	store := beads.NewMemStore()
 	cityDir := t.TempDir()
 	dataDir := filepath.Join(cityDir, ".beads", "dolt")
@@ -2729,6 +2732,7 @@ func TestOrderDispatchExecPropagatesManagedDoltLayout(t *testing.T) {
 }
 
 func TestOrderDispatchExecPropagatesLegacyManagedDoltDataDir(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	store := beads.NewMemStore()
 	cityDir := normalizePathForCompare(t.TempDir())
 	dataDir := normalizePathForCompare(filepath.Join(cityDir, ".gc", "dolt-data"))
@@ -2794,6 +2798,7 @@ func TestOrderDispatchExecPropagatesLegacyManagedDoltDataDir(t *testing.T) {
 }
 
 func TestOrderDispatchExecIgnoresPublishedRunningDataDirWithUnreachablePort(t *testing.T) {
+	t.Setenv("GC_DOLT", "skip")
 	store := beads.NewMemStore()
 	cityDir := t.TempDir()
 	staleDataDir := filepath.Join(t.TempDir(), "stale-published-dolt")

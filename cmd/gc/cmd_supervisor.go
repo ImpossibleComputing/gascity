@@ -2193,16 +2193,8 @@ func prepareCityForSupervisor(cityPath, cityName string, cfg *config.City, stder
 		return fmt.Errorf("validate services: %w", err)
 	}
 
-	// Refresh builtin packs after config validation so commands and managed
-	// provider assets are present before the bead lifecycle starts.
-	// gc-beads-bd now ships inside the bd pack's assets/scripts/ and is
-	// materialized alongside the rest of the pack content.
-	if err := MaterializeBuiltinPacks(cityPath); err != nil {
-		fmt.Fprintf(stderr, "gc supervisor: city '%s': builtin packs: %v\n", cityName, err) //nolint:errcheck
-		// Non-fatal.
-	}
-
-	// Install local agent hooks after builtin packs are refreshed.
+	// Install local agent hooks after config expansion has loaded bundled
+	// packs from the shared cache.
 	ensureInitArtifacts(cityPath, stderr, "gc supervisor")
 
 	// Resolve rig paths and start bead store lifecycle.

@@ -3361,6 +3361,7 @@ dolt.auto-start: false
 func TestSlingStoreEnvWithError_SurfacesPostgresProjectionError(t *testing.T) {
 	clearAmbientPostgresEnv(t)
 	t.Setenv("GC_BEADS", "bd")
+	t.Setenv("GC_DOLT", "skip")
 
 	cityDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityDir, ".beads"), 0o700); err != nil {

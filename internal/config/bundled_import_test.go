@@ -95,6 +95,30 @@ func TestResolveInstalledRemoteImportAcceptsBundledSyntheticCache(t *testing.T) 
 	}
 }
 
+func TestResolveInstalledRemoteImportUsesExplicitGCHome(t *testing.T) {
+	home, cityDir := setupBundledImportTest(t)
+	gcHome := filepath.Join(t.TempDir(), "gc-home")
+	t.Setenv("GC_HOME", gcHome)
+	source := bundledPackSource()
+	commit := "abc123def456abc123def456abc123def456abc123de"
+	writeBundledImportLock(t, cityDir, source, commit)
+	cacheDir := filepath.Join(gcHome, "cache", "repos", RepoCacheKey(source, commit))
+	if err := builtinpacks.MaterializeSyntheticRepo(cacheDir, commit); err != nil {
+		t.Fatalf("materialize synthetic repo: %v", err)
+	}
+
+	got, err := resolveInstalledRemoteImport(source, cityDir)
+	if err != nil {
+		t.Fatalf("resolveInstalledRemoteImport: %v", err)
+	}
+	if got != cacheDir {
+		t.Fatalf("cacheDir = %q, want %q", got, cacheDir)
+	}
+	if strings.HasPrefix(got, filepath.Join(home, ".gc", "cache", "repos")+string(filepath.Separator)) {
+		t.Fatalf("cacheDir = %q, unexpectedly used HOME %q", got, home)
+	}
+}
+
 func TestResolveImportPackRefAcceptsPublicGastownSyntheticCache(t *testing.T) {
 	home, cityDir := setupBundledImportTest(t)
 	source := PublicGastownPackSource
@@ -231,6 +255,7 @@ func setupBundledImportTest(t *testing.T) (home, cityDir string) {
 	dir := t.TempDir()
 	home = filepath.Join(dir, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("GC_HOME", "")
 	cityDir = filepath.Join(dir, "city")
 	mustMkdirAll(t, cityDir, 0o755)
 	return home, cityDir

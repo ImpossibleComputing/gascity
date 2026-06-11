@@ -186,6 +186,16 @@ func TestMain(m *testing.M) {
 	}
 
 	clearProcessLiveEnvForTests()
+	// Default test processes to dolt-skip mode. Tests that exercise the real
+	// dolt lifecycle (beads_provider_lifecycle_test.go and similar) override
+	// this with t.Setenv("GC_DOLT", "") for the duration of the test.
+	// Without this default, tests that call controllerQueryRuntimeEnv for a
+	// temp-dir city (e.g. buildDesiredState scale_check paths) trigger the
+	// bundled gc-beads-bd.sh health script, which starts a real dolt
+	// sql-server that leaks and fails the dolt-leak guard.
+	if err := os.Setenv("GC_DOLT", "skip"); err != nil {
+		panic(err)
+	}
 	if err := os.Setenv(managedDoltTestModeEnv, "1"); err != nil {
 		panic(err)
 	}
@@ -451,16 +461,13 @@ func TestFindCity(t *testing.T) {
 	})
 
 	t.Run("not_found", func(t *testing.T) {
-		// Use an explicit /tmp-rooted dir so the upward walk cannot
-		// accidentally hit a real .gc/ directory on the host (e.g.
-		// a running city under $HOME).
-		dir, err := os.MkdirTemp("/tmp", "gc-test-notfound-*")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
+		// Use t.TempDir() so the dir is within the testTempRoot ceiling (os.TempDir()
+		// is added as a discovery ceiling in implicitCityDiscoveryCeilings). A
+		// hardcoded /tmp path would walk past the ceiling on machines where /tmp/.gc
+		// exists (e.g. a running local city mounted at /tmp).
+		dir := t.TempDir()
 
-		_, err = findCity(dir)
+		_, err := findCity(dir)
 		if err == nil {
 			t.Fatal("findCity() should fail without city.toml or .gc/")
 		}
@@ -620,6 +627,27 @@ func TestFindCity(t *testing.T) {
 		_, err := findCity(ceiling)
 		if err == nil {
 			t.Fatal("findCity() should fail when only an ancestor above the ceiling has city.toml")
+		}
+		if !strings.Contains(err.Error(), "not in a city directory") {
+			t.Errorf("error = %q, want 'not in a city directory'", err)
+		}
+	})
+
+	t.Run("legacy_runtime_at_explicit_ceiling_is_not_city", func(t *testing.T) {
+		root := t.TempDir()
+		ceiling := filepath.Join(root, "ceiling")
+		if err := os.MkdirAll(filepath.Join(ceiling, ".gc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		child := filepath.Join(ceiling, "child")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GC_CEILING_DIRECTORIES", ceiling)
+
+		_, err := findCity(child)
+		if err == nil {
+			t.Fatal("findCity() should fail when only the discovery ceiling has .gc")
 		}
 		if !strings.Contains(err.Error(), "not in a city directory") {
 			t.Errorf("error = %q, want 'not in a city directory'", err)
@@ -6823,12 +6851,10 @@ max = 3
 }
 
 func TestDoPrimePoolAgentFallback(t *testing.T) {
-	// An explicit pool agent with no prompt_template reads the materialized
-	// pool-worker prompt from the materialized core system pack.
+	// An explicit pool agent with no prompt_template reads the pool-worker
+	// prompt from the cache-backed core builtin pack.
 	dir := t.TempDir()
-	if err := materializeBuiltinPrompts(dir); err != nil {
-		t.Fatalf("materializeBuiltinPrompts: %v", err)
-	}
+	t.Setenv("HOME", t.TempDir())
 	tomlContent := `[workspace]
 name = "test-city"
 
@@ -6870,13 +6896,14 @@ max = -1
 	if !strings.Contains(out, "GUPP") {
 		t.Error("pool-worker prompt missing GUPP")
 	}
+	if _, err := os.Stat(filepath.Join(dir, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("system packs root exists after gc prime: %v", err)
+	}
 }
 
 func TestDoPrimeFormulaV2GraphWorkerPromptClaimsRoutedWork(t *testing.T) {
 	dir := t.TempDir()
-	if err := materializeBuiltinPrompts(dir); err != nil {
-		t.Fatalf("materializeBuiltinPrompts: %v", err)
-	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GC_CITY", "")
 	t.Setenv("GC_CITY_PATH", "")
 	t.Setenv("GC_CITY_ROOT", "")
@@ -6926,10 +6953,9 @@ max = -1
 	if strings.Contains(out, "bd update <id> --claim") || strings.Contains(out, `ROOT_ID=$(bd show <id> --json`) {
 		t.Fatalf("graph-worker prompt still contains duplicated shell claim protocol:\n%s", out)
 	}
-}
-
-func materializeBuiltinPrompts(cityPath string) error {
-	return MaterializeBuiltinPacks(cityPath)
+	if _, err := os.Stat(filepath.Join(dir, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("system packs root exists after gc prime: %v", err)
+	}
 }
 
 func TestDoPrimeHookDoesNotCreateRuntimeSessionSidecar(t *testing.T) {

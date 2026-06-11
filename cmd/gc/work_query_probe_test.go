@@ -14,6 +14,7 @@ import (
 )
 
 func TestPrefixedWorkQueryForProbe_UsesNamedSessionRuntimeName(t *testing.T) {
+	clearGCEnv(t)
 	cityPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o700); err != nil {
 		t.Fatal(err)

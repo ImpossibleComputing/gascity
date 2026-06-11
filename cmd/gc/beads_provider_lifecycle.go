@@ -728,7 +728,7 @@ func ensureBeadsProvider(cityPath string) error {
 		defer release()
 
 		script := strings.TrimPrefix(provider, "exec:")
-		managedBDProvider := samePath(script, gcBeadsBdScriptPath(cityPath))
+		managedBDProvider := isManagedGcBeadsBdScriptPath(cityPath, script)
 		if managedBDProvider {
 			if err := standaloneBdDoltConflictIfPresent(cityPath); err != nil {
 				return err
