@@ -308,6 +308,7 @@ func (c *Client) waitForEvent(ctx context.Context, requestID string, successType
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("X-GC-Request", "true")
+	setSupervisorAPITokenHeader(req)
 
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
@@ -429,6 +430,7 @@ func newClient(baseURL, cityName string) *Client {
 		genclient.WithHTTPClient(httpClient),
 		genclient.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
 			req.Header.Set("X-GC-Request", "true")
+			setSupervisorAPITokenHeader(req)
 			return nil
 		}),
 	)

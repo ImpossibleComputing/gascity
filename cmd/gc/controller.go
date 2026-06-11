@@ -1335,6 +1335,10 @@ func runController(
 		// handler return 501 for create/unregister routes.
 		apiMux := api.NewSupervisorMux(&singleCityStateResolver{state: cs}, nil, readOnly, "controller", commit, time.Now())
 		apiMux.WithAnyHostAllowed()
+		if token := api.SupervisorAPITokenFromEnv(); token != "" {
+			apiMux.WithAPIToken(token)
+			fmt.Fprintf(stdout, "api: bearer-token auth enabled on mutation endpoints (%s)\n", api.SupervisorAPITokenEnv) //nolint:errcheck
+		}
 		addr := net.JoinHostPort(bind, strconv.Itoa(cfg.API.Port))
 		apiLis, apiErr := net.Listen("tcp", addr)
 		if apiErr != nil {

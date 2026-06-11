@@ -1136,6 +1136,10 @@ func runSupervisor(stdout, stderr io.Writer) int {
 	if len(supCfg.Supervisor.AllowedHosts) > 0 {
 		apiMux.WithAllowedHosts(supCfg.Supervisor.AllowedHosts)
 	}
+	if token := api.SupervisorAPITokenFromEnv(); token != "" {
+		apiMux.WithAPIToken(token)
+		fmt.Fprintf(stdout, "gc supervisor: api: bearer-token auth enabled on mutation endpoints (%s)\n", api.SupervisorAPITokenEnv) //nolint:errcheck
+	}
 
 	pprofSrv, pprofErr := api.StartPprof("")
 	if pprofErr != nil {

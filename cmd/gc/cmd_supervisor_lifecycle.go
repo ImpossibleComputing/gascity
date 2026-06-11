@@ -24,6 +24,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/processenv"
 	"github.com/gastownhall/gascity/internal/processgroup"
@@ -941,6 +942,7 @@ var supervisorServiceEnvKeys = map[string]bool{
 	"GC_DOLT_LOGLEVEL":                         true,
 	"GC_DOLT_PASSWORD":                         true,
 	"GC_DOLT_USER":                             true,
+	api.SupervisorAPITokenEnv:                  true,
 	"T3_HOME":                                  true,
 	"T3_WS_URL":                                true,
 	"T3CODE_HOME":                              true,

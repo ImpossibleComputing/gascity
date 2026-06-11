@@ -61,6 +61,10 @@ var (
 		status: http.StatusMisdirectedRequest,
 		body:   []byte(`{"status":421,"title":"Misdirected Request","detail":"host_not_allowed: supervisor Host header is not allowed"}`),
 	}
+	problemAPITokenRequired = problemBody{
+		status: http.StatusUnauthorized,
+		body:   []byte(`{"status":401,"title":"Unauthorized","detail":"unauthorized: mutation endpoints require Authorization: Bearer <token> (GC_SUPERVISOR_API_TOKEN is configured on this supervisor)"}`),
+	}
 )
 
 type dataSourceKey struct{}

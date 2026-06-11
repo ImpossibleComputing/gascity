@@ -113,6 +113,7 @@ type SupervisorMux struct {
 	allowedOrigins []string
 	allowedHosts   []string
 	allowAnyHost   bool
+	apiToken       string
 	server         *http.Server
 
 	// Single Huma API (Phase 3.5 — Topology 1). Owns every typed
@@ -199,13 +200,17 @@ func (sm *SupervisorMux) serveCitySvcProxy(w http.ResponseWriter, r *http.Reques
 //     Server's own middleware stack.
 //   - /svc/* paths bypass CSRF/read-only entirely (workspace services apply
 //     their own publication rules).
+//   - Bearer-token auth (withBearerTokenAuth, active only when an API token
+//     is configured) runs innermost at the mux level so it gates every
+//     mutating request uniformly — Huma operations and /svc/* alike — after
+//     Host validation (421 wins) and CORS preflight handling.
 func (sm *SupervisorMux) Handler() http.Handler {
 	root := http.HandlerFunc(sm.ServeHTTP)
 	audit := requestAuditConfig{
 		recorder:       sm.supervisorEventRecorder(),
 		allowedOrigins: sm.allowedOrigins,
 	}
-	return withLogging(withRecovery(withRequestID(withHostAllowing(sm.allowAnyHost, sm.allowedHosts, audit, withCORSAllowing(sm.allowedOrigins, root)))), audit)
+	return withLogging(withRecovery(withRequestID(withHostAllowing(sm.allowAnyHost, sm.allowedHosts, audit, withCORSAllowing(sm.allowedOrigins, withBearerTokenAuth(sm.apiToken, root))))), audit)
 }
 
 // WithAllowedOrigins sets extra CORS origins accepted beyond localhost and
@@ -221,6 +226,17 @@ func (sm *SupervisorMux) WithAllowedOrigins(origins []string) *SupervisorMux {
 // Serve.
 func (sm *SupervisorMux) WithAllowedHosts(hosts []string) *SupervisorMux {
 	sm.allowedHosts = hosts
+	sm.server = &http.Server{Handler: sm.Handler()}
+	return sm
+}
+
+// WithAPIToken sets a shared bearer token required on every mutating
+// (POST/PUT/PATCH/DELETE) request — Huma operations and the /svc/* proxy
+// alike — and rebuilds the internal http.Server handler. Reads stay open.
+// An empty token disables token auth (the default). Must be called before
+// Serve.
+func (sm *SupervisorMux) WithAPIToken(token string) *SupervisorMux {
+	sm.apiToken = token
 	sm.server = &http.Server{Handler: sm.Handler()}
 	return sm
 }

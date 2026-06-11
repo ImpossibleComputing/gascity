@@ -828,6 +828,25 @@ func TestBuildSupervisorServiceDataForwardsCuratedProviderCredentialEnvKeys(t *t
 	}
 }
 
+func TestBuildSupervisorServiceDataPersistsSupervisorAPIToken(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
+	t.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+	t.Setenv("XDG_RUNTIME_DIR", "/tmp/gc-run")
+	t.Setenv(api.SupervisorAPITokenEnv, "service-token-probe")
+
+	data, err := buildSupervisorServiceData()
+	if err != nil {
+		t.Fatalf("buildSupervisorServiceData: %v", err)
+	}
+	got := supervisorServiceEnvMap(data.ExtraEnv)
+	if got[api.SupervisorAPITokenEnv] != "service-token-probe" {
+		t.Errorf("ExtraEnv[%s] = %q, want %q — token must survive launchd/systemd service start",
+			api.SupervisorAPITokenEnv, got[api.SupervisorAPITokenEnv], "service-token-probe")
+	}
+}
+
 func TestBuildSupervisorServiceDataReadsAllowlistedDoltCredentialKeysFromLaunchctl(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
