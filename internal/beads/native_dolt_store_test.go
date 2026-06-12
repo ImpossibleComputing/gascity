@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	beadslib "github.com/steveyegge/beads"
 )
 
@@ -124,6 +126,72 @@ func TestNativeDoltStoreCreateGetPreservesNoHistory(t *testing.T) {
 	}
 	if got.Ephemeral {
 		t.Fatalf("got.Ephemeral = true, want false for no-history bead")
+	}
+}
+
+func TestRepairDependenciesIDDefault(t *testing.T) {
+	const columnDefaultQuery = "SELECT COLUMN_DEFAULT"
+	queryErr := errors.New("query failed")
+
+	tests := []struct {
+		name    string
+		arrange func(sqlmock.Sqlmock)
+		wantErr error
+	}{
+		{
+			name: "no-op when default already present",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(columnDefaultQuery).
+					WillReturnRows(sqlmock.NewRows([]string{"COLUMN_DEFAULT"}).AddRow("(uuid())"))
+			},
+		},
+		{
+			name: "repairs when default missing",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(columnDefaultQuery).
+					WillReturnRows(sqlmock.NewRows([]string{"COLUMN_DEFAULT"}).AddRow(nil))
+				mock.ExpectExec("ALTER TABLE dependencies ALTER id SET DEFAULT").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("CALL DOLT_COMMIT").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			},
+		},
+		{
+			name: "no-op when dependencies table absent",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(columnDefaultQuery).WillReturnError(sql.ErrNoRows)
+			},
+		},
+		{
+			name: "propagates query failure",
+			arrange: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(columnDefaultQuery).WillReturnError(queryErr)
+			},
+			wantErr: queryErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			tt.arrange(mock)
+
+			err = repairDependenciesIDDefault(t.Context(), db)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("repairDependenciesIDDefault error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("repairDependenciesIDDefault: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("SQL expectations were not met: %v", err)
+			}
+		})
 	}
 }
 

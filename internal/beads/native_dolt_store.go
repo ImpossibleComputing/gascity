@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,45 @@ import (
 
 	beadslib "github.com/steveyegge/beads"
 )
+
+// rawDBGetter matches beadslib's internal storage.RawDBAccessor without
+// importing its internal package. DoltStore satisfies this interface.
+type rawDBGetter interface {
+	DB() *sql.DB
+}
+
+// repairDependenciesIDDefault ensures the dependencies.id column has DEFAULT
+// (uuid()). Migration 0043 adds it via PREPARE/EXECUTE, which Dolt silently
+// strips the expression default on some versions. Without the default the
+// beadslib INSERT fails with "Field 'id' doesn't have a default value" because
+// the library never supplies id explicitly, relying on the expression default.
+// This repair is idempotent: it checks INFORMATION_SCHEMA before altering.
+func repairDependenciesIDDefault(ctx context.Context, db *sql.DB) error {
+	var colDefault sql.NullString
+	err := db.QueryRowContext(ctx, `
+		SELECT COLUMN_DEFAULT
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = 'dependencies'
+		  AND COLUMN_NAME = 'id'
+	`).Scan(&colDefault)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking dependencies.id default: %w", err)
+	}
+	if colDefault.Valid {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, "ALTER TABLE dependencies ALTER id SET DEFAULT (uuid())"); err != nil {
+		return fmt.Errorf("repairing dependencies.id default: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "CALL DOLT_COMMIT('-Am', 'fix: restore dependencies.id DEFAULT (uuid())')"); err != nil {
+		return fmt.Errorf("committing dependencies.id default repair: %w", err)
+	}
+	return nil
+}
 
 const nativeDoltStoreActor = "gascity"
 
@@ -162,6 +202,12 @@ func newNativeDoltStoreAt(parent context.Context, scopeRoot string, env map[stri
 	if err != nil {
 		_ = storage.Close()
 		return nil, fmt.Errorf("reading native issue prefix: %w", err)
+	}
+	if accessor, ok := storage.(rawDBGetter); ok {
+		if repairErr := repairDependenciesIDDefault(ctx, accessor.DB()); repairErr != nil {
+			// Log but don't fail: the error will surface on the first DepAdd.
+			fmt.Fprintf(os.Stderr, "WARNING: gc beads: %v\n", repairErr)
+		}
 	}
 	return newNativeDoltStoreWithStorageAndPrefix(storage, nativeDoltStoreActor, prefix), nil
 }
