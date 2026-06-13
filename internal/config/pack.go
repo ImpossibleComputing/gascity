@@ -46,16 +46,17 @@ type PackConfig struct {
 	// Agents holds legacy inline agent templates accepted by the current
 	// loader. New PackV2 packs should define agents under
 	// agents/<name>/agent.toml instead.
-	Agents        []Agent                 `toml:"agent,omitempty"`
-	NamedSessions []NamedSession          `toml:"named_session,omitempty"`
-	Services      []Service               `toml:"service,omitempty"`
-	Providers     map[string]ProviderSpec `toml:"providers,omitempty"`
-	Formulas      FormulasConfig          `toml:"formulas,omitempty" jsonschema:"-"`
-	Patches       PackPatches             `toml:"patches,omitempty"`
-	Doctor        []PackDoctorEntry       `toml:"doctor,omitempty"`
-	Commands      []PackCommandEntry      `toml:"commands,omitempty"`
-	Global        PackGlobal              `toml:"global,omitempty"`
-	Pricing       []pricing.ModelPricing  `toml:"pricing,omitempty"`
+	Agents        []Agent                     `toml:"agent,omitempty"`
+	NamedSessions []NamedSession              `toml:"named_session,omitempty"`
+	Services      []Service                   `toml:"service,omitempty"`
+	Providers     map[string]ProviderSpec     `toml:"providers,omitempty"`
+	Runtimes      map[string]PackRuntimeEntry `toml:"runtimes,omitempty"`
+	Formulas      FormulasConfig              `toml:"formulas,omitempty" jsonschema:"-"`
+	Patches       PackPatches                 `toml:"patches,omitempty"`
+	Doctor        []PackDoctorEntry           `toml:"doctor,omitempty"`
+	Commands      []PackCommandEntry          `toml:"commands,omitempty"`
+	Global        PackGlobal                  `toml:"global,omitempty"`
+	Pricing       []pricing.ModelPricing      `toml:"pricing,omitempty"`
 }
 
 // PackPatches holds the patch operations valid in pack.toml. City
@@ -170,6 +171,11 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 				stampDefaultBinding(cachedPackCommands(cache, topoDir), packName)...,
 			)
 			cfg.PackDoctors = appendDiscoveredDoctors(cfg.PackDoctors, cachedPackDoctors(cache, topoDir)...)
+			// Runtime selection is city-wide, so rig pack runtimes
+			// register into the same namespace as city-level ones.
+			if err := mergeCityRuntimes(cfg, cachedPackRuntimes(cache, topoDir)); err != nil {
+				return fmt.Errorf("rig %q pack %q: %w", rig.Name, ref, err)
+			}
 			skills := cachedPackSkills(cache, topoDir)
 			if packName == "" && len(skills) > 0 {
 				return fmt.Errorf("rig %q pack %q: discovered skills require [pack].name for binding", rig.Name, ref)
@@ -261,6 +267,7 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 				warnings := cachedPackWarnings(cache, impDir)
 				commands := cachedPackCommands(cache, impDir)
 				doctors := cachedPackDoctors(cache, impDir)
+				runtimes := cachedPackRuntimes(cache, impDir)
 				skills := cachedPackSkills(cache, impDir)
 				if !imp.ImportIsTransitive() {
 					warnings = cachedPackLocalWarnings(cache, impDir)
@@ -277,6 +284,7 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 					services = filterServicesBySourceDir(services, impDir)
 					commands = filterCommandsByPackDir(commands, impDir)
 					doctors = filterDoctorsByPackDir(doctors, impDir)
+					runtimes = filterRuntimesByPackDir(runtimes, impDir)
 					providers = cachedPackLocalProviders(cache, impDir)
 					topoDirs = cachedPackLocalTopoDirs(cache, impDir)
 					reqs = cachedPackLocalRequires(cache, impDir)
@@ -409,6 +417,11 @@ func expandPacks(cfg *City, fs fsys.FS, cityRoot string, rigFormulaDirs map[stri
 				rigAgents = append(rigAgents, agents...)
 				rigNamedSessions = append(rigNamedSessions, namedSessions...)
 				cfg.PackDoctors = appendDiscoveredDoctors(cfg.PackDoctors, doctors...)
+				// Runtime selection is city-wide, so rig-imported
+				// runtime packs register into the same namespace.
+				if err := mergeCityRuntimes(cfg, runtimes); err != nil {
+					return fmt.Errorf("rig %q import %q: %w", rig.Name, bindingName, err)
+				}
 
 				if len(providers) > 0 {
 					if cfg.Providers == nil {
@@ -611,6 +624,11 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 			}
 		}
 
+		// Register pack-declared runtimes city-wide (collisions error).
+		if err := mergeCityRuntimes(cfg, cachedPackRuntimes(cache, topoDir)); err != nil {
+			return nil, nil, nil, fmt.Errorf("city pack %q: %w", ref, err)
+		}
+
 		// Merge pack providers (additive, first wins).
 		if len(providers) > 0 {
 			if cfg.Providers == nil {
@@ -661,6 +679,7 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 			packWarnings = appendUnique(packWarnings, warnings...)
 			commands := cachedPackCommands(cache, impDir)
 			doctors := cachedPackDoctors(cache, impDir)
+			runtimes := cachedPackRuntimes(cache, impDir)
 			skills := cachedPackSkills(cache, impDir)
 			mcpTopoDirs := topoDirs
 
@@ -681,6 +700,7 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 				services = filterServicesBySourceDir(services, impDir)
 				commands = filterCommandsByPackDir(commands, impDir)
 				doctors = filterDoctorsByPackDir(doctors, impDir)
+				runtimes = filterRuntimesByPackDir(runtimes, impDir)
 				providers = cachedPackLocalProviders(cache, impDir)
 				topoDirs = cachedPackLocalTopoDirs(cache, impDir)
 				reqs = cachedPackLocalRequires(cache, impDir)
@@ -762,6 +782,10 @@ func expandCityPacks(cfg *City, fs fsys.FS, cityRoot string, opts LoadOptions) (
 			cfg.Services = append(cfg.Services, services...)
 			cfg.PackCommands = appendDiscoveredCommands(cfg.PackCommands, commands...)
 			cfg.PackDoctors = appendDiscoveredDoctors(cfg.PackDoctors, doctors...)
+			// Register pack-declared runtimes city-wide (collisions error).
+			if err := mergeCityRuntimes(cfg, runtimes); err != nil {
+				return nil, nil, nil, fmt.Errorf("city import %q: %w", bindingName, err)
+			}
 			if !slices.Contains(BootstrapManagedImportNames(), bindingName) {
 				cfg.PackSkills = appendDiscoveredSkills(cfg.PackSkills, stampImportedSkillBinding(skills, bindingName, imp.Export)...)
 			}
@@ -1000,6 +1024,7 @@ type packLoadResult struct {
 	localGlobals   []ResolvedPackGlobal
 	commands       []DiscoveredCommand
 	doctors        []DiscoveredDoctor
+	runtimes       []DiscoveredRuntime
 	skills         []DiscoveredSkillCatalog
 	localWarnings  []string
 	warnings       []string
@@ -1173,6 +1198,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 	var includedGlobals []ResolvedPackGlobal
 	var includedCommands []DiscoveredCommand
 	var includedDoctors []DiscoveredDoctor
+	var includedRuntimes []DiscoveredRuntime
 	var includedSkills []DiscoveredSkillCatalog
 	var inheritedWarnings []string
 	includedProviders := make(map[string]ProviderSpec)
@@ -1199,6 +1225,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 		includedGlobals = append(includedGlobals, incGlobals...)
 		includedCommands = append(includedCommands, cachedPackCommands(cache, incTopoDir)...)
 		includedDoctors = append(includedDoctors, cachedPackDoctors(cache, incTopoDir)...)
+		includedRuntimes = append(includedRuntimes, cachedPackRuntimes(cache, incTopoDir)...)
 		includedSkills = append(includedSkills, cachedPackSkills(cache, incTopoDir)...)
 
 		// Merge providers: included first, no overwrite.
@@ -1245,6 +1272,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 		inheritedWarnings = appendUnique(inheritedWarnings, warnings...)
 		impCommands := cachedPackCommands(cache, impDir)
 		impDoctors := cachedPackDoctors(cache, impDir)
+		impRuntimes := cachedPackRuntimes(cache, impDir)
 		impSkills := cachedPackSkills(cache, impDir)
 
 		// When transitive = false, strip agents that came from the
@@ -1265,6 +1293,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 			impServices = filterServicesBySourceDir(impServices, impDir)
 			impCommands = filterCommandsByPackDir(impCommands, impDir)
 			impDoctors = filterDoctorsByPackDir(impDoctors, impDir)
+			impRuntimes = filterRuntimesByPackDir(impRuntimes, impDir)
 			impProviders = cachedPackLocalProviders(cache, impDir)
 			impTopoDirs = cachedPackLocalTopoDirs(cache, impDir)
 			impReqs = cachedPackLocalRequires(cache, impDir)
@@ -1341,6 +1370,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 		includedGlobals = append(includedGlobals, impGlobals...)
 		includedCommands = append(includedCommands, impCommands...)
 		includedDoctors = append(includedDoctors, impDoctors...)
+		includedRuntimes = append(includedRuntimes, impRuntimes...)
 		includedSkills = append(includedSkills, impSkills...)
 
 		for name, spec := range impProviders {
@@ -1384,6 +1414,10 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 	doctors = append(doctors, legacyDoctors...)
+	localRuntimes, err := packLocalRuntimes(&tc, topoDir)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, err
+	}
 	skills, err := DiscoverPackSkills(fs, topoDir, tc.Pack.Name)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, err
@@ -1453,6 +1487,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 	includedServices = append(includedServices, services...)
 	includedCommands = append(includedCommands, commands...)
 	includedDoctors = append(includedDoctors, doctors...)
+	includedRuntimes = append(includedRuntimes, localRuntimes...)
 	includedSkills = append(includedSkills, skills...)
 
 	// Apply pack-level patches to the merged agent list.
@@ -1533,6 +1568,7 @@ func loadPackWithCacheOptionsLocked(fs fsys.FS, topoPath, topoDir, cityRoot, rig
 		localGlobals:   localGlobals,
 		commands:       includedCommands,
 		doctors:        includedDoctors,
+		runtimes:       includedRuntimes,
 		skills:         includedSkills,
 		localWarnings:  append([]string(nil), packWarnings...),
 		warnings:       appendUnique(append([]string(nil), inheritedWarnings...), packWarnings...),
@@ -1559,6 +1595,7 @@ func clonePackLoadResult(in *packLoadResult) *packLoadResult {
 		localGlobals:   deepCopyResolvedPackGlobals(in.localGlobals),
 		commands:       deepCopyCommands(in.commands),
 		doctors:        deepCopyDoctors(in.doctors),
+		runtimes:       append([]DiscoveredRuntime(nil), in.runtimes...),
 		skills:         deepCopySkills(in.skills),
 		localWarnings:  append([]string(nil), in.localWarnings...),
 		warnings:       append([]string(nil), in.warnings...),
