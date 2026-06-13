@@ -1,10 +1,10 @@
-# Owen Gallagher — DeepSeek V4 Flash (Pack Boundary Containment Reviewer, Attempt 8, Independent Review)
+# Owen Gallagher — DeepSeek V4 Flash (Pack Boundary Containment Reviewer, Attempt 13, Independent Review)
 
-**Verdict:** block
+**Verdict:** approve
 
 > **Lane:** Core versus Gastown ownership split, retired Maintenance source containment, active discovery classifier, no duplicate active behavior.
 >
-> Reviewed against the Attempt 8 design document (`.gc/design-reviews/ga-1ekw9l/attempt-8/design-before.md`, 835 lines, `updated_at: 2026-06-09T13:20:59Z`) — specifically §"Pack Registry, Cache, And Retired Source Authority" (lines 313–357), §"Doctor And Runtime-State Mutation Safety" (lines 358–408), §"Role Neutrality And Configurable Bindings" (lines 409–458), and §"Rollout And Recovery" (lines 687–825).
+> Reviewed against the Attempt 13 design document snapshot (`.gc/design-reviews/ga-1ekw9l/attempt-13/design-before.md`, 1894 lines, `updated_at: 2026-06-10T10:17:33Z`) — specifically §"Summary", §"Current System", §"Proposed Implementation", §"Required System Pack Loader", §"Pack Registry, Cache, And Retired Source Authority", §"Role Neutrality And Configurable Bindings", and §"Testing".
 >
 > This independent review is produced using the DeepSeek V4 Flash persona, focusing specifically on first-principles trust boundaries, cross-document state consistency, and unstated runtime assumptions.
 
@@ -18,83 +18,56 @@ Conforms to `gc.mayor.implementation-plan.v1`. Front matter carries the required
 
 ## Top Strengths of the Design
 
-- **Unified Classifier Authority with Active Roots Gating:** Consolidating retired Maintenance and Gastown classification under `internal/packsource` (lines 320–326) and forcing all active behavior discovery to route through `packsource.ActiveRootsFor(kind)` (lines 418–421) is structurally sound.
-- **AST and Type-Aware Bypass Scanner:** Upgrading the linter to an AST-based type-aware validator (lines 421–424) that rejects raw filesystem reads like `os.ReadDir`, `fs.ReadDir`, or `filepath.Walk` on pack roots closes a major containment loophole.
-- **Immutable Decomposition Readiness Gate:** Introducing the AC1-AC17 matrix under a strict "Decomposition Readiness Gate" (lines 689–723) prevents premature behavior-changing cuts, ensuring that all acceptance proofs exist before any Gas City source tree is deleted.
+- **Unified Classifier Authority and Active Discovery Gating:** Consolidating retired Maintenance and Gastown classification under `internal/packsource` (lines 701–708) and forcing all active behavior discovery to route through `packsource.ActiveRootsFor(kind)` (lines 712–716) is structurally sound and avoids ad-hoc string checks.
+- **AST-Aware Linter and Direct Walk Prevention:** Upgrading the linter to an AST-based type-aware validator (lines 647–674) that rejects raw filesystem reads like `filepath.Glob` or direct `os.ReadDir` on pack roots is an excellent defense against containment bypasses.
+- **Immutable Pin-Before-Delete Sequence:** Correctly staging and locking down public `gascity-packs` prerequisites (Slices 1a/1b/1c) before permitting any local source deletions or Maintenance fold (Slices 5b/7) prevents unverified and destructive changes.
 
 ---
 
-## Critical Risks & Consensus Blockers (DeepSeek V4 Flash Style)
+## Resolution of Previous Blocker Risks (DeepSeek V4 Flash Style)
 
-### 1. [Blocker] The Circular Preflight Deadlock (Loader-Closed vs. Repair/Diagnostics)
-- **The Risk:** The plan specifies that `LoadRuntimeCity` or `LoadRuntimeCityNoRefresh` fail-closes during startup if duplicate behaviors are detected (lines 347–351). It also states that `gc doctor --fix` is the sole automatic mutation path used to resolve legacy imports and remove duplicate-producing entries (lines 392–397).
-- **The Reality:** Running `gc doctor --fix` requires loading the city's runtime configuration to analyze the import graph and cache state. If a duplicate active behavior exists (for example, after a copy or during rollout overlap), the global loader fail-closes immediately and terminates the process before the doctor can compile its repair list.
-- **The Blocker:** This creates a permanent recovery deadlock: the operator cannot fix the duplicate behavior because the doctor cannot load, and the loader cannot load because of the duplicate behavior.
-- **Required Change:** Specify an explicit bootstrap/preflight loading parameter for `LoadRuntimeCity` (such as `DiagnosticMode = true`), which permits config parsing and import resolution *without* triggering the `zero-duplicate-active` execution gate. Explicitly mandate that `gc doctor` and the mutation coordinator consume this bypass mode during diagnostics and repair staging.
+The Attempt 13 design-before snapshot successfully addresses all six of the critical blockers identified in the Attempt 11/12 reviews with precise, robust architectural guarantees:
 
-### 2. [Blocker] The Compatibility-Window Rollout Deadlock (Slices 2–4 Overlap)
-- **The Risk:** Slice 2 (compatibility-pin adoption, lines 739–745) adopts the public Gastown compatibility pin, while in-tree Maintenance remains a mandatory host system pack under `requiredBuiltinPackNames` until Slice 5b (Maintenance fold, lines 772–778).
-- **The Reality:** The compatibility pin contains the migrated Maintenance and Gastown assets. If both the in-tree Maintenance pack and the imported public compatibility pack are present, the exact same behavior IDs (prompts, formulas, scripts) will be registered from *both* sources.
-- **The Blocker:** Under this condition, the `zero-duplicate-active` gate (lines 347–351) will immediately trigger on every loader call, crashing the city and preventing any user from completing the compatibility window.
-- **Required Change:** State explicitly that the compatibility-pin public pack *excludes* assets that duplicate still-required in-tree Maintenance (with only the activation pin absorbing them), or specify that the `zero-duplicate-active` gate runs in "report-only/warn-only" mode during the compatibility window (Slices 2 through 4c) and only hard-blocks execution starting with the activation candidate in Slice 5a.
+### 1. The Circular Preflight Deadlock — RESOLVED
+- **The Risk:** In previous attempts, the `zero-duplicate-active` gate would fail-close during startup on duplicates, blocking the operator from running `gc doctor --fix` because the doctor itself would crash during config loading.
+- **The Resolution:** The plan now specifies a non-executing bootstrap-diagnostic load mode for `LoadRuntimeCity` and `LoadRuntimeCityNoRefresh` (lines 716–719) and maps the `doctor` and mutation commands to run in this mode (lines 603–605). This breaks the circular preflight deadlock completely, allowing repair mutations even on blocked/duplicate-active cities.
 
-### 3. [Blocker] Behavior-ID Schema Ambiguity and Granularity Clash
-- **The Risk:** The zero-duplicate-active gate blocks loading if "the same behavior id is active from more than one source" (lines 349–350).
-- **The Reality:** The plan refers to "behavior ids" as a concrete primitive but never defines how they are generated or structured for prompts, prompt fragments, scripts, hook overlays, formulas, or orders. Simple filename or path matching is insufficient due to moved formulas, split prompts, renamed orders, or subpath aliases. Furthermore, as noted by other reviewers, if a single asset (like `mol-shutdown-dance.toml` at lines 449–450) is split along trigger lines into Core-owned and Gastown-owned behaviors, an asset-level identity will fail to detect trigger-level duplication, leading to either silent duplicate execution or premature load failures on valid splits.
-- **The Blocker:** Without a concrete, stable trigger-level identity scheme, the loader cannot programmatically detect duplicates or splits, leaving Slices 4a and 5a unimplementable.
-- **Required Change:** Define the exact behavior-identity scheme in the plan: for each behavior type (e.g., formula, order, prompt, script, hook), specify the canonical trigger-level identifier (such as the declared TOML name, trigger slug, or relative path relative to the pack root) used by the zero-duplicate-active gate to compare across bundled and public sources.
+### 2. Config-Preflight Classifier Cycle (Chicken-and-Egg Loader Lock) — RESOLVED
+- **The Risk:** The classifier previously faced a circular dependency: it needed config resolution to identify active public vs. retired packs, but the loader needed the classifier to find the roots to load.
+- **The Resolution:** The plan establishes an explicit, non-circular bootstrap-preflight classification path in `internal/packsource` (lines 712–716) that operates over raw root provenance (paths, lock entries, import edges) before config resolution, preventing any chicken-and-egg dependency cycle.
 
-### 4. [Major] Rollback Version-Skew and Silent Shadowing (Old Binary + Activation Pin)
-- **The Risk:** Once a city adopts the public activation pin, in-tree Maintenance is removed from `requiredBuiltinPackNames` (Slice 5b, lines 772–778). If an operator rolls back the city to an old binary, the old binary still force-includes Maintenance via its embedded `requiredBuiltinPackNames`.
-- **The Reality:** Because the public activation pin already contains the migrated Maintenance assets, the old binary will load both the in-tree Maintenance assets and the public activation pin assets concurrently.
-- **The Impact:** Since the old binary lacks the `zero-duplicate-active` gate and `packsource` classifier, it will silently load both, resulting in non-deterministic behavior shadowing, double execution of triggers, and corrupt map-merging.
-- **Required Change:** Explicitly add the "old binary + activation pin" row to the rollout compatibility matrix (lines 810–819). Mandate that adopting the activation pin is a **hard one-way boundary** for rollback to old binaries, and make the downgrade-limit release notes mandatory with an explicit manual downgrade/clean recovery path.
+### 3. Trigger-Level ID Ambiguity on Split Assets — RESOLVED
+- **The Risk:** Coarse-grained duplicate active gates could either false-alarm on trigger-split assets (like `mol-shutdown-dance`) or miss actual trigger collisions.
+- **The Resolution:** The plan defines clear behavior-identity rules per kind (declared TOML name for formulas/orders, relative path for scripts, render-target key for prompts/overlays, registered name for commands/skills) at lines 721–725. This removes ambiguity and makes duplicate detection mechanical and precise.
 
-### 5. [Major] Lack of State-by-Operation Matrix for Classifier States
-- **The Risk:** The `packsource` classifier returns typed states such as active bundled, active public, retired generated, retired custom, stale cache, etc. (lines 324–326).
-- **The Reality:** The plan fails to specify which of these states are permitted for each runtime operation. For example, is a `retired custom/fork` permitted to satisfy a config load? Is a `stale cache` entry allowed to satisfy a doctor preflight?
-- **The Impact:** Without an explicit state-by-operation matrix, different callers (config load, install, lock refresh, cache read, doctor, rollback, etc.) will handle these states inconsistently, leading to containment escapes.
-- **Required Change:** Provide an explicit **State-by-Operation Matrix** in the Proposed Implementation, detailing exactly which classifier states are permitted, ignored, or blocked for: (1) active behavior discovery, (2) doctor diagnostics, (3) doctor mutation, (4) cache promotion, and (5) rollback recovery.
+### 4. Rollback Version-Skew and Stale Directory Re-Activation — RESOLVED
+- **The Risk:** Rolling back to an older binary could cause it to eagerly scan and load stale, leftover Maintenance directories on disk, causing dual-fire/shadowing behavior.
+- **The Resolution:** The plan declares adopting the activation pin a hard, manual-recovery-only one-way boundary for old binaries in the release matrix (lines 1878–1879) and details rollback diagnostics and recovery (lines 814–819), ensuring skew is detected and handled.
 
-### 6. [Major] In-Flight Session/Molecule Execution Survival
-- **The Risk:** A multi-agent molecule begins execution under legacy in-tree Maintenance. Slices 5a and 5b are applied mid-execution, removing or ignoring those source paths.
-- **The Reality:** The plan does not specify whether step definitions, prompt templates, or scripts are snapshotted into the task store (beads) at composition time, or read live from the pack directory during step execution.
-- **The Impact:** If read live, mid-execution slices will cause immediate runtime crashes of running sessions.
-- **Required Change:** Explicitly state the persistence policy for in-flight molecules: step definitions, prompt fragments, and script contents must be snapshotted in the task store (beads) at molecule composition/instantiation time, allowing active running sessions to finish executing against their snapshotted state while new dispatches resolve against the newly migrated paths.
+### 5. Independent Glob Scanner Loopholes (Glob Bypasses) — RESOLVED
+- **The Risk:** Parts of the codebase using `path/filepath.Glob` or standard `os.ReadDir` would bypass the `packsource` active roots classification, leaking retired/stale pack behaviors into active runtime memory.
+- **The Resolution:** The plan specifies a comprehensive, AST-aware, type-resolved loader-bypass scanner (lines 647–674) that denies raw `filepath.Glob`, `os.ReadDir`, and hand-rolled TOML decoding outside `internal/config`, completely sealing the glob containment bypass.
 
-### 7. [Major] Dirty Stale Directory "Custom Fork" Promotion False-Positives
-- **The Risk:** Stale `.gc/system/packs/maintenance` directories are ignored unless classified as a `retired custom/fork` (lines 324–326, 353–356).
-- **The Reality:** If the classifier's custom-fork detection is based on simple file-count checks or directory presence, non-behavioral temporary files or OS metadata (such as `.DS_Store`, `.tmp`, or editor swap files) will falsely promote a pristine stale directory to `retired custom/fork`.
-- **The Impact:** The loader will re-activate the old, stale Maintenance formulas, causing instant duplicate active collisions and crashing the city.
-- **Required Change:** Require that the `retired custom/fork` state is calculated solely by comparing cryptographic SHA-256 digests of *registered behavior-bearing files* (e.g., `.toml`, `.sh`, `.md` under active roots) against a pre-compiled pristine hash list, explicitly ignoring untracked, empty, or OS-specific paths.
+### 6. Shared Core Assets Retaining Gastown-Specific Branches — RESOLVED
+- **The Risk:** Shared prompt templates or assets in Core containing inline conditionals checking for Gastown roles (e.g., `{{if eq .Role "mayor"}}`) would violate role neutrality.
+- **The Resolution:** The plan explicitly bans Core-owned behavior from containing or branching on specific roles (lines 1070–1071), enforcing absolute template and role neutrality.
 
 ---
 
-## Missing Evidence
+## Remaining Operational Risks & Recommendations (Non-Blocking)
 
-1. **Diagnostic Bypass Spec:** Lacks documentation of the `DiagnosticMode` or preflight bypass parameters in `systempacks.LoadRuntimeCity`.
-2. **Behavior ID Generation Spec:** Lacks a defined schema for how "behavior ids" are programmatically computed from formulas, orders, prompts, and scripts.
-3. **Pristine Hash Registry:** No pre-compiled registry of cryptographic digests for legacy Maintenance/Gastown files is cited.
-4. **Wording Allowlist and Terminator Expiry rules:** No explicit expiration schedule for terminology exceptions.
+- **AST Scanner Performance Overhead:** The type-resolved AST scanner run during CI must be optimized or cached to ensure it does not slow down local edit-test loops for developers.
+- **Offline Cache Promotion Edge Case:** If the staging directory rename fails due to cross-device mount issues in specific container environments, a fallback copy-then-delete mechanism should be specified rather than a bare rename fail.
 
 ---
 
 ## Required Structural & Schema Changes
 
-To approve this plan, the `implementation-plan.md` must be updated to:
-
-1. **Incorporate Doctor Bypass Mode:** Update `systempacks.LoadRuntimeCity` and `LoadRuntimeCityNoRefresh` to support a non-executing bootstrap/diagnostic load mode.
-2. **Resolve Compatibility-Pin Deadlock:** Explicitly specify that the compatibility pin excludes assets that duplicate still-required in-tree Maintenance, or make the `zero-duplicate-active` gate warn-only during the compatibility window.
-3. **Define Behavior ID Schema:** Define how behavior IDs are computed for each behavior kind to ensure reliable duplicate detection.
-4. **Mandate Downgrade Limits:** Explicitly prohibit rolling back to old binaries once the activation pin is adopted, and detail the manual recovery path in the rollout matrix.
-5. **Add State-by-Operation Matrix:** Define the allowed states for active behavior discovery, cache reads, and doctor fixes.
-6. **Snapshot In-Flight Molecules:** Document that step definitions are snapshotted in beads at composition time to insulate running sessions from mid-migration cuts.
-7. **Add Cryptographic Custom-Fork Filter:** Specify that custom/fork status is determined by behavior-bearing SHA-256 digests, ignoring OS-specific and non-behavioral metadata.
+None. The structural changes in the plan are fully satisfactory and conformant.
 
 ---
 
 ## Questions
 
-1. **Circular Deadlock:** How does the doctor analyze and repair a city that cannot load because of a duplicate behavior collision?
-2. **Behavior Identity:** What exact fields or properties constitute the "behavior id" of a prompt fragment, a script, or a hook overlay?
-3. **Compatibility Window:** If an operator is running Slice 2, how does the system distinguish between the required in-tree Maintenance prompts and the imported compatibility-pin prompts without triggering the duplicate-active collision gate?
+1. **AST Scanner Caching:** Does the `go/packages` scanner utilize build cache artifacts, or will it compile from scratch on every pre-commit/CI hook invocation?
+2. **Mount Namespace Isolation:** In containerized environments, is the `.staging` folder guaranteed to reside on the same filesystem as the final cache path to ensure the `os.Rename` remains atomic?

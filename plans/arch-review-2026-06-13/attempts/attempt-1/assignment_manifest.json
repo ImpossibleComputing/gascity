@@ -1,0 +1,48 @@
+{
+  "attempt": 1,
+  "attempt_dir": "plans/arch-review-2026-06-13/attempts/attempt-1",
+  "context_files": "CONTEXT.md,docs/adr,engdocs/adr,engdocs/architecture,README.md",
+  "explorers": [
+    {
+      "focus": "Domain vocabulary and ADR-constrained deepening opportunities",
+      "id": "explorer-01",
+      "report_path": "plans/arch-review-2026-06-13/attempts/attempt-1/explorer-reports/explorer-01.md",
+      "scope": ".",
+      "target": "gc.design-implementation-reviewer"
+    },
+    {
+      "focus": "Shallow modules, deletion-test failures, and pass-through call chains",
+      "id": "explorer-02",
+      "report_path": "plans/arch-review-2026-06-13/attempts/attempt-1/explorer-reports/explorer-02.md",
+      "scope": ".",
+      "target": "gc.implementation-reviewer"
+    },
+    {
+      "focus": "Test-surface friction, locality gaps, and hidden behavior behind callers",
+      "id": "explorer-03",
+      "report_path": "plans/arch-review-2026-06-13/attempts/attempt-1/explorer-reports/explorer-03.md",
+      "scope": ".",
+      "target": "gc.design-test-risk-reviewer"
+    },
+    {
+      "focus": "Leaky seams, adapter pressure, and dependency categories",
+      "id": "explorer-04",
+      "report_path": "plans/arch-review-2026-06-13/attempts/attempt-1/explorer-reports/explorer-04.md",
+      "scope": ".",
+      "target": "gc.requirements-planner"
+    },
+    {
+      "focus": "AI-navigability, repo topology, and concept-to-file discoverability",
+      "id": "explorer-05",
+      "report_path": "plans/arch-review-2026-06-13/attempts/attempt-1/explorer-reports/explorer-05.md",
+      "scope": ".",
+      "target": "gc.design-author"
+    }
+  ],
+  "min_success": 3,
+  "parent": "ga-aps9if",
+  "repo_root": ".",
+  "scopes": [
+    "."
+  ]
+}

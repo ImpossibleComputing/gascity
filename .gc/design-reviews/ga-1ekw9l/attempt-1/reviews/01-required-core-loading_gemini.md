@@ -1,104 +1,59 @@
 # Camille Sato - DeepSeek
 
-**Verdict:** block
+**Verdict:** approve-with-risks
 
-Lane: required Core and provider pack loading, typed participation provenance, deny-by-default loaders, bypass containment, fail-closed behavior. Reviewed against `plans/core-gastown-pack-migration/implementation-plan.md` (`updated_at` 2026-06-09T13:20:59Z; §Required System Pack Loader lines 221-311, §Pack Registry/Cache lines 313-356, §Data And State lines 541-545) plus the live tree.
+Lane: required Core and provider pack loading, typed participation provenance, deny-by-default loaders, bypass containment, fail-closed behavior. Reviewed plans/core-gastown-pack-migration/implementation-plan.md (updated_at 2026-06-10T10:17:33Z) against plans/core-gastown-pack-migration/requirements.md (updated_at 2026-06-10T03:46:02Z).
 
 ---
 
 ## Top Strengths
 
-- **Fail-closed live-reload and degraded-mode contract:** The design correctly answers the reload integrity problem. Setting `Mode ∈ {ready, read_only_degraded, blocked}` ensures only `ready` drives active dispatch, formulas, hooks, prompts, and session starts. Having no-refresh reloads refuse behavior-changing operations and surface identical diagnostics via API and CLI is a massive step forward.
-- **Two bound fatal validation gates:** Separating pre-resolution file-set validation (Gate 1) from post-resolution participation validation (Gate 2) is conceptual excellence. This prevents simple path/name/digest coincidence attacks where a same-named user-provided or copied pack masquerades as the host system pack.
-- **AST/Type-aware syntactic scanner:** Requiring a scanner modeled on `TestGCNonTestFilesStayOnWorkerBoundary` that explicitly flags aliases, selector values, wrappers, and package-local helpers addresses the bypass risks that a naive text grep would miss.
+- **Elegantly Resolved Circular Dependencies:** Defining `config.RequiredPackDescriptor` and `config.RequiredSystemPackParticipation` entirely within `internal/config` (lines 543-560) is an exceptional architectural resolution. This permits the lower-level config package to remain a leaf with zero dependencies on `internal/systempacks`, while still allowing `internal/systempacks` to pass descriptors during include/import resolution.
+- **Structural, Non-Bypassable Readiness Guards:** Transitioning away from a voluntary `RequireReady` check to a structural API design (lines 575-584) is magnificent. Having `RuntimeResult.BehaviorConfig(op)` error out on non-`ready` modes and restricting read-only configurations in `blocked` mode prevents developers from accidentally bypassing the fail-closed loader.
+- **Unconditionally Fatal Gate 1 & 2 Execution:** Completely removing manual include assembly in `tryReloadConfig` and replacing it with `LoadRuntimeCityNoRefresh` (lines 614-619) closes the `--no-strict` and warning-downgrade escape hatches. This ensures required Core and provider pack integrity is non-negotiable and unconditionally fail-closed.
+- **Rigorous, AST-Aware Bypass Scanner:** The scope is appropriately expanded to all non-test files across Go (except the config and loader packages themselves, lines 647-656). Utilizing `go/packages` and `go/types` for type-awareness ensures that aliased imports, wrapper functions, stored function values, and selector-reached loads are caught with mathematical precision.
+- **Advisory Locked, Atomic Cache Promotion:** Forcing `EnsureRepoInCache` to clone into a process-unique staging directory and perform single-atomic `os.Rename` under a shared advisory lock (lines 765-774) ensures that concurrent commands never observe or promote a partially written pack.
+
+---
 
 ## Critical Risks
 
-### [Blocker] Required system-pack participation is not yet an implementable resolver-owned provenance contract
+### [Major] First-Run Materialization Crash Recovery (The Half-Materialized Bricking Hazard)
+The plan specifies that `MaterializeRequiredPacks` may write `.gc/system/packs/<pack>` only when the target directory is absent or empty (lines 823-825).
+If a first-run command or initialization crashes, is killed, or runs out of disk space during materialization, it will leave a half-written, corrupt directory at `.gc/system/packs/<pack>`.
+Because the load path "may create, never repair" and any subsequent normal invocation (including status queries or subsequent runs of the same command) sees a non-empty but corrupted/divergent directory, Gate 1 will fail and block the city. The city is effectively bricked until the operator manually runs `gc doctor --fix --non-interactive` (lines 829-834).
+*Recommendation:* Use the same staging-and-rename pattern for required pack materialization as used for cache promotion. Materialize the pack into a process-unique staging directory (e.g., `.gc/system/packs/.staging/<pack>.<pid>.<random>`) and atomic `os.Rename` to `.gc/system/packs/<pack>` only upon successful completion. This guarantees materialization is atomic and crash-resilient.
 
-The design relies on `RequiredSystemPackParticipation` containing "embedded source identity, resolved config layer identity, and an import edge proving participation in final config resolution."
-However, there is a fundamental design-dependency and package-layering issue here:
-1. **Import Cycle Risk:** If `internal/config` is responsible for producing participation records, but those records consume or reference types owned/defined by `internal/systempacks`, we will introduce an upward dependency from `internal/config` to `internal/systempacks` (or a package layering violation). Today, `internal/config` has zero upward dependencies.
-2. **Missing Provenance API:** The current `config.Provenance` (`internal/config/compose.go:72-91`) carries no per-layer embedded source identity, pack digest, or content-manifest digest—only `Imports[name]=sourceFile`. An import edge derived from today's provenance is exactly the name+path coincidence the plan says must NOT prove participation.
-The design never specifies how the `internal/config` provenance API must be updated to mint these trusted records, nor where the descriptor/participation types are housed.
+### [Major] Ephemeral CLI Cold-Start Reporting Discrepancy under Degradation
+Under `read_only_degraded` mode, "the controller keeps the last-known-good runtime config only for read-only status/reporting, publishes an event and diagnostic, and pauses or refuses behavior-changing... operations" (lines 628-634).
+While this works perfectly for the long-running controller, an ephemeral CLI command (such as `gc status`) is a cold start. It does not have an in-memory last-known-good configuration.
+When Core or a provider pack on disk is missing or corrupted, a cold-start CLI status invocation will hit Gate 1 failure and fail closed (`blocked` mode), completely unable to perform the "read-only status/reporting" permitted under `read_only_degraded` mode.
+*Recommendation:* Explicitly define that the CLI status/reporting commands must attempt to query the running controller's API when degraded to fetch the last-known-good status before falling back to local file checks, or document that a cold-start CLI status command will directly print the bootstrap-only doctor diagnostic when no controller is running.
 
-**Required change:** Define descriptor and participation types in `internal/config` or a lower leaf package (with no upward dependency to `internal/systempacks`). Specify that `internal/systempacks` supplies trusted required-pack descriptors during config resolution, and the config resolver mints participation records.
+### [Major] Preflight Bootstrapping Cycle on Provider-Conditioned Packs
+To run Gate 1 (file-set validation) on the required provider pack (`bd` or `dolt`), `RequiredPackNames(cityPath)` must know which beads provider is selected (lines 606-608).
+However, this provider selection is defined within `city.toml`.
+This introduces a bootstrapping cycle: to resolve config, we must have validated the provider pack. To validate the provider pack, we must know which one is selected by parsing `city.toml`!
+If the parser used to extract the provider field is full config resolution, we will hit a circular loading failure. If it is a partial TOML parser, we must ensure it is completely isolated from behavior-driving code.
+*Recommendation:* Explicitly specify that `RequiredPackNames` uses a safe, isolated preflight TOML parser restricted strictly to extracting the `[beads] provider` field from `city.toml` before any other config resolution, Gates, or loaders are initialized.
 
-### [Blocker] Bootstrap, repair, and partial-read paths are not concretely carved out from the fail-closed loader
-
-By mandating that any loader call must fail closed on missing, corrupt, or partially materialized Core, the design risks introducing a "bricked-city" failure mode. If Core is corrupt or missing:
-1. `gc init` cannot run to initialize a city.
-2. `gc doctor --fix` cannot run to repair the corrupt pack or configuration because it would try to load config and fail closed.
-We must have a concrete escape hatch or allowlisted partial-read inventory for bootstrap/repair, but the plan does not define this.
-
-**Required change:** Provide an explicit bootstrap/repair protocol. Either define allowlisted partial reads for `gc init`, doctor diagnostics, and doctor fix flows, or a dedicated bootstrap mode whose allowed behavior is limited to initialization/materialization/repair.
-
-### [Major] Gate 1 and Gate 2 validation need a precise proof source
-
-The validation gates must prevent user-supplied or copied packs from satisfying required system pack loading. Gate 2 must validate the exact Gate 1 descriptor target: resolved import edge, resolved layer id, effective contribution, materialized directory, and digests must all match the same trusted descriptor, with no fallback to path, name, or digest coincidence. The design is too vague on how Gate 2 verifies this participation.
-
-**Required change:** Explicitly require Gate 2 to reject any Core layer whose edge is `"(implicit)"` or path/name-only. The implementation must include test fixtures and cases for user or imported packs named `core`, copied Core trees, manually imported Core paths, materialized-but-not-imported Core, and provider pack participation for `bd` and `dolt`.
-
-### [Major] Fail-closed runtime readiness is voluntary and too easy to bypass
-
-Under the current plan, `LoadRuntimeCity` produces a live `Config` regardless of `Mode`. Caller entrypoints merely receive a `RuntimeSnapshot` or `RuntimeGuard` and are expected to remember to call `RequireReady(op)`. This is a convention, not a structural enforcement. Any caller that forgets to call `RequireReady` can use stale/unvalidated config after Core integrity has failed, silently bypassing the loud failure guarantee.
-
-**Required change:** Make the readiness gate structural in the API shape. Either the snapshot must withhold a behavior-usable `Config` unless `ready` (e.g., behavior-changing accessors return `(Config, error)` that errors in `read_only_degraded`/`blocked`), or add a scanner/test proving every behavior-changing entrypoint calls `RequireReady` before config fields are used.
-
-### [Major] Scanner scope "behavior-driving `internal/` packages" is undefined and bypassable
-
-The proposed scanner scope "`cmd/gc` and behavior-driving `internal/` packages" is not a deny-by-default scope. This relies on an ad-hoc pre-filter. If a package is newly added or misclassified, its direct `config.Load*` calls will escape the scanner. Furthermore, the plan is silent on whether generated code (such as `internal/api/genclient` and generated server handlers) is in scope.
-
-**Required change:** Define the scanner scope as deny-by-default over all production Go (`cmd/gc` + every non-test `internal/` file), with `config.Load*` failing CI unless an allowlist row proves a partial read. The allowlist must map each exception to an approved schema with file, function, call kind, fields consumed, reason, and a focused non-behavior test. Generated API/client code must be explicitly addressed.
-
-### [Major] Live reload and strictness boundaries are underspecified
-
-Required Core/provider file-set integrity and participation gates must be completely non-disableable by `--no-strict`. No-refresh reloads must perform no repair/write and keep the last-known-good configuration only for status reporting. Under degraded mode, the system must refuse behavior-changing operations with the same diagnostic ID and expose one stable diagnostic/event to prevent lock contention or inconsistent state.
-
-**Required change:** State explicitly that required-pack integrity and participation gates cannot be disabled by `--no-strict`. Specify that `tryReloadConfig` replaces manual include assembly with `LoadRuntimeCityNoRefresh`.
-
-### [Major] Materialization and locking boundaries are not pinned
-
-Normal, routine read-only commands and status/reporting routes should validate required packs without taking exclusive repair locks or mutating the filesystem. Repair/self-healing must be explicit, bounded, non-interactive, and safe around operator-edited system-pack files. Otherwise, concurrent read-only queries could contend with reload locks or corrupt operator edits.
-
-**Required change:** Specify locking and mutation rules. Normal materialization and no-refresh validation must not write or take exclusive repair locks, while explicit repair must be bounded, non-interactive, and safe around local operator edits.
-
-### [Minor] Scanner target list references non-existent symbol
-
-The scanner target list includes `config.LoadCity`, which does not exist in the codebase.
-
-**Required change:** Replace `config.LoadCity` in the scanner target list with the real loader symbols, including `LoadWithIncludesOptions` if that path remains reachable.
+### [Minor] AST Bypass Scanner Performance under Pre-Commit Hooks
+Scoping the `go/packages` and `go/types` based AST scanner to all non-test files across `cmd/gc` and `internal/` (lines 647-654) is incredibly robust, but running full type-checking can take several seconds.
+In a local developer workflow, slow pre-commit hooks lead to friction, and developers may disable hooks entirely, undermining the bypass containment objective.
+*Recommendation:* Clarify that the local pre-commit scanner may be optimized (e.g., scoped to changed or staged Go files only) while the complete full-workspace sweep is run in CI as a blocking merge gate.
 
 ---
 
 ## Missing Evidence
 
-- **Provenance API design:** A concrete `internal/config` provenance or resolved-layer API that records trusted required-pack descriptor ID, embedded source identity, materialized directory, digests (`pack.toml`, manifest, file-set), resolved layer ID, import edge, and allowed-use mode.
-- **Package ownership contract:** Defined package ownership for `RequiredDescriptor` and `RequiredSystemPackParticipation` that avoids package layering violations (no upward dependency from `internal/config` to `internal/systempacks`).
-- **Loader bypass inventory:** A checked-in allowlist mapping current production `config.Load*`, `LoadWithIncludesOptions`, `loadCityConfig*`, etc. to allowlist rows with justification.
-- **Bootstrap/repair rules:** Explicit diagnostic and repair behavior rules when required packs are missing or corrupt, including how `gc init` and `doctor` run.
-- **Test coverage definition:** Test names and fixtures for `core` collisions (user/imported), copied Core trees, and required-provider changes during reload.
-- **Readiness Snapshot/Accessor API:** A named ready/degraded snapshot API or accessor model to structurally enforce readiness check.
-- **Event definitions:** The event type, registered payload, and diagnostic ID for reload failures.
-- **Concurrency & locking rules:** Detailed locking and mutation rules for concurrent CLI invocations and unclassifiable system-pack files.
-
----
-
-## Required Changes (Priority Order)
-
-1. **Resolver Provenance API & Package Layering:** Define `RequiredDescriptor` and `RequiredSystemPackParticipation` in `internal/config` or a lower leaf package to prevent upward dependency cycles. Have `internal/systempacks` supply descriptors and `internal/config` mint the participation records.
-2. **Validation Gate Alignment:** Force Gate 2 to validate the exact Gate 1 descriptor target. Reject a Core layer whose edge is implicit or path/name-only.
-3. **Bootstrap and Repair Escape Hatches:** Add an explicit bootstrap/repair protocol (either allowlisted partial reads for `gc init` and `doctor`, or a dedicated bootstrap mode).
-4. **Deny-by-default Scanner Scope:** Expand scanner scope to all production Go. Require a generated allowlist with fields consumed, reason, and focused non-behavior tests. Correct the scanner target list (remove `config.LoadCity` and add `LoadWithIncludesOptions`).
-5. **Structural Readiness Guard:** Structuralize `RequireReady(op)` by withholding a usable config in `read_only_degraded` or `blocked` modes, or verifying coverage via AST scanners.
-6. **Strictness reload rules:** Assert Core integrity gates are not disableable by `--no-strict`.
-7. **Locking & Materialization Boundaries:** Explicitly bound materialization/locking so read-only validation performs no writes and holds no exclusive locks.
+- **Materialization Atomicity:** Detailed staging and renaming specification for `MaterializeRequiredPacks` to prevent the half-materialized bricking hazard on crash.
+- **CLI-to-Controller Status Failover:** Explicit protocol describing how cold-start CLI status reporting interacts with the controller's in-memory last-known-good state during degradation.
+- **Provider-Preflight Extraction Boundary:** The precise API and design for extracting the beads provider from `city.toml` before any Gates or loaders run.
 
 ---
 
 ## Questions
 
-1. Is `LoadRuntimeCityNoRefresh` used for live controller reloads to prevent silent Core regeneration from masking operator-edited files?
-2. Does the live reload failure publish an event registered under `events.KnownEventTypes` before controller/API callers rely on it?
-3. How are concurrent `gc` invocations protected against materialization/integrity check races? Does read-only validation avoid taking exclusive repair locks?
-4. In `blocked` mode, what API state reads are permitted, and how are we guaranteed they aren't served from unvalidated or corrupt configuration data?
+1. Does `MaterializeRequiredPacks` perform atomic directory renames from a process-unique staging path to prevent partial materialization?
+2. If the disk Core is corrupt but the controller is running in `read_only_degraded` mode, how does a direct CLI `gc status` command retrieve the last-known-good status?
+3. Does the AST bypass-scanner support a fast, file-scoped checking mode to keep developer pre-commit hooks responsive?
