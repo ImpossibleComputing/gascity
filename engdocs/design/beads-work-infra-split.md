@@ -199,6 +199,33 @@ implementation behind each is always bd-delegating, so introducing the interface
 is itself a no-op refactor. Interface *surface* grows only as a consumer needs a
 method — no speculative methods ahead of a caller.
 
+### Implemented (P0)
+
+The seam declarations have landed in `internal/coordrouter` as dead-but-compiling
+code (zero production importers, zero `beads.go` edits):
+
+- **`stores.go`** — the six seams. The five non-graph interfaces shipped as the
+  *minimal grounded subset* of `beads.Store` each owning subsystem uses today
+  (`MessageStore` 8 methods, `SessionsStore` 10, `OrdersStore` 10, `NudgesStore`
+  6; `WorkStore = beads.Store` alias), every method tied to a cited call site in
+  its doc comment. Compile-time `var _ X = beads.Store(nil)` assertions prove each
+  is a faithful subset, so the bd-delegating first impl of every one *is* any
+  `beads.Store` — no wrapper code. The richer domain-shaped methods from the seam
+  table above (`FindOrCreateByKey`, `EnsureByNudgeID`, `SweepStale`, recency,
+  change feeds, and the GraphStore read/finalize methods) are deferred as a
+  documented growth path on each interface — none has a caller yet, so none is
+  declared, per the no-speculative-methods rule.
+- **`bdgraphstore.go`** — `BdGraphStore`, the one real first impl: `GraphStore`'s
+  surface is the graph-apply capability, not a `beads.Store` method set, so it
+  resolves `beads.GraphApplyFor` and delegates the pour (plus the optional
+  tier-aware `beads.StorageGraphApplyStore`, mirroring `beadPolicyGraphStore`).
+- **`coordtest/`** — `RunClassedStoreTests` / `RunGraphStoreTests`, the shared
+  conformance suites (the defense against the removed-backend pattern). They
+  default to **skipped** per the P0 exit criteria, with a `Reason` naming the
+  phase; `coordtest`'s own tests run them with `Skip:false` against a `MemStore`
+  to prove every subtest executes — the harness is non-vacuous and ready for P1
+  to flip skip off per backend.
+
 ## Phase plan
 
 Every phase is independently shippable, behind a config flag, revertible by a
