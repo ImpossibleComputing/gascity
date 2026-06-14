@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "excalidraw": {
-      "type": "http",
-      "url": "https://mcp.excalidraw.com"
+      "command": "excalidraw-mcp",
+      "args": []
     }
   }
 }

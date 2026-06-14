@@ -754,7 +754,8 @@ func TestDocDirCoverage(t *testing.T) {
 			continue
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+		// ga-* directories are bead-scoped scratch outputs written by designer agents.
+		if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || strings.HasPrefix(name, "ga-") {
 			continue
 		}
 		if known[name] {
