@@ -30,6 +30,7 @@ gc [flags]
 | [gc beads](#gc-beads) | Manage the beads provider |
 | [gc build-image](#gc-build-image) | Build a prebaked agent container image |
 | [gc cities](#gc-cities) | List registered cities |
+| [gc close](#gc-close) | Close a bead through the Router (graph beads close in the graph store) |
 | [gc completion](#gc-completion) | Generate the autocompletion script for the specified shell |
 | [gc config](#gc-config) | Inspect and validate city configuration |
 | [gc converge](#gc-converge) | Manage convergence loops (bounded iterative refinement) |
@@ -483,6 +484,23 @@ gc cities list [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | Output one JSONL result record |
+
+## gc close
+
+Close a bead by id through the per-class Router.
+
+When a city sets [beads] graph_store, a graph-class bead is closed in the embedded
+graph store and a work bead in the work store — routed by id. Use --outcome to
+stamp gc.outcome before closing (e.g. --outcome pass), as a worker does when
+finishing a step so the molecule's evaluation can converge.
+
+```
+gc close <id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--outcome` | string |  | stamp gc.outcome on the bead before closing (e.g. pass) |
 
 ## gc completion
 
