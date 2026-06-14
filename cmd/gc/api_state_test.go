@@ -1524,7 +1524,7 @@ func TestWrapWithCachingStoreCachesNonBdStore(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	store := wrapWithCachingStore(context.Background(), backing, nil, true)
+	store := wrapWithCachingStore(context.Background(), backing, nil, true, "")
 	cached, ok := store.(*beads.CachingStore)
 	if !ok {
 		t.Fatalf("store type = %T, want *beads.CachingStore", store)
@@ -1543,7 +1543,7 @@ func TestWrapWithCachingStoreCachesNonBdStore(t *testing.T) {
 }
 
 func TestWrapWithCachingStoreReturnsNilStore(t *testing.T) {
-	if got := wrapWithCachingStore(context.Background(), nil, nil, true); got != nil {
+	if got := wrapWithCachingStore(context.Background(), nil, nil, true, ""); got != nil {
 		t.Fatalf("wrapWithCachingStore(nil) = %#v, want nil", got)
 	}
 }
@@ -1563,7 +1563,7 @@ func TestWrapWithCachingStoreNoBackgroundRefresh(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	store := wrapWithCachingStore(ctx, backing, nil, false)
+	store := wrapWithCachingStore(ctx, backing, nil, false, "")
 	cached, ok := store.(*beads.CachingStore)
 	if !ok {
 		t.Fatalf("store type = %T, want *beads.CachingStore", store)

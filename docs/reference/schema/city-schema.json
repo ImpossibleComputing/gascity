@@ -979,6 +979,14 @@
           "type": "string",
           "description": "Backend selects the bd storage engine when Provider is \"bd\".\nEmpty defaults to \"dolt\"; T3Code uses \"doltlite\" for local dev stores."
         },
+        "graph_store": {
+          "type": "string",
+          "enum": [
+            "",
+            "sqlite"
+          ],
+          "description": "GraphStore selects an alternate backend for graph-class beads — the\nformula-v2 execution topology (molecule/step/gate/scope/run beads, every\ngc.kind control bead, wisp roots, convergence beads, synthetic convoys):\nthe high-churn metadata that drives the bead explosion. Empty (default)\nkeeps every class on the Provider backend, so behavior is unchanged.\n\"sqlite\" routes the graph class to an embedded, process-local SQLite store\nat \u003cscope\u003e/.gc/beads.sqlite, isolating that churn from the Dolt-backed\nwork store. Opt-in; the work backlog (tasks/epics/convoys) always stays on\nProvider. This is NOT the removed top-level \"sqlite\" Provider — it selects\nonly the graph class's backend behind the per-class Router."
+        },
         "event_hooks": {
           "type": "boolean",
           "description": "EventHooks controls installation of the bead event-forwarding hooks\n(.beads/hooks/on_create,on_update,on_close) that shell out to\n`gc event emit` on every bead write. Defaults to true. Set to false\nonce the controller's native cache-events already observe bead changes\n(the bd_hooks doctor gate): the lifecycle then removes the event hooks\n(leaving git hooks untouched) and stops reinstalling them, clearing the\nper-write churn and the native-store gate.",
