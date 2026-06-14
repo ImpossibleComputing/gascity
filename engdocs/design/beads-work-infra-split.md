@@ -376,3 +376,127 @@ distinct subsystems). `convergence` roots (`type=convergence`) **fold into
 the convergence engine's state travels with the graph it pours. (Class is
 orthogonal to `StorageClass`, so this changes only the destination backend once
 graph relocates, not the storage tier during the identity-transform phases.)
+
+## Claim-surface unification: the graph-only `gc ready`
+
+This section records the second half of the initiative, surfaced while scoping the
+store split: making **graph nodes the only thing agents claim**, so the work store
+becomes a pure by-reference backlog. It is the policy that lets `WorkStore` shed
+`Ready`/`Claim` and collapses `RouterReady` to `graph.ReadyCandidates` alone. The
+findings below come from three adversarially-verified code sweeps (Mode-B blast
+radius, the ready-oracle map, and v1↔v2 compiler feasibility).
+
+### The target
+
+Today work reaches an agent in one of three routing modes, two of which make a
+**bare `ClassWork` bead the claimable unit**:
+
+| mode | what gets `gc.routed_to` | claimable unit | class |
+|---|---|---|---|
+| **Mode B** — bare sling (no formula): `bd update {} --set-metadata gc.routed_to=<agent>` (`config.go` `DefaultSlingQuery`; `handler_sling.go:445`; `cmd_sling.go:634`) | the **work bead** itself | a bare backlog bead | **Work** |
+| **classic v1 `--on`** (`sling_core.go:347-369`) | the **source/work bead** (`+ molecule_id`); the molecule's non-root steps are coerced `task→step` (`molecule.go:585`) and Ready-excluded (#1039) | the **source bead** | **Work** |
+| **graph.v2 `--on`** (`graphroute.go:184`) | the **graph steps**; the source bead gets `gc.source_bead_id` (by reference, `sling_core.go:635`) | graph nodes | **Graph** |
+
+Target end-state: **all three stamp `gc.routed_to` only on a graph node.** Then
+`gc ready` = `graph.ReadyCandidates`; a work bead, never carrying `gc.routed_to`,
+is structurally unable to appear in the oracle; and the work store is reached only
+by id (`Get`) for graph-node source resolution, `workflow-finalize`, convoy
+membership, and the `GET /v0/beads` backlog projection.
+
+### Key insight: this is unified ROUTING, not unified COMPILATION
+
+`gc ready` is class-blind — it returns "things stamped `gc.routed_to=me` that are
+claimable." It does not care whether the work was authored as a v1 molecule or a
+v2 graph. So a graph-only oracle does **not** require converting the v1 *compiler*
+to v2. It requires the **routing/sling layer to always stamp `gc.routed_to` on a
+graph node, never on a bare work bead.** A classic v1 molecule may keep compiling
+exactly as it does today (inert `type=step` scaffolding and all); it simply stops
+being the *claim entry* — a routed graph node becomes the entry and references the
+work bead/molecule by id.
+
+Convergence of the three modes:
+
+1. **Mode B** → route through a minimal graph formula (the existing `mol-do-work`
+   default formula pattern, `config.go:3980`) instead of bare-stamping.
+2. **classic v1 `--on`** → route a graph **claim head** instead of stamping the
+   source bead; the classic molecule body stays as by-reference scaffolding. This
+   is the same shape graph.v2 `--on` already produces (route step, source by
+   reference), so the mechanism exists.
+3. **graph.v2** → already correct.
+
+### Two enablers are already in place
+
+- **Persist is already unified.** `instantiateViaGraphApply` →
+  `buildRecipeApplyPlan` → `ApplyGraphPlan` runs for **classic recipes too**, gated
+  only on `IsGraphApplyEnabled` (orthogonal to v1/v2, `molecule.go:471`). Both
+  classic molecules and graph workflows already pour through the atomic graph-apply
+  seam — i.e. the same `GraphStore.ApplyGraphPlan` (`internal/coordrouter`, P0).
+  **The store split rides on this seam and does not depend on the v1/v2 compile
+  fork at all.**
+- **Source-by-reference already exists.** graph.v2 `--on` stamps
+  `gc.source_bead_id` on the workflow root and leaves the source bead unrouted —
+  the canonical "work bead as a by-reference handle" pattern.
+
+### The one net-new primitive
+
+The default-wrap is **not** a 1-node v2 formula. A single v2 node is the workflow
+**root**, which `doStartGraphWorkflow` promotes to `in_progress` and which
+classifies as `ClassGraph` (a control head) — not a claimable `ClassWork` unit. A
+faithful routable wrap needs a **minimum of two nodes** (control root + one
+routable step), and the step must **reference an existing work bead by id** rather
+than mint a duplicate. `ApplyGraphPlan` always creates fresh beads and
+`gc.source_bead_id` is a root back-pointer, not a per-node "this node *is* that
+bead" field — so "a routed graph node that adopts an existing work bead" is the
+small net-new capability this unification requires. It is routing/plan surface,
+not a compiler change.
+
+### Mode-B blast radius (what must move to a graph claim head)
+
+Mode B is **isolated to the gastown pack**; every other pack (`gascity`, `gstack`,
+`bmad`, `compound-engineering`, `superpowers`) is already fully graph-routed. The
+sites that make a bare `ClassWork` bead claimable, all of which must route a graph
+node instead:
+
+- **SDK chokepoints:** the `DoSling` plain-bead branch (`slingPlainBead`/`finalize`,
+  `sling_core.go`), `DefaultSlingQuery` (`config.go`), and the built-in routers
+  (`cmd_sling.go:634`, `handler_sling.go:445`).
+- **The oracle gate:** `bdReadyPoolDemandShell` Tier-3 (`config.go:3272`) and its
+  count form — add a workflow-metadata gate so a bare `ClassWork` bead can never
+  match (belt-and-suspenders).
+- **Born-routed writes:** the GitHub PR-monitor repair bead (`cmd_github.go:237`);
+  `warrant` beads (dog's intake) minted in gastown formulas
+  (`mol-witness-patrol.toml`, `mol-deacon-patrol.toml`); `gc workflow reopen-source`
+  re-stamp (`cmd_convoy_dispatch.go:1329`); `gc sling --reassign`.
+- **gastown roles:** polecat, dog, crew, refinery-reject-reroute — give them a
+  default graph formula (or convert their classic molecules).
+
+### v1↔v2 compiler unification is a separate, optional, staged migration
+
+Folding the v1 compiler into v2 ("delete the classic branch") is **not** a clean
+superset substitution and is **not on the critical path** for the graph-only
+oracle. v2 is a *structural* superset (node/edge model) but not a *semantic* one.
+The load-bearing blocker is the **#1039 claimability flip**: v1 coerces non-root
+`task` steps → `type=step`, Ready-excluded in **both** Go (`beads.go:171`) and the
+bd/DoltLite on-disk query (`native_dolt_store.go:702`), so a v1 molecule surfaces
+exactly one claimable unit; v2 keeps every step `type=task` and independently
+claimable. Recompiling an existing multi-step molecule as v2 silently turns N inert
+scaffolding steps into N concurrently-claimable nodes — a live dispatch change.
+Other deltas: graph.v2 hard-rejects `{{bead_id}}` (no mapping) and forces an input
+convoy for `{{issue}}`/`{{convoy_id}}`; `molecule_autoclose` is keyed on
+`type==molecule`; every step's coordclass flips Work→Graph; and `formula_v2=false`
+is a documented operator escape hatch. Therefore unification means **carrying a
+v1-compat profile on the v2 compiler** (re-apply the #1039 coercion, relax
+reserved-symbol strictness, emit molecule-typed roots) so classic formulas compile
+through v2 with identical output — classic semantics are *re-homed behind a flag*,
+not deleted.
+
+### Dependency order
+
+1. **Store split + `gc ready` + Mode-B default-wrap** — ride the already-unified
+   *persist* seam; independent of the v1/v2 compiler. The contention win. Do first.
+2. **Graph-only claim surface** — make the default route and classic `--on` emit a
+   routable graph node (needs the "adopt existing bead as node" primitive). Then
+   `WorkStore` sheds `Ready`/`Claim` and `RouterReady` collapses to graph only.
+3. **v1↔v2 compiler unification** — the "epic" cleanup; one compiler with classic
+   as a compat profile. Last, optional, gated on re-homing #1039, autoclose, and
+   reserved-symbol compatibility.
