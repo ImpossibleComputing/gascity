@@ -64,7 +64,7 @@ func TestExecRealBdUsesGCBDRealAndPropagatesExit(t *testing.T) {
 	t.Setenv("PATH", "") // prove no dependence on a PATH-resolved bd
 
 	var out, errb bytes.Buffer
-	code := execRealBd([]string{"version"}, dir, nil, &out, &errb)
+	code := execRealBd([]string{"version"}, dir, nil, nil, &out, &errb)
 	if code != 7 {
 		t.Fatalf("execRealBd exit = %d, want 7 (stderr=%q)", code, errb.String())
 	}
@@ -317,5 +317,97 @@ func TestDispatchBdShimReopenAndDelete(t *testing.T) {
 	}
 	if _, err := r.Get(gb.ID); !errors.Is(err, beads.ErrNotFound) {
 		t.Fatalf("after delete, Get err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRunBdShimPassthroughProjectsScopeEnv proves runBdShim routes a passthrough
+// verb to the real bd — resolved via GC_BD_REAL (no PATH lookup) — in the
+// resolved rig scope, with the projected bd env (GC_STORE_* set, BD_EXPORT_AUTO
+// suppressed), the same scope/env contract `gc bd` enforces.
+func TestRunBdShimPassthroughProjectsScopeEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fake bd is POSIX-only")
+	}
+	origCityFlag := cityFlag
+	origRigFlag := rigFlag
+	t.Cleanup(func() { cityFlag = origCityFlag; rigFlag = origRigFlag })
+	cityFlag = ""
+	rigFlag = ""
+
+	cityDir := t.TempDir()
+	writeReachableManagedDoltState(t, cityDir) // so bdCommandEnv can project the rig's dolt target
+	rigDir := filepath.Join(cityDir, "repo")
+	if err := os.MkdirAll(filepath.Join(rigDir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "demo"
+
+[[rigs]]
+name = "repo"
+path = "repo"
+prefix = "repo"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rigDir, ".beads", "config.yaml"), []byte(`issue_prefix: repo
+gc.endpoint_origin: inherited_city
+gc.endpoint_status: verified
+dolt.auto-start: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	capture := filepath.Join(t.TempDir(), "shim-bd-env.txt")
+	realBd := filepath.Join(t.TempDir(), "bd-real")
+	if err := os.WriteFile(realBd, []byte(`#!/bin/sh
+set -eu
+{
+  printf 'pwd=%s\n' "$PWD"
+  printf 'args=%s\n' "$*"
+  printf 'GC_STORE_ROOT=%s\n' "${GC_STORE_ROOT:-}"
+  printf 'GC_STORE_SCOPE=%s\n' "${GC_STORE_SCOPE:-}"
+  printf 'GC_BEADS_PREFIX=%s\n' "${GC_BEADS_PREFIX:-}"
+  printf 'BD_EXPORT_AUTO=%s\n' "${BD_EXPORT_AUTO:-}"
+} > "${CAPTURE_PATH}"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GC_BD_REAL", realBd)
+	t.Setenv("CAPTURE_PATH", capture)
+	t.Setenv("GC_CITY_PATH", cityDir)
+
+	var stdout, stderr bytes.Buffer
+	if code := runBdShim([]string{"--rig", "repo", "version"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("runBdShim passthrough = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read capture: %v (stderr=%q)", err, stderr.String())
+	}
+	got := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			got[k] = v
+		}
+	}
+	if !samePath(got["pwd"], rigDir) {
+		t.Fatalf("real bd pwd = %q, want %q", got["pwd"], rigDir)
+	}
+	if got["args"] != "version" {
+		t.Fatalf("real bd args = %q, want %q", got["args"], "version")
+	}
+	if !samePath(got["GC_STORE_ROOT"], rigDir) {
+		t.Fatalf("GC_STORE_ROOT = %q, want %q", got["GC_STORE_ROOT"], rigDir)
+	}
+	if got["GC_STORE_SCOPE"] != "rig" {
+		t.Fatalf("GC_STORE_SCOPE = %q, want %q", got["GC_STORE_SCOPE"], "rig")
+	}
+	if got["GC_BEADS_PREFIX"] != "repo" {
+		t.Fatalf("GC_BEADS_PREFIX = %q, want %q", got["GC_BEADS_PREFIX"], "repo")
+	}
+	if got["BD_EXPORT_AUTO"] != "false" {
+		t.Fatalf("BD_EXPORT_AUTO = %q, want %q (export suppression)", got["BD_EXPORT_AUTO"], "false")
 	}
 }

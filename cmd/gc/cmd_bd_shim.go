@@ -221,8 +221,9 @@ func resolveRealBdPath() (string, error) {
 // execRealBd runs the real bd binary with the given args in dir, streaming its
 // stdio and propagating its exit code — preserving bd's exit-code contract. It
 // resolves bd via resolveRealBdPath (never a bare LookPath in the shim's own
-// dispatch) so it cannot recurse into the shim.
-func execRealBd(args []string, dir string, stdin io.Reader, stdout, stderr io.Writer) int {
+// dispatch) so it cannot recurse into the shim. A nil env defaults to the
+// process environment; passthrough callers pass the projected bd scope env.
+func execRealBd(args []string, dir string, env []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	bdPath, err := resolveRealBdPath()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -235,7 +236,10 @@ func execRealBd(args []string, dir string, stdin io.Reader, stdout, stderr io.Wr
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = os.Environ()
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = env
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -446,18 +450,25 @@ func parseBdUpdateOpts(args []string) (beads.UpdateOpts, error) {
 	return opts, nil
 }
 
-// runBdShim is the bd-compatible thin-client entry point. It resolves the city,
-// classifies the bd subcommand, and either routes it through the in-process
-// Router, passes it through to the real bd, or refuses it (see the package doc
-// above). Scope is the city root for now; rig scope resolution and passthrough
-// env parity land in a later increment.
+// runBdShim is the bd-compatible thin-client entry point. It resolves the scope
+// (rig vs city) exactly as `gc bd` does, classifies the bd subcommand, and then
+// either routes it through the in-process Router (graph-aware), passes it
+// through to the real bd in the resolved scope with the projected bd env, or
+// refuses it (see the package doc above).
 func runBdShim(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	cityName, _, bdArgs := extractBdScopeFlags(args)
+	cityName, rigName, bdArgs := extractBdScopeFlags(args)
+
+	// Expand the gc-only `heartbeat <id>` verb into the bd write that performs
+	// it, then route that write by id — shared with `gc bd`.
+	bdArgs, err := rewriteBdHeartbeatArgs(bdArgs)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 	if len(bdArgs) == 0 {
 		fmt.Fprintln(stderr, "gc bd-shim: missing bd subcommand") //nolint:errcheck // best-effort stderr
 		return 1
 	}
-	verb := bdArgs[0]
 
 	cityPath, err := resolveBdCity(cityName)
 	if err != nil {
@@ -469,10 +480,27 @@ func runBdShim(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc bd-shim: loading config: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	target, err := resolveBdScopeTarget(cfg, cityPath, rigName, bdArgs)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 
+	// release-if-current is a gc-only verb whose conditional release routes by id
+	// through the store's ConditionalAssignmentReleaser (the Router routes it to
+	// the owning backend). Reuse the gc bd implementation.
+	if id, expectedAssignee, ok, err := parseBdReleaseIfCurrentArgs(bdArgs); ok || err != nil {
+		if err != nil {
+			fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		return doBdReleaseIfCurrent(cityPath, target, id, expectedAssignee, stdout, stderr)
+	}
+
+	verb := bdArgs[0]
 	switch classifyBdShimVerb(verb, bdArgs[1:], graphStoreSQLiteEnabled(cfg)) {
 	case bdRoute:
-		store, err := openStoreAtForCity(cityPath, cityPath)
+		store, err := openStoreAtForCity(target.ScopeRoot, cityPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "gc bd-shim: opening store: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
@@ -483,7 +511,12 @@ func runBdShim(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc bd-shim: %q reads or mutates graph-class beads but is not yet routed through the graph store; refusing to pass it to the work-only bd while graph_store=sqlite is active (would silently miss graph beads — see graph-store-rollout-plan.md §X2)\n", verb) //nolint:errcheck // best-effort stderr
 		return 1
 	default: // bdPassthrough
-		return execRealBd(bdArgs, cityPath, stdin, stdout, stderr)
+		env, err := bdCommandEnv(cityPath, cfg, target)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		return execRealBd(bdArgs, target.ScopeRoot, workQueryEnvForDir(env, target.ScopeRoot), stdin, stdout, stderr)
 	}
 }
 
