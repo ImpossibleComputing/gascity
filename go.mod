@@ -4,9 +4,9 @@ go 1.26.4
 
 // beads v1.0.5 RecordEventInTable omits the id column from INSERT INTO
 // wisp_events, but the live schema has no DEFAULT for that column (migration
-// 0010 dropped it). The local beads HEAD (dc0561af2) passes id explicitly.
+// 0010 dropped it). The pseudo-version (dc0561af2) passes id explicitly.
 // Replace until beads v1.0.6 is tagged and published.
-replace github.com/steveyegge/beads v1.0.5 => /home/jaword/projects/beads
+replace github.com/steveyegge/beads v1.0.5 => github.com/steveyegge/beads v1.0.5-0.20260611054652-dc0561af28e9
 
 require (
 	github.com/BurntSushi/toml v1.6.0
