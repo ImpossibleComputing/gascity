@@ -70,8 +70,17 @@ entirely (the literal "no local path at all"):
   (`NewSupervisorMux` → `serveCityRequest` → per-city `State`); bring the State up
   for a registered-but-not-fully-started city so its beads API answers before the
   full controller, with partial-startup cleanup.
-- **`release-if-current`** (handled before the verb switch, opens the local
-  store) and **`create`** (passthrough) need an API path for a fully pure shim.
+- **`release-if-current` — DONE** (`1ce3c77c3`): added the atomic
+  POST `/v0/bead/{id}/release-if-current` endpoint + `api.Client.ReleaseBeadIfCurrent`,
+  and the shim routes it through the API by default (in-process store only via the
+  escape hatch). The handler reaches the SQLite graph backend via the Router
+  (`TestBeadReleaseIfCurrentHandlerReachesSQLiteGraphBackend`).
+- **`create`** (passthrough) still execs the real bd — fine for the graph goal
+  (graph beads are poured via molecule instantiate/graph-apply, not `bd create`;
+  `bd create` is for work beads). Only needed for a literally-pure shim.
+- **C6 hook rewire** (`gc hook --claim`, separate from the shim) still opens a raw
+  work-only BdStore (cmd_hook_claim.go) — a claim endpoint (same pattern as
+  release-if-current) + routing would close it for graph-class claims.
 
 ## Files
 
