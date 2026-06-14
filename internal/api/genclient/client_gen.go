@@ -661,6 +661,12 @@ type BeadGraphResponse struct {
 	Root  Bead                   `json:"root"`
 }
 
+// BeadReleaseIfCurrentInputBody defines model for BeadReleaseIfCurrentInputBody.
+type BeadReleaseIfCurrentInputBody struct {
+	// ExpectedAssignee Release the assignment only if the bead is currently assigned to this agent (compare-and-swap).
+	ExpectedAssignee *string `json:"expected_assignee,omitempty"`
+}
+
 // BeadUpdateBody defines model for BeadUpdateBody.
 type BeadUpdateBody struct {
 	// Assignee Assigned agent.
@@ -5280,6 +5286,12 @@ type PostV0CityByCityNameBeadByIdCloseParams struct {
 	XGCRequest string `json:"X-GC-Request"`
 }
 
+// PostV0CityByCityNameBeadByIdReleaseIfCurrentParams defines parameters for PostV0CityByCityNameBeadByIdReleaseIfCurrent.
+type PostV0CityByCityNameBeadByIdReleaseIfCurrentParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
 // PostV0CityByCityNameBeadByIdReopenParams defines parameters for PostV0CityByCityNameBeadByIdReopen.
 type PostV0CityByCityNameBeadByIdReopenParams struct {
 	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
@@ -6131,6 +6143,9 @@ type PatchV0CityByCityNameBeadByIdJSONRequestBody = BeadUpdateBody
 
 // PostV0CityByCityNameBeadByIdAssignJSONRequestBody defines body for PostV0CityByCityNameBeadByIdAssign for application/json ContentType.
 type PostV0CityByCityNameBeadByIdAssignJSONRequestBody = BeadAssignInputBody
+
+// PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody defines body for PostV0CityByCityNameBeadByIdReleaseIfCurrent for application/json ContentType.
+type PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody = BeadReleaseIfCurrentInputBody
 
 // PostV0CityByCityNameBeadByIdUpdateJSONRequestBody defines body for PostV0CityByCityNameBeadByIdUpdate for application/json ContentType.
 type PostV0CityByCityNameBeadByIdUpdateJSONRequestBody = BeadUpdateBody
@@ -11542,6 +11557,11 @@ type ClientInterface interface {
 	// GetV0CityByCityNameBeadByIdDeps request
 	GetV0CityByCityNameBeadByIdDeps(ctx context.Context, cityName string, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBody request with any body
+	PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBody(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameBeadByIdReleaseIfCurrent(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, body PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PostV0CityByCityNameBeadByIdReopen request
 	PostV0CityByCityNameBeadByIdReopen(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReopenParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -12357,6 +12377,30 @@ func (c *Client) PostV0CityByCityNameBeadByIdClose(ctx context.Context, cityName
 
 func (c *Client) GetV0CityByCityNameBeadByIdDeps(ctx context.Context, cityName string, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0CityByCityNameBeadByIdDepsRequest(c.Server, cityName, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBody(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequestWithBody(c.Server, cityName, id, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameBeadByIdReleaseIfCurrent(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, body PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequest(c.Server, cityName, id, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -15707,6 +15751,73 @@ func NewGetV0CityByCityNameBeadByIdDepsRequest(server string, cityName string, i
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequest calls the generic PostV0CityByCityNameBeadByIdReleaseIfCurrent builder with application/json body
+func NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequest(server string, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, body PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequestWithBody(server, cityName, id, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequestWithBody generates requests for PostV0CityByCityNameBeadByIdReleaseIfCurrent with any type of body
+func NewPostV0CityByCityNameBeadByIdReleaseIfCurrentRequestWithBody(server string, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/bead/%s/release-if-current", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
 	}
 
 	return req, nil
@@ -23878,6 +23989,11 @@ type ClientWithResponsesInterface interface {
 	// GetV0CityByCityNameBeadByIdDepsWithResponse request
 	GetV0CityByCityNameBeadByIdDepsWithResponse(ctx context.Context, cityName string, id string, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameBeadByIdDepsResponse, error)
 
+	// PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBodyWithResponse request with any body
+	PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBodyWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse, error)
+
+	PostV0CityByCityNameBeadByIdReleaseIfCurrentWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, body PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse, error)
+
 	// PostV0CityByCityNameBeadByIdReopenWithResponse request
 	PostV0CityByCityNameBeadByIdReopenWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReopenParams, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReopenResponse, error)
 
@@ -24886,6 +25002,29 @@ func (r GetV0CityByCityNameBeadByIdDepsResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetV0CityByCityNameBeadByIdDepsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *map[string]string
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -28022,6 +28161,23 @@ func (c *ClientWithResponses) GetV0CityByCityNameBeadByIdDepsWithResponse(ctx co
 	return ParseGetV0CityByCityNameBeadByIdDepsResponse(rsp)
 }
 
+// PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse
+func (c *ClientWithResponses) PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBodyWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse, error) {
+	rsp, err := c.PostV0CityByCityNameBeadByIdReleaseIfCurrentWithBody(ctx, cityName, id, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameBeadByIdReleaseIfCurrentResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameBeadByIdReleaseIfCurrentWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReleaseIfCurrentParams, body PostV0CityByCityNameBeadByIdReleaseIfCurrentJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse, error) {
+	rsp, err := c.PostV0CityByCityNameBeadByIdReleaseIfCurrent(ctx, cityName, id, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameBeadByIdReleaseIfCurrentResponse(rsp)
+}
+
 // PostV0CityByCityNameBeadByIdReopenWithResponse request returning *PostV0CityByCityNameBeadByIdReopenResponse
 func (c *ClientWithResponses) PostV0CityByCityNameBeadByIdReopenWithResponse(ctx context.Context, cityName string, id string, params *PostV0CityByCityNameBeadByIdReopenParams, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameBeadByIdReopenResponse, error) {
 	rsp, err := c.PostV0CityByCityNameBeadByIdReopen(ctx, cityName, id, params, reqEditors...)
@@ -30204,6 +30360,39 @@ func ParseGetV0CityByCityNameBeadByIdDepsResponse(rsp *http.Response) (*GetV0Cit
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest BeadDepsResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameBeadByIdReleaseIfCurrentResponse parses an HTTP response from a PostV0CityByCityNameBeadByIdReleaseIfCurrentWithResponse call
+func ParsePostV0CityByCityNameBeadByIdReleaseIfCurrentResponse(rsp *http.Response) (*PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]string
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

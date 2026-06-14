@@ -345,6 +345,13 @@ export type BeadGraphResponse = {
     root: Bead;
 };
 
+export type BeadReleaseIfCurrentInputBody = {
+    /**
+     * Release the assignment only if the bead is currently assigned to this agent (compare-and-swap).
+     */
+    expected_assignee?: string;
+};
+
 export type BeadUpdateBody = {
     /**
      * Assigned agent.
@@ -6879,6 +6886,48 @@ export type GetV0CityByCityNameBeadByIdDepsResponses = {
 };
 
 export type GetV0CityByCityNameBeadByIdDepsResponse = GetV0CityByCityNameBeadByIdDepsResponses[keyof GetV0CityByCityNameBeadByIdDepsResponses];
+
+export type PostV0CityByCityNameBeadByIdReleaseIfCurrentData = {
+    body: BeadReleaseIfCurrentInputBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+        /**
+         * Bead ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/bead/{id}/release-if-current';
+};
+
+export type PostV0CityByCityNameBeadByIdReleaseIfCurrentErrors = {
+    /**
+     * Error
+     */
+    default: ErrorModel;
+};
+
+export type PostV0CityByCityNameBeadByIdReleaseIfCurrentError = PostV0CityByCityNameBeadByIdReleaseIfCurrentErrors[keyof PostV0CityByCityNameBeadByIdReleaseIfCurrentErrors];
+
+export type PostV0CityByCityNameBeadByIdReleaseIfCurrentResponses = {
+    /**
+     * OK
+     */
+    200: {
+        [key: string]: string;
+    };
+};
+
+export type PostV0CityByCityNameBeadByIdReleaseIfCurrentResponse = PostV0CityByCityNameBeadByIdReleaseIfCurrentResponses[keyof PostV0CityByCityNameBeadByIdReleaseIfCurrentResponses];
 
 export type PostV0CityByCityNameBeadByIdReopenData = {
     body?: never;

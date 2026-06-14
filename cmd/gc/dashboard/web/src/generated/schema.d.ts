@@ -310,6 +310,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v0/city/{cityName}/bead/{id}/release-if-current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post v0 city by city name bead by ID release if current */
+        post: operations["post-v0-city-by-city-name-bead-by-id-release-if-current"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v0/city/{cityName}/bead/{id}/reopen": {
         parameters: {
             query?: never;
@@ -2291,6 +2308,10 @@ export interface components {
             beads: components["schemas"]["Bead"][] | null;
             deps: components["schemas"]["WorkflowDepResponse"][] | null;
             root: components["schemas"]["Bead"];
+        };
+        BeadReleaseIfCurrentInputBody: {
+            /** @description Release the assignment only if the bead is currently assigned to this agent (compare-and-swap). */
+            expected_assignee?: string;
         };
         BeadUpdateBody: {
             /** @description Assigned agent. */
@@ -8203,6 +8224,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BeadDepsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "post-v0-city-by-city-name-bead-by-id-release-if-current": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks. */
+                "X-GC-Request": string;
+            };
+            path: {
+                /** @description City name. */
+                cityName: string;
+                /** @description Bead ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BeadReleaseIfCurrentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "X-GC-Cache-Age-S"?: number;
+                    "X-GC-Index"?: number;
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Error */
