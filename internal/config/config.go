@@ -1299,6 +1299,17 @@ type BeadsConfig struct {
 	// Backend selects the bd storage engine when Provider is "bd".
 	// Empty defaults to "dolt"; T3Code uses "doltlite" for local dev stores.
 	Backend string `toml:"backend,omitempty"`
+	// GraphStore selects an alternate backend for graph-class beads — the
+	// formula-v2 execution topology (molecule/step/gate/scope/run beads, every
+	// gc.kind control bead, wisp roots, convergence beads, synthetic convoys):
+	// the high-churn metadata that drives the bead explosion. Empty (default)
+	// keeps every class on the Provider backend, so behavior is unchanged.
+	// "sqlite" routes the graph class to an embedded, process-local SQLite store
+	// at <scope>/.gc/beads.sqlite, isolating that churn from the Dolt-backed
+	// work store. Opt-in; the work backlog (tasks/epics/convoys) always stays on
+	// Provider. This is NOT the removed top-level "sqlite" Provider — it selects
+	// only the graph class's backend behind the per-class Router.
+	GraphStore string `toml:"graph_store,omitempty" jsonschema:"enum=,enum=sqlite"`
 	// EventHooks controls installation of the bead event-forwarding hooks
 	// (.beads/hooks/on_create,on_update,on_close) that shell out to
 	// `gc event emit` on every bead write. Defaults to true. Set to false

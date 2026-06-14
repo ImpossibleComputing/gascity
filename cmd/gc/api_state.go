@@ -18,8 +18,10 @@ import (
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads"
 	beadsexec "github.com/gastownhall/gascity/internal/beads/exec"
+	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/configedit"
+	"github.com/gastownhall/gascity/internal/coordclass"
 	"github.com/gastownhall/gascity/internal/coordrouter"
 	"github.com/gastownhall/gascity/internal/emergency"
 	"github.com/gastownhall/gascity/internal/events"
@@ -144,7 +146,7 @@ func newControllerState(
 		fmt.Fprintf(os.Stderr, "api: city bead store: %v (session/mail endpoints disabled)\n", err)
 	} else {
 		store := opened.Store
-		cs.cityBeadStore = wrapWithCachingStore(ctx, store, ep, true)
+		cs.cityBeadStore = wrapWithCachingStore(ctx, store, ep, true, cityPath)
 		cs.cityBeadsDiagnostic = diagnosticPtr(opened.Diagnostic)
 		cs.cityMailProv = newMailProvider(cs.cityBeadStore)
 		svc := extmsg.NewServices(cs.cityBeadStore)
@@ -162,7 +164,7 @@ func newControllerState(
 // Suspended rigs pass false: they spawn no agents, so nothing writes locally and
 // a continuously refreshed cache buys nothing; reconciling every suspended rig
 // every cycle is what pegs the supervisor (gastownhall/gascity #1978 follow-up).
-func wrapWithCachingStore(ctx context.Context, store beads.Store, ep events.Provider, backgroundRefresh bool) beads.Store {
+func wrapWithCachingStore(ctx context.Context, store beads.Store, ep events.Provider, backgroundRefresh bool, scopeRoot string) beads.Store {
 	baseStore, policyStore, policyWrapped := unwrapBeadPolicyStore(store)
 	if baseStore == nil {
 		return nil
@@ -198,11 +200,7 @@ func wrapWithCachingStore(ctx context.Context, store beads.Store, ep events.Prov
 	// rig): serve from the synchronous pre-prime only, no async prime/reconcile.
 	if ctx.Done() == nil || !backgroundRefresh {
 		if policyWrapped {
-			// Insert the per-class Router between policy and caching:
-			// policy(Router(caching(backend))). In the identity phase every class
-			// resolves to this one cached backend, so the Router is a pure
-			// passthrough; relocating a class later is a one-line Register.
-			return wrapStoreWithBeadPolicies(coordrouter.New(cs), policyStore.cfg)
+			return routedPolicyStore(cs, policyStore.cfg, scopeRoot)
 		}
 		return cs
 	}
@@ -210,13 +208,47 @@ func wrapWithCachingStore(ctx context.Context, store beads.Store, ep events.Prov
 	// callers (convergence reconcile, sweep, API handlers).
 	go primeThenStartReconciler(ctx, cs, os.Getenv("GC_AGENT"))
 	if policyWrapped {
-		// Insert the per-class Router between policy and caching:
-		// policy(Router(caching(backend))). In the identity phase every class
-		// resolves to this one cached backend, so the Router is a pure
-		// passthrough; relocating a class later is a one-line Register.
-		return wrapStoreWithBeadPolicies(coordrouter.New(cs), policyStore.cfg)
+		return routedPolicyStore(cs, policyStore.cfg, scopeRoot)
 	}
 	return cs
+}
+
+// routedPolicyStore inserts the per-class Router between the policy wrapper and
+// the cached backend — policy(Router(caching(backend))) — and registers any
+// opt-in graph backend on the Router. In the identity phase (no opt-in) every
+// class resolves to the one cached backend, so the Router is a pure passthrough
+// and relocating a class later is a one-line Register. The Router sits ABOVE the
+// cache deliberately: the cache reconciles only the work backend (via a bd
+// subprocess), so a relocated graph backend must not live under it or its reads
+// would go stale.
+func routedPolicyStore(cached beads.Store, cfg *config.City, scopeRoot string) beads.Store {
+	router := coordrouter.New(cached)
+	registerGraphStoreBackend(router, cfg, scopeRoot)
+	return wrapStoreWithBeadPolicies(router, cfg)
+}
+
+// graphStoreSQLite is the [beads] graph_store value that routes the graph class
+// to an embedded SQLite store.
+const graphStoreSQLite = "sqlite"
+
+// registerGraphStoreBackend registers an embedded SQLite backend for the graph
+// class on r when the city opts in via [beads] graph_store = "sqlite". The graph
+// store lives at <scopeRoot>/.gc/beads.sqlite, isolating the high-churn formula-v2
+// topology from the Dolt-backed work store. Default-off leaves the Router in its
+// identity phase, so behavior is byte-identical until a city opts in. A failed
+// open is logged loudly and the graph class falls back to the work backend rather
+// than crashing the controller — the loud log surfaces the misconfiguration.
+func registerGraphStoreBackend(r *coordrouter.Router, cfg *config.City, scopeRoot string) {
+	if cfg == nil || !strings.EqualFold(strings.TrimSpace(cfg.Beads.GraphStore), graphStoreSQLite) {
+		return
+	}
+	dir := filepath.Join(scopeRoot, citylayout.RuntimeRoot)
+	store, err := beads.OpenSQLiteStore(dir)
+	if err != nil {
+		log.Printf("beads: graph_store=%q requested but opening the SQLite graph store at %s failed: %v; graph beads stay on the work backend", cfg.Beads.GraphStore, dir, err)
+		return
+	}
+	r.Register(coordclass.ClassGraph, store)
 }
 
 // primeThenStartReconciler runs the async full prime and then arms the
@@ -274,13 +306,13 @@ func (cs *controllerState) buildStores(cfg *config.City) map[string]beads.Store 
 			// Legacy file mode aliases every rig to the same backing store, so
 			// the cache handle must be shared too for immediate cross-rig reads.
 			if sharedLegacyCachedStore == nil {
-				sharedLegacyCachedStore = wrapWithCachingStore(cs.cacheCtx, sharedLegacyFileStore, cs.eventProv, true)
+				sharedLegacyCachedStore = wrapWithCachingStore(cs.cacheCtx, sharedLegacyFileStore, cs.eventProv, true, cs.cityPath)
 			}
 			stores[rig.Name] = sharedLegacyCachedStore
 			continue
 		}
 		store = cs.openRigStore(scopeProvider, rig.Name, scopeRoot, rig.EffectivePrefix(), cfg)
-		stores[rig.Name] = wrapWithCachingStore(cs.cacheCtx, store, cs.eventProv, rigStoreBackgroundRefresh(suspState, rig))
+		stores[rig.Name] = wrapWithCachingStore(cs.cacheCtx, store, cs.eventProv, rigStoreBackgroundRefresh(suspState, rig), scopeRoot)
 	}
 	return stores
 }
@@ -603,7 +635,7 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	var cityMailProv mail.Provider
 	var extSvc *extmsg.Services
 	if cityStore != nil {
-		cityStore = wrapWithCachingStore(cs.cacheCtx, cityStore, cs.eventProv, true)
+		cityStore = wrapWithCachingStore(cs.cacheCtx, cityStore, cs.eventProv, true, cs.cityPath)
 		cityMailProv = newMailProvider(cityStore)
 		svc := extmsg.NewServices(cityStore)
 		extSvc = &svc
