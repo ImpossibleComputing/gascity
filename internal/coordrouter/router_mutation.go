@@ -113,7 +113,29 @@ func (r *Router) Count(ctx context.Context, query beads.ListQuery, excludeTypes 
 	return 0, beads.ErrCountUnsupported
 }
 
+// Claim routes an atomic claim to the bead's owning backend, bridging the two
+// claim shapes the split spans: a backend that takes an explicit assignee
+// (beads.Claimer, e.g. the SQLite graph store) is claimed with assignee, while a
+// backend that claims for its own configured actor (beads.EnvActorClaimer, e.g. a
+// BdStore with BEADS_ACTOR baked into its runner) is claimed without it. For the
+// latter the caller must have constructed the backend with the matching actor, so
+// assignee is advisory there. Returns ErrClaimUnsupported when the owning backend
+// can do neither. Declaring Claim(id, assignee) here also shadows any embedded
+// single-arg Claim promoted from the primary backend, so the Router presents one
+// claim surface.
+func (r *Router) Claim(id, assignee string) (beads.Bead, bool, error) {
+	backend := r.backendForID(id)
+	if c, ok := backend.(beads.Claimer); ok {
+		return c.Claim(id, assignee)
+	}
+	if c, ok := backend.(beads.EnvActorClaimer); ok {
+		return c.Claim(id)
+	}
+	return beads.Bead{}, false, beads.ErrClaimUnsupported
+}
+
 var (
 	_ beads.ConditionalAssignmentReleaser = (*Router)(nil)
 	_ beads.Counter                       = (*Router)(nil)
+	_ beads.Claimer                       = (*Router)(nil)
 )
