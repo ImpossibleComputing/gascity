@@ -16,16 +16,19 @@ import (
 )
 
 // The bd shim (thin client) is a bd-CLI-compatible front end that routes a
-// worker's bead operations through the in-process coordrouter Router, so graph
-// beads (relocated to the embedded SQLite store under graph_store=sqlite) are
-// seen and mutated, while work beads still reach the real bd binary. Installed
-// as `bd` first on an agent's PATH, it makes both raw `bd` and `gc bd` route
+// worker's bead operations through the controller's HTTP API, so the controller
+// owns the store (the per-class coordrouter Router + the embedded SQLite graph
+// store under graph_store=sqlite) and every worker is a thin client. Installed as
+// `bd` first on an agent's PATH, it makes both raw `bd` and `gc bd` route
 // transparently with no prompt changes (graph-store-rollout-plan.md §C2,
-// model A in graph-store-session-handoff.md).
+// model A in graph-store-session-handoff.md; the pure-HTTP redirect is
+// engdocs/design/bd-shim-http-redirect.md).
 //
 // Each bd subcommand has one of three dispositions (classifyBdShimVerb):
 //
-//   - bdRoute       — translated to an in-process Router store op (graph-aware).
+//   - bdRoute       — served by calling the controller's HTTP bead API
+//     (dispatchBdShimVerbViaAPI). PURE-HTTP: there is no in-process Router
+//     fallback; a routed verb errors when no controller is reachable (ga-2gap48).
 //   - bdPassthrough — execed to the real bd (GC_BD_REAL), for ops that provably
 //     never touch graph-class data, and for everything in the identity phase
 //     (graph_store off → one backend → byte-identical to raw bd).
@@ -48,7 +51,7 @@ type bdShimDisposition int
 const (
 	// bdPassthrough execs the real bd binary unchanged.
 	bdPassthrough bdShimDisposition = iota
-	// bdRoute translates the verb to an in-process Router store op.
+	// bdRoute serves the verb via the controller's HTTP bead API.
 	bdRoute
 	// bdRefuse rejects the verb rather than silently bypassing the graph store.
 	bdRefuse
@@ -274,110 +277,6 @@ func execRealBd(args []string, dir string, env []string, stdin io.Reader, stdout
 		return 1
 	}
 	return 0
-}
-
-// dispatchBdShimVerb translates a single routed bd subcommand into an in-process
-// store op against the Router-wrapped store. store must be the per-scope Router
-// (or its policy wrapper) so by-id ops land on the owning backend (graph vs
-// work). Stdout byte-parity with raw bd is deferred to the C2a corpus gate
-// (ga-2gap48.10); this enforces the routing + exit-code contract.
-func dispatchBdShimVerb(store beads.Store, verb string, args []string, _ io.Reader, stdout, stderr io.Writer) int {
-	switch verb {
-	case "close":
-		if len(args) < 1 {
-			fmt.Fprintln(stderr, "gc bd-shim: usage: close <id>") //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		if err := store.Close(args[0]); err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: closing %q: %v\n", args[0], err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return 0
-	case "show":
-		id, ok := firstBdPositional(args)
-		if !ok {
-			fmt.Fprintln(stderr, "gc bd-shim: usage: show <id>") //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		bead, err := store.Get(id)
-		if err != nil {
-			if errors.Is(err, beads.ErrNotFound) {
-				// Raw bd prints an empty array (exit 0) for an unknown id; a
-				// `bd show ... --json | jq '.[0]'` consumer reads that as absent.
-				return writeReadyJSON(nil, stdout, stderr)
-			}
-			fmt.Fprintf(stderr, "gc bd-shim: show %q: %v\n", id, err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return writeReadyJSON([]beads.Bead{bead}, stdout, stderr)
-	case "ready":
-		p, err := parseBdReadyParams(args)
-		if err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		out, err := store.Ready(p.query)
-		if err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: ready: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return writeReadyJSON(applyBdReadyParams(out, p), stdout, stderr)
-	case "update":
-		id, ok := firstBdPositional(args)
-		if !ok {
-			fmt.Fprintln(stderr, "gc bd-shim: usage: update <id> [flags]") //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		opts, err := parseBdUpdateOpts(args)
-		if err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: update %q: %v\n", id, err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		if err := store.Update(id, opts); err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: update %q: %v\n", id, err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return 0
-	case "reopen":
-		id, ok := firstBdPositional(args)
-		if !ok {
-			fmt.Fprintln(stderr, "gc bd-shim: usage: reopen <id>") //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		if err := store.Reopen(id); err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: reopen %q: %v\n", id, err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return 0
-	case "delete":
-		id, ok := firstBdPositional(args)
-		if !ok {
-			fmt.Fprintln(stderr, "gc bd-shim: usage: delete <id>") //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		if err := store.Delete(id); err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: delete %q: %v\n", id, err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		return 0
-	default:
-		fmt.Fprintf(stderr, "gc bd-shim: no routed handler for %q\n", verb) //nolint:errcheck // best-effort stderr
-		return 1
-	}
-}
-
-// bdShimAllowLocalFallback reports whether the shim may open the in-process
-// Router locally when no controller HTTP API is reachable. The pure-HTTP redirect
-// (ga-2gap48) makes routing through the controller the DEFAULT — the controller
-// owns the store, every worker is a thin client — so a routed verb errors rather
-// than silently opening the Router when no controller is up. The supervisor
-// publishes a city's beads API (publishManagedCity) before it spawns that city's
-// control-dispatcher and agents (cityRuntime.run), so the shim's real consumers
-// always find the API up. GC_BD_SHIM_ALLOW_LOCAL re-enables the local fallback —
-// a TRANSITIONAL escape hatch for bootstrap (init/standalone before any
-// controller); removed once init/standalone also route through a beads API.
-func bdShimAllowLocalFallback() bool {
-	return strings.TrimSpace(os.Getenv("GC_BD_SHIM_ALLOW_LOCAL")) != ""
 }
 
 // bdShimAPIClient returns an HTTP client to the controller's bead API for the
@@ -728,50 +627,39 @@ func runBdShim(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "gc bd-shim: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
-		if client := bdShimAPIClient(cityPath); client != nil {
-			released, err := client.ReleaseBeadIfCurrent(id, expectedAssignee)
-			if err != nil {
-				fmt.Fprintf(stderr, "gc bd-shim: release-if-current %q via API: %v\n", id, err) //nolint:errcheck // best-effort stderr
-				return 1
-			}
-			if released {
-				fmt.Fprintln(stdout, "released") //nolint:errcheck // best-effort stdout
-			} else {
-				fmt.Fprintln(stdout, "skipped") //nolint:errcheck // best-effort stdout
-			}
-			return 0
-		}
-		if !bdShimAllowLocalFallback() {
-			fmt.Fprintf(stderr, "gc bd-shim: no controller API reachable for release-if-current %q; the shim routes bead ops through the controller (ga-2gap48 pure-HTTP). Set GC_BD_SHIM_ALLOW_LOCAL=1 for the transitional local-store fallback.\n", id) //nolint:errcheck // best-effort stderr
+		client := bdShimAPIClient(cityPath)
+		if client == nil {
+			fmt.Fprintf(stderr, "gc bd-shim: no controller API reachable for release-if-current %q; the shim routes bead ops through the controller (ga-2gap48 pure-HTTP)\n", id) //nolint:errcheck // best-effort stderr
 			return 1
 		}
-		return doBdReleaseIfCurrent(cityPath, target, id, expectedAssignee, stdout, stderr)
+		released, err := client.ReleaseBeadIfCurrent(id, expectedAssignee)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc bd-shim: release-if-current %q via API: %v\n", id, err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		if released {
+			fmt.Fprintln(stdout, "released") //nolint:errcheck // best-effort stdout
+		} else {
+			fmt.Fprintln(stdout, "skipped") //nolint:errcheck // best-effort stdout
+		}
+		return 0
 	}
 
 	verb, verbArgs := splitBdGlobalFlags(bdArgs)
 	switch classifyBdShimVerb(verb, verbArgs, graphStoreSQLiteEnabled(cfg)) {
 	case bdRoute:
-		// Pure-HTTP redirect: when a controller is reachable, route the verb
-		// through its HTTP API — the controller owns the store (Router + graph
-		// SQLite) and every worker is a thin client — rather than opening the
-		// in-process Router. The local store path below remains as a TRANSITIONAL
-		// fallback for when no controller is up (init/bootstrap/standalone); it is
-		// removed once the beads subsystem is guaranteed up (the pure-HTTP end
-		// state, ga-2gap48).
-		if client := bdShimAPIClient(cityPath); client != nil {
-			return dispatchBdShimVerbViaAPI(client, verb, verbArgs, stdout, stderr)
-		}
-		if !bdShimAllowLocalFallback() {
-			fmt.Fprintf(stderr, "gc bd-shim: no controller API reachable for %q; the shim routes bead ops through the controller (ga-2gap48 pure-HTTP). Set GC_BD_SHIM_ALLOW_LOCAL=1 for the transitional local-store fallback.\n", verb) //nolint:errcheck // best-effort stderr
+		// Pure-HTTP: route the verb through the controller's HTTP API — the
+		// controller owns the store (Router + graph SQLite) and every worker is a
+		// thin client. There is no in-process Router fallback; a routed verb errors
+		// when no controller is reachable (ga-2gap48). The supervisor publishes a
+		// city's beads API before it spawns that city's control-dispatcher and
+		// agents, so the shim's consumers always find the API up.
+		client := bdShimAPIClient(cityPath)
+		if client == nil {
+			fmt.Fprintf(stderr, "gc bd-shim: no controller API reachable for %q; the shim routes bead ops through the controller (ga-2gap48 pure-HTTP)\n", verb) //nolint:errcheck // best-effort stderr
 			return 1
 		}
-		store, err := openStoreAtForCity(target.ScopeRoot, cityPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "gc bd-shim: opening store: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-		defer closeBeadStoreHandle(store) //nolint:errcheck // best-effort close
-		return dispatchBdShimVerb(store, verb, verbArgs, stdin, stdout, stderr)
+		return dispatchBdShimVerbViaAPI(client, verb, verbArgs, stdout, stderr)
 	case bdRefuse:
 		fmt.Fprintf(stderr, "gc bd-shim: %q reads or mutates graph-class beads but is not yet routed through the graph store; refusing to pass it to the work-only bd while graph_store=sqlite is active (would silently miss graph beads — see graph-store-rollout-plan.md §X2)\n", verb) //nolint:errcheck // best-effort stderr
 		return 1
