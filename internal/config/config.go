@@ -3644,6 +3644,11 @@ func readyOracleCmd(beads BeadsConfig) string {
 // never interpolated, so the literal `bd ready` appears only as the predicate
 // command — making the token swap exact. Custom WorkQuery/ScaleCheck commands are
 // never passed here.
+//
+// gc ready accepts `--json` as a no-op (it emits a bare JSON array natively) and
+// is exempt from the gc JSON-schema contract (isContractExemptBareJSONPath),
+// like the bd passthrough commands it stands in for — so the swapped predicates
+// keep their `--json` flag and stream their array to the work_query consumer.
 func rewriteReadyOracle(query, oracle string) string {
 	if oracle == bdReadyOracleCommand {
 		return query
