@@ -93,6 +93,33 @@ func TestCheckGomodReplaceGuard(t *testing.T) {
 		})
 	}
 
+	gitRefCases := []struct {
+		name  string
+		block string
+	}{
+		{
+			"git_ref_branch_name",
+			"replace github.com/steveyegge/beads => github.com/steveyegge/beads main",
+		},
+		{
+			"prerelease_label",
+			"replace github.com/steveyegge/beads v1.0.4 => github.com/steveyegge/beads v1.0.5-rc1",
+		},
+	}
+	for _, tc := range gitRefCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			gomod := "module github.com/example/mod\n\ngo 1.22\n\n" + tc.block + "\n"
+			out, code := runScript(t, gomod)
+			if code == 0 {
+				t.Fatalf("expected non-zero exit for git-ref/prerelease replace %q, got 0\n%s", tc.block, out)
+			}
+			if out == "" {
+				t.Fatal("expected failure message, got empty output")
+			}
+		})
+	}
+
 	localPathCases := []struct {
 		name  string
 		block string

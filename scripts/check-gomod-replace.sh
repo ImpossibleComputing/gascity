@@ -10,8 +10,15 @@
 # bypass of this required CI check — automated workers may NEVER self-authorize
 # an unreleased dependency.
 #
-# Released: v1.2.3 or vX.Y.Z with only digits (e.g. v0.0.0)
-# Unreleased: pseudo-version (vX.Y.Z-0.YYYYMMDDHHMMSS-<sha>), local path (./..  ../.. /...), git ref
+# Released: exactly vX.Y.Z where X, Y, Z are integers (e.g. v1.0.5, v0.0.1).
+# Blocked: pseudo-version, prerelease label, local path, git branch/ref, or
+#          any non-semver version token.
+#
+# Handles both single-line and grouped multi-line replace blocks:
+#   replace foo => bar v1.0.0-pseudo          (single-line)
+#   replace (                                 (grouped block)
+#       foo => bar v1.0.0-pseudo
+#   )
 set -euo pipefail
 
 gomod="${1:-go.mod}"
@@ -21,24 +28,11 @@ if [[ ! -f "$gomod" ]]; then
 	exit 1
 fi
 
-# Extract replace targets (the part after "=>").
-# go.mod replace syntax: replace <old> [<version>] => <new> [<new-version>]
-# We only care about the replacement target, which follows "=>".
-failed=0
-while IFS= read -r line; do
-	# Strip leading whitespace and skip non-replace lines.
-	stripped="${line#"${line%%[! ]*}"}"
-	[[ "$stripped" == replace* ]] || continue
+check_replace_rhs() {
+	local stripped="$1" rhs="$2"
+	local version="" path_part="$rhs"
 
-	# Extract the replacement target: everything after "=>".
-	rhs="${stripped#*=>}"
-	rhs="${rhs#"${rhs%%[! ]*}"}"  # strip leading whitespace
-
-	# Split into path and optional version (the last space-separated token).
-	# If rhs is "github.com/foo/bar v1.0.0-pseudo", path=github.com/foo/bar version=v1.0.0-pseudo
-	# If rhs is "./local/path", path=./local/path version=""
-	version=""
-	path_part="$rhs"
+	# Split into path and optional version (last space-separated token).
 	if [[ "$rhs" =~ ^([^ ]+)[[:space:]]+([^ ]+)$ ]]; then
 		path_part="${BASH_REMATCH[1]}"
 		version="${BASH_REMATCH[2]}"
@@ -52,26 +46,62 @@ while IFS= read -r line; do
 		echo "  Policy: gascity is a public project that must only pin released semver deps." >&2
 		echo "  Local-path replaces (./  ../  /) may not appear in committed go.mod." >&2
 		echo "  Override: human operator must manually bypass this required CI check." >&2
-		failed=1
-		continue
+		return 1
 	fi
 
-	# If there's no version, the replace is a path-only redirect (unusual but valid if
-	# it resolves to a released tag). Nothing to check here without a version.
-	[[ -n "$version" ]] || continue
+	# No version: path-only redirect with no version to check.
+	[[ -n "$version" ]] || return 0
 
-	# Pseudo-version pattern: vX.Y.Z-0.YYYYMMDDHHMMSS-<12hexsha>
-	#                      or vX.Y.Z-<pre>.0.YYYYMMDDHHMMSS-<sha>
-	# Both contain a 14-digit timestamp and a hex sha separated by hyphens.
-	if [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?\.[0-9]{14}-[0-9a-f]+ ]]; then
-		echo "check-gomod-replace: BLOCKED — replace directive targets a pseudo-version (unreleased commit):" >&2
+	# Only pure vX.Y.Z release tags are allowed. Everything else — pseudo-versions
+	# (timestamp+sha suffix), prerelease labels (-rc1, -beta), and non-semver
+	# tokens (branch names like "main", git refs) — is blocked.
+	if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo "check-gomod-replace: BLOCKED — replace directive targets an unreleased version:" >&2
 		echo "  $stripped" >&2
 		echo "" >&2
 		echo "  Policy: gascity is a public project that must only pin released semver deps." >&2
-		echo "  Pseudo-versions pin to unreleased commits; only real vX.Y.Z tags are allowed." >&2
+		echo "  Only exact vX.Y.Z release tags are allowed; pseudo-versions, prerelease" >&2
+		echo "  labels, and git branch/ref tokens are not. Version seen: $version" >&2
 		echo "  Override: human operator must manually bypass this required CI check." >&2
-		failed=1
+		return 1
 	fi
+
+	return 0
+}
+
+failed=0
+in_replace_block=0
+while IFS= read -r line; do
+	stripped="${line#"${line%%[! ]*}"}"
+
+	# Detect opening of a grouped block: replace (
+	if [[ "$stripped" == "replace (" ]]; then
+		in_replace_block=1
+		continue
+	fi
+
+	# Detect closing of a grouped block.
+	if [[ $in_replace_block -eq 1 && "$stripped" == ")" ]]; then
+		in_replace_block=0
+		continue
+	fi
+
+	if [[ $in_replace_block -eq 1 ]]; then
+		# Inner line of a block: "old [version] => new [version]"
+		[[ -z "$stripped" || "$stripped" == //* ]] && continue
+		[[ "$stripped" == *"=>"* ]] || continue
+		rhs="${stripped#*=>}"
+		rhs="${rhs#"${rhs%%[! ]*}"}"
+		check_replace_rhs "$stripped" "$rhs" || failed=1
+		continue
+	fi
+
+	# Single-line replace: starts with "replace " but is not "replace ("
+	[[ "$stripped" == replace\ * && "$stripped" != "replace (" ]] || continue
+	[[ "$stripped" == *"=>"* ]] || continue
+	rhs="${stripped#*=>}"
+	rhs="${rhs#"${rhs%%[! ]*}"}"
+	check_replace_rhs "$stripped" "$rhs" || failed=1
 done < "$gomod"
 
 if [[ $failed -ne 0 ]]; then
