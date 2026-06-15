@@ -97,7 +97,7 @@ func handleJSONContractRequest(root *cobra.Command, args []string, stdout, stder
 	}
 
 	commandPath := commandPathWords(cmd)
-	if isBDCommandPath(commandPath) {
+	if isContractExemptBareJSONPath(commandPath) {
 		return false, 0
 	}
 	if _, err := readCommandSchema(cmd, commandPath, jsonSchemaResultRole); err != nil {
@@ -120,7 +120,7 @@ func shouldBufferJSONExecution(root *cobra.Command, args []string) bool {
 		return true
 	}
 	commandPath := commandPathWords(request.cmd)
-	if isBDCommandPath(commandPath) {
+	if isContractExemptBareJSONPath(commandPath) {
 		return false
 	}
 	schema, err := readCommandSchema(request.cmd, commandPath, jsonSchemaResultRole)
@@ -139,7 +139,7 @@ func shouldReportJSONExecutionError(root *cobra.Command, args []string) bool {
 		return true
 	}
 	commandPath := commandPathWords(request.cmd)
-	if isBDCommandPath(commandPath) {
+	if isContractExemptBareJSONPath(commandPath) {
 		return false
 	}
 	if _, err := readCommandSchema(request.cmd, commandPath, jsonSchemaResultRole); err != nil {
@@ -271,6 +271,20 @@ func commandPathWords(cmd *cobra.Command) []string {
 
 func isBDCommandPath(commandPath []string) bool {
 	return len(commandPath) > 0 && commandPath[0] == "bd"
+}
+
+// isContractExemptBareJSONPath reports command paths exempt from the gc
+// JSON-schema contract because they self-serialize a bare JSON array: the bd
+// passthrough commands (emitted by the real bd binary) and `gc ready`, the
+// graph-store-aware drop-in for `bd ready --json` that streams the same
+// []bead array. Exempting keeps `gc ready --json` (used by the routed
+// work_query under graph_store=sqlite) from being rejected for lacking a
+// declared schema, while still letting it stream its own array to the consumer.
+func isContractExemptBareJSONPath(commandPath []string) bool {
+	if isBDCommandPath(commandPath) {
+		return true
+	}
+	return len(commandPath) == 1 && commandPath[0] == "ready"
 }
 
 func schemaDeclaresJSONL(schema json.RawMessage) bool {
