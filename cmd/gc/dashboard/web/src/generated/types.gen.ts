@@ -286,6 +286,24 @@ export type BeadAssignInputBody = {
     assignee?: string;
 };
 
+export type BeadClaimInputBody = {
+    /**
+     * Agent to claim the bead for. The claim is atomic (rejected if the bead is already assigned to a different agent).
+     */
+    assignee?: string;
+};
+
+export type BeadClaimResult = {
+    /**
+     * The claimed bead, populated when claimed=true.
+     */
+    bead?: Bead;
+    /**
+     * Whether the claim succeeded (false if the bead was not claimable, e.g. already assigned).
+     */
+    claimed: boolean;
+};
+
 export type BeadCreateInputBody = {
     /**
      * Assigned agent.
@@ -6812,6 +6830,46 @@ export type PostV0CityByCityNameBeadByIdAssignResponses = {
 };
 
 export type PostV0CityByCityNameBeadByIdAssignResponse = PostV0CityByCityNameBeadByIdAssignResponses[keyof PostV0CityByCityNameBeadByIdAssignResponses];
+
+export type PostV0CityByCityNameBeadByIdClaimData = {
+    body: BeadClaimInputBody;
+    headers: {
+        /**
+         * Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+         */
+        'X-GC-Request': string;
+    };
+    path: {
+        /**
+         * City name.
+         */
+        cityName: string;
+        /**
+         * Bead ID.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/v0/city/{cityName}/bead/{id}/claim';
+};
+
+export type PostV0CityByCityNameBeadByIdClaimErrors = {
+    /**
+     * Error
+     */
+    default: ErrorModel;
+};
+
+export type PostV0CityByCityNameBeadByIdClaimError = PostV0CityByCityNameBeadByIdClaimErrors[keyof PostV0CityByCityNameBeadByIdClaimErrors];
+
+export type PostV0CityByCityNameBeadByIdClaimResponses = {
+    /**
+     * OK
+     */
+    200: BeadClaimResult;
+};
+
+export type PostV0CityByCityNameBeadByIdClaimResponse = PostV0CityByCityNameBeadByIdClaimResponses[keyof PostV0CityByCityNameBeadByIdClaimResponses];
 
 export type PostV0CityByCityNameBeadByIdCloseData = {
     body?: never;
