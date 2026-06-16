@@ -2770,6 +2770,35 @@ func TestSlingExpandConvoy_NoFormulaPreventsDefaultFormulaAttachment(t *testing.
 	}
 }
 
+// TestSlingRouteBead_NoFormulaPreventsDefaultFormulaAttachment verifies
+// that RouteOpts.NoFormula propagates through RouteBead to DoSling so a
+// bead is routed without formula attachment even when the target agent has a
+// DefaultSlingFormula. Before the fix, RouteBead silently dropped NoFormula.
+func TestSlingRouteBead_NoFormulaPreventsDefaultFormulaAttachment(t *testing.T) {
+	runner := newFakeRunner()
+	deps := testDeps(&config.City{Workspace: config.Workspace{Name: "test"}}, runtime.NewFake(), runner.run)
+	deps.Store = seededStore("BL-42")
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Agent with a DefaultSlingFormula that does NOT exist in the formula dir.
+	// Without the NoFormula fix, RouteBead would attempt to attach the formula
+	// and fail with "formula not found". With the fix it routes as a plain bead.
+	nonexistent := "does-not-exist-formula"
+	a := config.Agent{Name: "worker", MaxActiveSessions: intPtr(1), DefaultSlingFormula: &nonexistent}
+	result, err := s.RouteBead(context.Background(), "BL-42", a, RouteOpts{NoFormula: true})
+	if err != nil {
+		t.Fatalf("RouteBead with NoFormula: %v", err)
+	}
+	if result.BeadID != "BL-42" {
+		t.Errorf("BeadID = %q, want BL-42", result.BeadID)
+	}
+	if result.Method != "bead" {
+		t.Errorf("Method = %q, want bead (no formula attached)", result.Method)
+	}
+}
+
 func TestDoSlingPoolEmptyWarns(t *testing.T) {
 	runner := newFakeRunner()
 	cfg := &config.City{Workspace: config.Workspace{Name: "test"}}

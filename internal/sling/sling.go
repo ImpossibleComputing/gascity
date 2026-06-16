@@ -251,6 +251,7 @@ func (s *Sling) RouteBead(_ context.Context, beadID string, target config.Agent,
 		SkipPoke:      opts.SkipPoke,
 		DryRun:        opts.DryRun,
 		InlineText:    opts.InlineText,
+		NoFormula:     opts.NoFormula,
 	}, s.deps, s.deps.Store)
 }
 
