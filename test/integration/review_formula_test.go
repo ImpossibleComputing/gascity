@@ -347,6 +347,10 @@ on_exhausted = "hard_fail"
 
 func setupReviewFormulaCity(t *testing.T, mode string, extraEnv map[string]string) string {
 	t.Helper()
+	// Reduce probe timeout so worst-case scale_check delay is ~2m on busy CI
+	// runners instead of 12m (4 × bdProbeTimeout). Root fix: ga-jtjaiy / WP-A.
+	// Set before newIsolatedCommandEnv so the isolated supervisor inherits it.
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "30s")
 	env := newIsolatedCommandEnv(t, true)
 
 	var cityName string
