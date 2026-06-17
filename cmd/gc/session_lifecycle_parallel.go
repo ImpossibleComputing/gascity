@@ -261,6 +261,7 @@ type startExecutionOptions struct {
 	asyncStopTracker *asyncStartTracker
 	maxSessionAgeTr  maxSessionAgeTracker
 	workDirResolver  taskWorkDirResolver
+	readyAssignedIDs map[string]bool
 }
 
 type startExecutionOption func(*startExecutionOptions)
@@ -308,6 +309,17 @@ func withMaxSessionAgeTracker(tr maxSessionAgeTracker) startExecutionOption {
 func withTaskWorkDirResolver(resolver taskWorkDirResolver) startExecutionOption {
 	return func(opts *startExecutionOptions) {
 		opts.workDirResolver = resolver
+	}
+}
+
+// withReadyAssignedIDs installs the set of assigned-work bead IDs that carry
+// real wake-demand readiness (from DesiredStateResult.ReadyAssignedIDs). The
+// awake bridge uses it to set AwakeWorkBead.Ready from the store's deps gate
+// rather than guessing from status, so a blocked open bead does not hold its
+// session awake. Nil leaves every open assigned bead non-ready.
+func withReadyAssignedIDs(readyAssignedIDs map[string]bool) startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.readyAssignedIDs = readyAssignedIDs
 	}
 }
 
