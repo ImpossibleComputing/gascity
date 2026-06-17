@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/config"
@@ -97,6 +98,46 @@ func TestEvaluatePoolNonInteger(t *testing.T) {
 	}
 	if got != 1 {
 		t.Errorf("got %d, want 1 (min on error)", got)
+	}
+}
+
+func TestParseBdProbeTimeoutDefault(t *testing.T) {
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "")
+	got := parseBdProbeTimeout()
+	if got != 180*time.Second {
+		t.Errorf("parseBdProbeTimeout() = %v, want 180s", got)
+	}
+}
+
+func TestParseBdProbeTimeoutEnvVarOverride(t *testing.T) {
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "30s")
+	got := parseBdProbeTimeout()
+	if got != 30*time.Second {
+		t.Errorf("parseBdProbeTimeout() = %v, want 30s", got)
+	}
+}
+
+func TestParseBdProbeTimeoutFloorEnforced(t *testing.T) {
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "2s")
+	got := parseBdProbeTimeout()
+	if got != 5*time.Second {
+		t.Errorf("parseBdProbeTimeout() with 2s = %v, want 5s (floor)", got)
+	}
+}
+
+func TestParseBdProbeTimeoutZeroUsesFloor(t *testing.T) {
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "0s")
+	got := parseBdProbeTimeout()
+	if got != 5*time.Second {
+		t.Errorf("parseBdProbeTimeout() with 0s = %v, want 5s (floor)", got)
+	}
+}
+
+func TestParseBdProbeTimeoutInvalidUsesDefault(t *testing.T) {
+	t.Setenv("GC_BD_PROBE_TIMEOUT", "notaduration")
+	got := parseBdProbeTimeout()
+	if got != 180*time.Second {
+		t.Errorf("parseBdProbeTimeout() with invalid = %v, want 180s (default)", got)
 	}
 }
 
