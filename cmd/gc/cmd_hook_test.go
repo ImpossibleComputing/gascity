@@ -304,6 +304,99 @@ func TestDoHookClaimRetriesAfterClaimConflict(t *testing.T) {
 	}
 }
 
+func TestDoHookClaimSkipsUnclaimableCandidateError(t *testing.T) {
+	// A candidate whose claim errors (e.g. a routed id that no longer resolves
+	// in the store this context can reach) must not wedge the whole hook: log
+	// the error, skip it, and claim the next eligible candidate.
+	var attempts []string
+	runner := func(string, string) (string, error) {
+		return `[
+			{"id":"hw-unresolvable","status":"open","metadata":{"gc.routed_to":"worker"}},
+			{"id":"hw-live","status":"open","metadata":{"gc.routed_to":"worker"}}
+		]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(_ context.Context, _ string, _ []string, beadID, assignee string) (beads.Bead, bool, error) {
+			attempts = append(attempts, beadID)
+			if beadID == "hw-unresolvable" {
+				return beads.Bead{}, false, errors.New(`Error resolving hw-unresolvable: no issue found matching "hw-unresolvable"`)
+			}
+			return beads.Bead{ID: beadID, Status: "in_progress", Assignee: assignee, Metadata: map[string]string{"gc.routed_to": "worker"}}, true, nil
+		},
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "/tmp/work", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(skip error) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if got := strings.Join(attempts, ","); got != "hw-unresolvable,hw-live" {
+		t.Fatalf("claim attempts = %q, want hw-unresolvable,hw-live", got)
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.BeadID != "hw-live" || result.Reason != "claimed" {
+		t.Fatalf("unexpected claim result: %+v", result)
+	}
+	if !strings.Contains(stderr.String(), "hw-unresolvable") {
+		t.Fatalf("expected stderr to record the skipped claim error; got %q", stderr.String())
+	}
+}
+
+func TestDoHookClaimDrainsWhenEveryClaimErrors(t *testing.T) {
+	// When every eligible candidate's claim errors, the hook drains and retries
+	// next tick (NDI) rather than reporting a hard failure that halts the agent.
+	drained := false
+	runner := func(string, string) (string, error) {
+		return `[
+			{"id":"hw-a","status":"open","metadata":{"gc.routed_to":"worker"}},
+			{"id":"hw-b","status":"open","metadata":{"gc.routed_to":"worker"}}
+		]`, nil
+	}
+	ops := hookClaimOps{
+		Runner: runner,
+		Claim: func(_ context.Context, _ string, _ []string, beadID, _ string) (beads.Bead, bool, error) {
+			return beads.Bead{}, false, fmt.Errorf("Error resolving %s: no issue found matching %q", beadID, beadID)
+		},
+		DrainAck: func(io.Writer) error {
+			drained = true
+			return nil
+		},
+	}
+	opts := hookClaimOptions{
+		Assignee:           "worker-1",
+		IdentityCandidates: []string{"worker-1"},
+		RouteTargets:       []string{"worker"},
+		DrainAck:           true,
+		JSON:               true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("bd ready --json", "", opts, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim(all errors) = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if !drained {
+		t.Fatal("expected drain ack when every claim errored")
+	}
+	var result hookClaimJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nraw: %s", err, stdout.String())
+	}
+	if result.Action != "drain" {
+		t.Fatalf("unexpected result when all claims error: %+v", result)
+	}
+}
+
 func TestDoHookClaimClaimsLegacyRunTargetWorkflowRoot(t *testing.T) {
 	var claimedID string
 	runner := func(string, string) (string, error) {
