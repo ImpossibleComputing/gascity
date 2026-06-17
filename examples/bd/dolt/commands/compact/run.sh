@@ -93,6 +93,11 @@
 #                                         replaced by '_' to derive the env
 #                                         key; DB names that differ only by
 #                                         '-' vs '_' share that key.
+#   GC_DOLT_COMPACT_WARN_SECS
+#     (default: 300) — alert threshold in seconds. A compact that takes
+#                     longer than this fires a [MEDIUM] escalation. Set to 0
+#                     to disable (though 0 is rejected; set a large value
+#                     like 86400 to effectively disable).
 #   GC_DOLT_COMPACT_BARE_GC               (optional) — when set to a truthy
 #                                         value (1, true, yes — matching
 #                                         the GC_DOLT_MANAGED_LOCAL style),
@@ -169,6 +174,8 @@ PACK_DIR="${GC_PACK_DIR:-$(unset CDPATH; cd -- "$(dirname "$0")/.." && pwd)}"
 . "$PACK_DIR/assets/scripts/runtime.sh"
 # shellcheck disable=SC1091
 . "$PACK_DIR/assets/scripts/compact-gain-drift-proof.sh"
+# shellcheck disable=SC1091
+. "$PACK_DIR/assets/scripts/_notify.sh"
 
 if [ "${GC_DOLT_MANAGED_LOCAL:-}" = "1" ]; then
   managed_port=$(managed_runtime_port "$DOLT_STATE_FILE" "$DOLT_DATA_DIR" || true)
@@ -233,6 +240,14 @@ case "$bare_gc_input" in
   *)
     printf 'compact: invalid GC_DOLT_COMPACT_BARE_GC=%s (must be 1/true/yes or 0/false/no)\n' \
       "$bare_gc_input" >&2
+    exit 2
+    ;;
+esac
+compact_warn_secs="${GC_DOLT_COMPACT_WARN_SECS:-300}"
+case "$compact_warn_secs" in
+  ''|*[!0-9]*|0)
+    printf 'compact: invalid GC_DOLT_COMPACT_WARN_SECS=%s (must be a positive integer)\n' \
+      "$compact_warn_secs" >&2
     exit 2
     ;;
 esac
@@ -2551,8 +2566,16 @@ main() {
   if [ "$bare_gc" = "1" ]; then
     while IFS= read -r db; do
       [ -n "$db" ] || continue
+      _db_compact_start=$(date +%s)
       if ! bare_gc_database "$db"; then
         failed_count=$((failed_count + 1))
+      fi
+      _db_compact_elapsed=$(( $(date +%s) - _db_compact_start ))
+      if [ "$_db_compact_elapsed" -ge "$compact_warn_secs" ]; then
+        dolt_escalate \
+          "Dolt compact duration alert [MEDIUM] — db=${db}" \
+          "compact for db=${db} took ${_db_compact_elapsed}s (warn_secs=${compact_warn_secs}). A slow compact may hold the DB write lock and stall agent/convoy writes. city=${GC_CITY_PATH}" \
+          || printf 'compact: db=%s duration alert escalation failed (elapsed=%ss)\n' "$db" "$_db_compact_elapsed" >&2
       fi
     done < "$_unique_db_tmp"
 
@@ -2565,8 +2588,16 @@ main() {
 
   while IFS= read -r db; do
     [ -n "$db" ] || continue
+    _db_compact_start=$(date +%s)
     if ! flatten_database "$db"; then
       failed_count=$((failed_count + 1))
+    fi
+    _db_compact_elapsed=$(( $(date +%s) - _db_compact_start ))
+    if [ "$_db_compact_elapsed" -ge "$compact_warn_secs" ]; then
+      dolt_escalate \
+        "Dolt compact duration alert [MEDIUM] — db=${db}" \
+        "compact for db=${db} took ${_db_compact_elapsed}s (warn_secs=${compact_warn_secs}). A slow compact may hold the DB write lock and stall agent/convoy writes. city=${GC_CITY_PATH}" \
+        || printf 'compact: db=%s duration alert escalation failed (elapsed=%ss)\n' "$db" "$_db_compact_elapsed" >&2
     fi
   done < "$_unique_db_tmp"
 
