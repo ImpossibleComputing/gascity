@@ -258,5 +258,13 @@ func logNativeUnavailable(logger *slog.Logger, scope, gate, reason string) {
 		logger.Error(nativeUnavailableMessage, args...)
 		return
 	}
+	if gate == string(contract.PreflightCheckBDContextAgreement) {
+		// bd_context_agreement is a benign degrade-not-block check that fires
+		// on every non-git city root (e.g. a fresh tutorial city), so a WARN
+		// per command is pure noise. Keep it at Debug; the structured
+		// BeadsDiagnostic still carries the signal for status/API consumers.
+		logger.Debug(nativeUnavailableMessage, args...)
+		return
+	}
 	logger.Warn(nativeUnavailableMessage, args...)
 }
