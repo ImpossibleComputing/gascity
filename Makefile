@@ -309,9 +309,10 @@ TEST_ENV = env -i \
 test: test-fsys-darwin-compile
 	$(TEST_ENV) GC_FAST_UNIT=1 scripts/go-test-observable test -- -p=4 -count=1 -timeout 15m ./...
 
-## test-mac: like `make test` but excludes cmd/gc (covered by Linux CI) so the
-## 15m per-package timeout is not hit on slower Mac ARM runners. The cmd/gc
-## fast-unit subset is still exercised by the `Mac / acceptance (Tier A)` job.
+## test-mac: like `make test` but excludes the top-level cmd/gc package so the
+## 15m per-package timeout is not hit on slower Mac ARM runners. cmd/gc unit
+## tests stay fully gated on Linux CI (sharded); on Mac the gc binary is
+## exercised end-to-end by the `Mac / acceptance (Tier A)` job.
 test-mac: test-fsys-darwin-compile
 	$(TEST_ENV) GC_FAST_UNIT=1 scripts/go-test-observable test -- -p=4 -count=1 -timeout 15m \
 		$(shell go list ./... | grep -v '^github.com/gastownhall/gascity/cmd/gc$$')
