@@ -371,7 +371,7 @@ while true; do
         elif [ $((misses % 25)) -eq 0 ]; then
             trace "idle misses=$misses assignee=$ASSIGNEE"
         fi
-        sleep 0.2
+        gc hook --wait 5s >/dev/null 2>&1 || true
         continue
     fi
     misses=0

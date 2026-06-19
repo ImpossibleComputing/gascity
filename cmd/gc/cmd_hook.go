@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/nudgequeue"
 )
 
 func newHookCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -24,6 +27,7 @@ func newHookCmd(stdout, stderr io.Writer) *cobra.Command {
 	var claim bool
 	var drainAck bool
 	var jsonOut bool
+	var waitDur time.Duration
 	cmd := &cobra.Command{
 		Use:   "hook [agent]",
 		Short: "Find routed work for an agent",
@@ -32,16 +36,18 @@ func newHookCmd(stdout, stderr io.Writer) *cobra.Command {
 Without --inject: prints normalized ready-only output, exits 0 if work exists, 1 if empty.
 With --inject: silent legacy Stop-hook compatibility; skips the work query and always exits 0.
 With --claim: runs the standard startup claim protocol for one work item.
+With --wait: checks for work, then blocks on the city wake socket until work appears or the duration expires.
 
 		The agent is determined from $GC_AGENT or a positional argument.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			opts := hookCommandOptions{
-				Inject:     inject,
-				HookFormat: hookFormat,
-				Claim:      claim,
-				DrainAck:   drainAck,
-				JSON:       jsonOut,
+				Inject:       inject,
+				HookFormat:   hookFormat,
+				Claim:        claim,
+				DrainAck:     drainAck,
+				JSON:         jsonOut,
+				WaitDuration: waitDur,
 			}
 			if cmdHookWithOptions(args, opts, stdout, stderr) != 0 {
 				return errExit
@@ -54,6 +60,7 @@ With --claim: runs the standard startup claim protocol for one work item.
 	cmd.Flags().BoolVar(&claim, "claim", false, "atomically claim one routed work item for the current session")
 	cmd.Flags().BoolVar(&drainAck, "drain-ack", false, "with --claim, acknowledge runtime drain when no work is available")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "with --claim, emit a JSON protocol result")
+	cmd.Flags().DurationVar(&waitDur, "wait", 0, "block up to this duration on the city wake socket for work to appear")
 	if flag := cmd.Flags().Lookup("hook-format"); flag != nil {
 		flag.Hidden = true
 	}
@@ -156,11 +163,12 @@ func cmdHookRun(args []string, opts hookRunOptions, stdin io.Reader, stdout, std
 }
 
 type hookCommandOptions struct {
-	Inject     bool
-	HookFormat string
-	Claim      bool
-	DrainAck   bool
-	JSON       bool
+	Inject       bool
+	HookFormat   string
+	Claim        bool
+	DrainAck     bool
+	JSON         bool
+	WaitDuration time.Duration
 }
 
 // cmdHook is the CLI entry point for gc hook. Resolves the agent from
@@ -183,6 +191,10 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	_ = opts.HookFormat
 	if opts.DrainAck && !opts.Claim {
 		fmt.Fprintln(stderr, "gc hook: --drain-ack requires --claim") //nolint:errcheck
+		return 1
+	}
+	if opts.WaitDuration > 0 && opts.Claim {
+		fmt.Fprintln(stderr, "gc hook: --wait cannot be used with --claim") //nolint:errcheck
 		return 1
 	}
 
@@ -356,6 +368,10 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 				os.Getenv("GC_SESSION_ID"), failureTemplate, command, err)
 		}
 		return out, err
+	}
+	if opts.WaitDuration > 0 {
+		socketPath := nudgequeue.WakeSocketPath(cityPath)
+		return doHookWait(workQuery, workDir, opts.WaitDuration, socketPath, runner, stdout, stderr)
 	}
 	if opts.Claim {
 		sessionID := strings.TrimSpace(overrides["GC_SESSION_ID"])
@@ -533,6 +549,70 @@ func doHook(workQuery, dir string, inject bool, runner WorkQueryRunner, stdout, 
 	}
 	fmt.Fprint(stdout, normalized) //nolint:errcheck // best-effort stdout
 	return 0
+}
+
+// doHookWait implements gc hook --wait: checks for work immediately, then
+// blocks on the city wake socket until work appears or waitDur expires.
+//
+// Execution order:
+//  1. Run work query; if work found, print and return 0 immediately.
+//  2. Try to listen on socketPath. If the socket is already in use (e.g. a
+//     supervisor is running and owns it), fall back to the initial result
+//     without blocking — never remove an existing socket.
+//  3. Block until a producer connects (signals work-ready) or waitDur elapses.
+//  4. Close and remove the socket, then re-run the work query and return.
+func doHookWait(workQuery, dir string, waitDur time.Duration, socketPath string, runner WorkQueryRunner, stdout, stderr io.Writer) int {
+	// Step 1: pre-check before blocking.
+	var preOut bytes.Buffer
+	if code := doHook(workQuery, dir, false, runner, &preOut, stderr); code == 0 {
+		_, _ = io.Copy(stdout, &preOut) //nolint:errcheck // best-effort stdout
+		return 0
+	}
+
+	// Step 2: try to claim the wake socket as a temporary server.
+	// Create parent dir if missing (first run before supervisor has ever started).
+	_ = os.MkdirAll(filepath.Dir(socketPath), 0o755)
+	lis, err := net.Listen("unix", socketPath)
+	if err != nil {
+		// Socket already owned (supervisor running) or otherwise unavailable.
+		// Return the initial query result without blocking.
+		_, _ = io.Copy(stdout, &preOut) //nolint:errcheck // best-effort stdout
+		return 1
+	}
+	defer func() {
+		_ = lis.Close()
+		_ = os.Remove(socketPath)
+	}()
+
+	// Step 3: accept one connection or time out.
+	connCh := make(chan struct{}, 1)
+	go func() {
+		conn, err := lis.Accept()
+		if err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		var buf [16]byte
+		_, _ = conn.Read(buf[:])
+		_ = conn.Close()
+		select {
+		case connCh <- struct{}{}:
+		default:
+		}
+	}()
+	timer := time.NewTimer(waitDur)
+	defer timer.Stop()
+	select {
+	case <-connCh:
+	case <-timer.C:
+	}
+
+	// Step 4: close and remove socket before re-checking so a concurrently
+	// starting supervisor can reclaim the path immediately.
+	_ = lis.Close()
+	_ = os.Remove(socketPath)
+
+	return doHook(workQuery, dir, false, runner, stdout, stderr)
 }
 
 func workQueryHasReadyWork(output string) bool {
