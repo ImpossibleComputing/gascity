@@ -22,9 +22,12 @@ import (
 // runners. The transient-retry tests add extra polecat cycles on top. The
 // earlier 12-minute budget produced intermittent flakes; 18 min still left
 // no headroom for personal-work and retry tests (~38 s from done at cutoff
-// in CI run 27788351365). 24 min leaves ~4 min margin while staying under
-// the 30-minute job ceiling.
-const reviewWorkflowTimeout = 24 * time.Minute
+// in CI run 27788351365). 24 min was insufficient on busy runners — both
+// personal-work and retry tests hit the ceiling with design-review-loop still
+// in progress (CI run 27823218494). 35 min gives ~15 min margin over the
+// ~20 min busy-runner baseline; the review-formulas shard job ceiling is 45
+// min (#3593), leaving ~10 min headroom above this constant.
+const reviewWorkflowTimeout = 35 * time.Minute
 
 // reviewWorkflowSlingTimeout only covers formula instantiation and convoy
 // routing. The personal-work graph is large enough that bd-backed graph apply
