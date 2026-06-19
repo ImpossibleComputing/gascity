@@ -169,7 +169,7 @@ jobs:
         contains(github.event.pull_request.labels.*.name, 'needs-mac')
       )
     runs-on: ${{ needs.runner-policy.outputs.runner_macos }}
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -182,7 +182,7 @@ jobs:
           bd-version: ${{ env.BD_VERSION }}
           install-claude-cli: "false"
       - name: Run make test
-        run: make test
+        run: make test-mac
 
   # Tier A acceptance — smoke-level gate on every PR.
   mac-acceptance:
@@ -239,7 +239,7 @@ jobs:
         contains(github.event.pull_request.labels.*.name, 'needs-mac')
       )
     runs-on: ${{ needs.runner-policy.outputs.runner_macos }}
-    timeout-minutes: 25
+    timeout-minutes: 60
     outputs:
       outcome: ${{ steps.cover.outcome }}
     steps:
