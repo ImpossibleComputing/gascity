@@ -98,7 +98,7 @@ func (s *Server) humaHandleBeadList(ctx context.Context, input *BeadListInput) (
 	for _, rigName := range rigNames {
 		store := stores[rigName]
 		for _, assignee := range assigneeTerms {
-			query := beads.ListQuery{
+			queries := []beads.ListQuery{{
 				Status:        input.Status,
 				Type:          input.Type,
 				Label:         input.Label,
@@ -109,53 +109,85 @@ func (s *Server) humaHandleBeadList(ctx context.Context, input *BeadListInput) (
 				// map-iteration order, so a bounded read truncated an
 				// arbitrary, per-call-different subset (#3208).
 				Sort: beads.SortCreatedDesc,
+			}}
+			if input.Type == "molecule" {
+				// graph.v2 run roots are issue_type=task tagged gc.kind=workflow,
+				// not issue_type=molecule, so the type filter above misses them.
+				// Surface them under the same type=molecule read the runs view uses.
+				queries = append(queries, beads.ListQuery{
+					Status:        input.Status,
+					Label:         input.Label,
+					Assignee:      assignee,
+					IncludeClosed: input.All,
+					Live:          input.Status == "in_progress",
+					Sort:          beads.SortCreatedDesc,
+					Metadata:      map[string]string{"gc.kind": "workflow"},
+				})
 			}
-			if !query.HasFilter() {
-				query.AllowScan = true
-			}
-			if boundedMode {
-				// Each store need only return enough rows to cover this page;
-				// the cross-rig merge below cuts the exact global prefix.
-				query.Limit = boundedFetch
-			}
-			pa.attempt()
-			list, err := store.List(query)
-			if err != nil {
-				if beads.IsPartialResult(err) && len(list) > 0 {
-					// Partial result: the rig returned rows (appended to `all`
-					// below) but flagged a degraded read. Keep its bounded count
-					// — these rows ARE reachable, and dropping or shrinking the
-					// count risks under-advertising readable rows (silent data
-					// loss), strictly worse than the count's slight possible
-					// over-advertisement. Only a hard List failure (zero
-					// reachable rows, below) drops its count (gascity#3253).
-					pa.record("rig "+rigName, err)
-					pa.success()
-				} else {
-					pa.record("rig "+rigName, err)
-					if boundedMode {
-						// This rig's exact Count was baked into boundedCounts
-						// upfront, but its List failed so its rows never reach
-						// `all`. Drop its count so Total counts only reachable
-						// rows — matching the full-scan accounting under the same
-						// partial failure (where total == rows returned) and
-						// keeping next_cursor from overshooting (gascity#3253).
-						delete(boundedCounts, rigName)
+			for qi, query := range queries {
+				// Only the primary query (the requested type) drives the
+				// partial-aggregator and bounded-count accounting. The
+				// type=molecule gc.kind=workflow augment (qi>0) is best-effort
+				// additive: it must never record an outage or drop a rig's
+				// bounded count on its own failure.
+				isPrimary := qi == 0
+				if !query.HasFilter() {
+					query.AllowScan = true
+				}
+				if boundedMode {
+					// Each store need only return enough rows to cover this page;
+					// the cross-rig merge below cuts the exact global prefix.
+					query.Limit = boundedFetch
+				}
+				if isPrimary {
+					pa.attempt()
+				}
+				list, err := store.List(query)
+				if err != nil {
+					if beads.IsPartialResult(err) && len(list) > 0 {
+						// Partial result: the rig returned rows (appended to `all`
+						// below) but flagged a degraded read. Keep its bounded count
+						// — these rows ARE reachable, and dropping or shrinking the
+						// count risks under-advertising readable rows (silent data
+						// loss), strictly worse than the count's slight possible
+						// over-advertisement. Only a hard List failure (zero
+						// reachable rows, below) drops its count (gascity#3253).
+						if isPrimary {
+							pa.record("rig "+rigName, err)
+							pa.success()
+						}
+					} else {
+						if isPrimary {
+							pa.record("rig "+rigName, err)
+							if boundedMode {
+								// This rig's exact Count was baked into boundedCounts
+								// upfront, but its List failed so its rows never reach
+								// `all`. Drop its count so Total counts only reachable
+								// rows — matching the full-scan accounting under the
+								// same partial failure (where total == rows returned)
+								// and keeping next_cursor from overshooting (#3253).
+								delete(boundedCounts, rigName)
+							}
+						}
+						continue
 					}
-					continue
+				} else if isPrimary {
+					pa.success()
 				}
-			} else {
-				pa.success()
-			}
-			for _, b := range list {
-				dedupeKey := rigName + "\x00" + b.ID
-				if dedupe && seen[dedupeKey] {
-					continue
+				// Dedupe across the per-store queries when more than one runs (the
+				// type=molecule + gc.kind=workflow augment), even when the global
+				// dedupe is off, so a bead matching both is appended once.
+				dedupeQueries := dedupe || len(queries) > 1
+				for _, b := range list {
+					dedupeKey := rigName + "\x00" + b.ID
+					if dedupeQueries && seen[dedupeKey] {
+						continue
+					}
+					if dedupeQueries {
+						seen[dedupeKey] = true
+					}
+					all = append(all, b)
 				}
-				if dedupe {
-					seen[dedupeKey] = true
-				}
-				all = append(all, b)
 			}
 		}
 	}

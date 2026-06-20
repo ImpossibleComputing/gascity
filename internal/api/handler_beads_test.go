@@ -2155,3 +2155,43 @@ func TestBeadPrefixAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestBeadListMoleculeSurfacesGraphV2WorkflowRoots proves a type=molecule read
+// also returns graph.v2 run roots, which are issue_type=task tagged
+// gc.kind=workflow (not issue_type=molecule). The runs dashboard discovers run
+// roots via type=molecule, so without this the graph.v2 runs never appear.
+func TestBeadListMoleculeSurfacesGraphV2WorkflowRoots(t *testing.T) {
+	fs := newFakeState(t)
+	mem := beads.NewMemStore()
+	if _, err := mem.Create(beads.Bead{Title: "dolt molecule", Type: "molecule"}); err != nil {
+		t.Fatalf("create molecule: %v", err)
+	}
+	if _, err := mem.Create(beads.Bead{
+		Title:    "mol-adopt-pr-v2",
+		Type:     "task",
+		Metadata: map[string]string{"gc.kind": "workflow", "gc.formula_contract": "graph.v2"},
+	}); err != nil {
+		t.Fatalf("create workflow root: %v", err)
+	}
+	// A plain task step (no gc.kind=workflow) must NOT be surfaced by type=molecule.
+	if _, err := mem.Create(beads.Bead{Title: "review-loop step", Type: "task"}); err != nil {
+		t.Fatalf("create step: %v", err)
+	}
+	fs.stores["myrig"] = mem
+
+	body := fetchBoundedBeads(t, fs, "?type=molecule&all=true&limit=50")
+
+	titles := make(map[string]bool, len(body.Items))
+	for _, b := range body.Items {
+		titles[b.Title] = true
+	}
+	if !titles["dolt molecule"] {
+		t.Errorf("type=molecule dropped the issue_type=molecule bead; items=%v", titles)
+	}
+	if !titles["mol-adopt-pr-v2"] {
+		t.Errorf("type=molecule did not surface the gc.kind=workflow graph.v2 root; items=%v", titles)
+	}
+	if titles["review-loop step"] {
+		t.Errorf("type=molecule wrongly surfaced a plain task step; items=%v", titles)
+	}
+}
