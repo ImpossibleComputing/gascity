@@ -294,6 +294,7 @@ export async function openSessionLogDrawer(sessionID: string, label: string): Pr
   messagesEl.append(loadingEl);
   loadingEl.style.display = "block";
   drawer.style.display = "block";
+  drawer.scrollIntoView?.({ block: "start" });
   pushPause();
 
   await loadTranscript(sessionID, false);

@@ -9,6 +9,8 @@ vi.mock("../sse", () => ({
   connectAgentOutput: vi.fn(() => ({ close: vi.fn() })),
 }));
 
+const nativeScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
 describe("crew empty states", () => {
   beforeEach(() => {
     document.body.innerHTML = `
@@ -28,6 +30,7 @@ describe("crew empty states", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    restoreScrollIntoView();
     window.history.pushState({}, "", "/dashboard");
     syncCityScopeFromLocation();
   });
@@ -271,6 +274,7 @@ describe("crew empty states", () => {
   });
 
   it("requests structured transcripts and renders rich tool/diff blocks", async () => {
+    const scrollIntoView = mockScrollIntoView();
     document.body.innerHTML = `
       <div id="crew-loading">Loading crew...</div>
       <table id="crew-table" style="display:none"><tbody id="crew-tbody"></tbody></table>
@@ -363,6 +367,7 @@ describe("crew empty states", () => {
       expect(document.getElementById("log-drawer-messages")?.textContent).toContain("Applying the patch now.");
     });
     expect(transcriptQueries[0]).toMatchObject({ format: "structured" });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("apply_patch");
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("src/app.ts");
     expect(document.getElementById("log-drawer-messages")?.textContent).toContain("+ new line");
@@ -682,4 +687,24 @@ async function waitFor(assertion: () => void): Promise<void> {
     }
   }
   throw lastError;
+}
+
+function mockScrollIntoView(): ReturnType<typeof vi.fn> {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  });
+  return scrollIntoView;
+}
+
+function restoreScrollIntoView(): void {
+  if (nativeScrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: nativeScrollIntoView,
+    });
+    return;
+  }
+  delete (HTMLElement.prototype as { scrollIntoView?: Element["scrollIntoView"] }).scrollIntoView;
 }
