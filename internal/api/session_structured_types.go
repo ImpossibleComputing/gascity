@@ -320,6 +320,8 @@ func normalizeStructuredToolInput(name string, raw json.RawMessage) *SessionStru
 			out.Query = firstNonEmptyString(out.Query, field.Value)
 		case "pattern":
 			out.Pattern = firstNonEmptyString(out.Pattern, field.Value)
+		case "text":
+			out.Text = firstNonEmptyString(out.Text, field.Value)
 		default:
 			out.Arguments = append(out.Arguments, field)
 		}
@@ -336,6 +338,8 @@ func normalizeStructuredToolInput(name string, raw json.RawMessage) *SessionStru
 		out.Kind = "file"
 	case out.Query != "" || out.Pattern != "":
 		out.Kind = "search"
+	case out.Text != "":
+		out.Kind = "text"
 	case len(out.Arguments) > 0:
 		out.Kind = "arguments"
 	case text != "":
@@ -386,6 +390,13 @@ func inferStructuredToolResult(block worker.HistoryBlock, context structuredTool
 			Interrupted: interrupted,
 			Truncated:   truncated,
 			IsImage:     isImage,
+		}
+	}
+	if isEditTool(name, context.Input) {
+		return &SessionStructuredToolResult{
+			Kind:     "edit",
+			FilePath: inputFilePath(context.Input),
+			Content:  content,
 		}
 	}
 	if isReadTool(name, context.Input) {
@@ -520,6 +531,8 @@ func normalizeStructuredFieldName(name string) string {
 		return "query"
 	case "pattern", "regexp", "regex":
 		return "pattern"
+	case "content", "new_string", "newstring", "new_str", "old_string", "oldstring", "old_str", "replacement", "text":
+		return "text"
 	default:
 		return name
 	}
@@ -606,6 +619,19 @@ func isReadTool(name string, input *SessionStructuredToolInput) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func isEditTool(name string, _ *SessionStructuredToolInput) bool {
+	if name == "" {
+		return false
+	}
+	switch name {
+	case "edit", "write", "write_file", "writefile", "multi_edit", "multiedit",
+		"create_file", "replace", "str_replace", "str_replace_editor":
+		return true
+	default:
+		return strings.Contains(name, "edit") || strings.Contains(name, "write")
 	}
 }
 
