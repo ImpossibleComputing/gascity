@@ -66,6 +66,13 @@ func implicitImportPath() string {
 	return filepath.Join(home, "implicit-import.toml")
 }
 
+func implicitGCHomeFallback() string {
+	if dir, err := os.MkdirTemp("", "gc-home-*"); err == nil {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("gc-home-%d", os.Getpid()))
+}
+
 // ImplicitGCHome returns the user-global GC_HOME directory used to
 // resolve implicit-import bookkeeping and bootstrap pack caches.
 //
@@ -82,7 +89,7 @@ func ImplicitGCHome() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), ".gc")
+		return implicitGCHomeFallback()
 	}
 	return filepath.Join(home, ".gc")
 }

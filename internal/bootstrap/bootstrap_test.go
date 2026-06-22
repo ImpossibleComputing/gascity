@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+func TestDefaultGCHomeAvoidsSharedTempFallback(t *testing.T) {
+	got := defaultGCHomeFallback()
+	if got == "" {
+		t.Fatal("defaultGCHomeFallback: got empty string")
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("defaultGCHomeFallback: got non-absolute path %q", got)
+	}
+	if got == filepath.Join(os.TempDir(), ".gc") {
+		t.Fatalf("defaultGCHomeFallback: got shared temp fallback %q", got)
+	}
+}
+
 func TestEnsureBootstrapLeavesFreshHomesAlone(t *testing.T) {
 	gcHome := t.TempDir()
 	if err := EnsureBootstrap(gcHome); err != nil {
