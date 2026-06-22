@@ -8,6 +8,19 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 )
 
+func TestImplicitGCHomeAvoidsSharedTempFallback(t *testing.T) {
+	got := implicitGCHomeFallback()
+	if got == "" {
+		t.Fatal("implicitGCHomeFallback: got empty string")
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("implicitGCHomeFallback: got non-absolute path %q", got)
+	}
+	if got == filepath.Join(os.TempDir(), ".gc") {
+		t.Fatalf("implicitGCHomeFallback: got shared temp fallback %q", got)
+	}
+}
+
 func TestReadImplicitImports_MissingFile(t *testing.T) {
 	t.Setenv("GC_HOME", t.TempDir())
 
