@@ -2,8 +2,8 @@ package extmsg
 
 import "sync"
 
-// PublishReceipt from SubscriberRegistry.Publish tracks whether the event was
-// delivered and how many events were dropped on a full buffer.
+// SSEPublishReceipt tracks whether an event was delivered to a subscriber
+// and how many events were dropped on a full buffer.
 type SSEPublishReceipt struct {
 	Delivered bool
 	Dropped   int
@@ -44,8 +44,7 @@ func (r *SubscriberRegistry) Subscribe(ref ConversationRef, bufSize int) (<-chan
 	ch := make(chan SSEEvent, bufSize)
 
 	var cancelOnce sync.Once
-	var cancel func()
-	cancel = func() {
+	cancel := func() {
 		cancelOnce.Do(func() {
 			r.mu.Lock()
 			defer r.mu.Unlock()

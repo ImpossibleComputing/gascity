@@ -35,9 +35,7 @@ var extmsgReplyStdin = func() io.Reader { return os.Stdin }
 
 // extmsgReplyAPIClient is indirected for tests — they inject a client pointed
 // at an httptest.Server or nil to force error paths.
-var extmsgReplyAPIClient = func(cityPath string) *api.Client {
-	return apiClient(cityPath)
-}
+var extmsgReplyAPIClient = apiClient
 
 // newExtmsgCmd returns the "gc extmsg" parent command.
 func newExtmsgCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -72,12 +70,12 @@ message. If GC_EXTERNAL_ORIGIN is not set, the command exits non-zero.`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			cityPath, err := resolveCity()
 			if err != nil {
-				fmt.Fprintf(stderr, "gc extmsg reply: %v\n", err)
+				fmt.Fprintf(stderr, "gc extmsg reply: %v\n", err) //nolint:errcheck // best-effort stderr
 				return errExit
 			}
 			c := extmsgReplyAPIClient(cityPath)
 			if c == nil {
-				fmt.Fprintln(stderr, "gc extmsg reply: no API server available (is the controller running?)")
+				fmt.Fprintln(stderr, "gc extmsg reply: no API server available (is the controller running?)") //nolint:errcheck // best-effort stderr
 				return errExit
 			}
 			if runExtmsgReply(c, refJSON, fromStdin, args, jsonOutput, stdout, stderr) != 0 {
@@ -98,7 +96,7 @@ message. If GC_EXTERNAL_ORIGIN is not set, the command exits non-zero.`,
 // testability. refJSON is "" to read from GC_EXTERNAL_ORIGIN.
 func runExtmsgReply(c *api.Client, refJSON string, fromStdin bool, args []string, jsonOutput bool, stdout, stderr io.Writer) int {
 	if fromStdin && len(args) > 0 {
-		fmt.Fprintln(stderr, "gc extmsg reply: --stdin and positional text argument are mutually exclusive")
+		fmt.Fprintln(stderr, "gc extmsg reply: --stdin and positional text argument are mutually exclusive") //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
@@ -106,7 +104,7 @@ func runExtmsgReply(c *api.Client, refJSON string, fromStdin bool, args []string
 	if fromStdin {
 		data, err := io.ReadAll(extmsgReplyStdin())
 		if err != nil {
-			fmt.Fprintf(stderr, "gc extmsg reply: reading stdin: %v\n", err)
+			fmt.Fprintf(stderr, "gc extmsg reply: reading stdin: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		text = string(data)
@@ -116,19 +114,19 @@ func runExtmsgReply(c *api.Client, refJSON string, fromStdin bool, args []string
 
 	conv, err := resolveExtmsgConv(refJSON)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc extmsg reply: %v\n", err)
+		fmt.Fprintf(stderr, "gc extmsg reply: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
 	sessionID := os.Getenv("GC_SESSION_ID")
 	if sessionID == "" {
-		fmt.Fprintln(stderr, "gc extmsg reply: GC_SESSION_ID not set; command must be called from within a running session")
+		fmt.Fprintln(stderr, "gc extmsg reply: GC_SESSION_ID not set; command must be called from within a running session") //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
 	result, err := c.ExtMsgOutbound(context.Background(), sessionID, conv, text)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc extmsg reply: error: %v\n", err)
+		fmt.Fprintf(stderr, "gc extmsg reply: error: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
@@ -139,16 +137,16 @@ func runExtmsgReply(c *api.Client, refJSON string, fromStdin bool, args []string
 			Sequence:       result.Sequence,
 		}
 		if err := json.NewEncoder(stdout).Encode(out); err != nil {
-			fmt.Fprintf(stderr, "gc extmsg reply: encoding JSON: %v\n", err)
+			fmt.Fprintf(stderr, "gc extmsg reply: encoding JSON: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		return 0
 	}
 
 	if result.Delivered {
-		fmt.Fprintf(stdout, "delivered %s seq:%d\n", result.ConversationID, result.Sequence)
+		fmt.Fprintf(stdout, "delivered %s seq:%d\n", result.ConversationID, result.Sequence) //nolint:errcheck // best-effort stdout
 	} else {
-		fmt.Fprintf(stdout, "no-subscriber %s (transcript appended; client not connected)\n", result.ConversationID)
+		fmt.Fprintf(stdout, "no-subscriber %s (transcript appended; client not connected)\n", result.ConversationID) //nolint:errcheck // best-effort stdout
 	}
 	return 0
 }
