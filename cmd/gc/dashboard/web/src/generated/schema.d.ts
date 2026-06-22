@@ -676,6 +676,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v0/city/{cityName}/extmsg/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register an external messaging client and issue a token */
+        post: operations["register-extmsg-client"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v0/city/{cityName}/extmsg/clients/{client_id}/conversations/{conversation_id}/subscribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscribe to external messaging events via SSE
+         * @description Opens a Server-Sent Events stream delivering replies for the given conversation. The stream emits message events when a session replies, heartbeat events on idle, and error events on terminal failures. Reconnect with Last-Event-ID to replay missed messages.
+         */
+        get: operations["subscribe-extmsg-client"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v0/city/{cityName}/extmsg/groups": {
         parameters: {
             query?: never;
@@ -2770,6 +2807,22 @@ export interface components {
             /** @description Session ID to bind (mutually exclusive with agent_name). */
             session_id?: string;
         };
+        ExtMsgClientRegisterInputBody: {
+            /** @description Session names this client is permitted to subscribe to. */
+            allowed_sessions?: string[] | null;
+            /** @description Opaque credential string (required unless allow_no_credential=true in city.toml). */
+            credential?: string;
+        };
+        ExtMsgClientRegisterOutputBody: {
+            /** @description Stable client identifier (bead ID). Use as account_id in the subscribe URL. */
+            client_id: string;
+            /** @description True when a new token was issued; false when re-issued for the same credential. */
+            created: boolean;
+            /** @description One-time advisory message. Only present when created=true. */
+            note?: string;
+            /** @description Raw base64url token. Only present when created=true; store it securely. */
+            token?: string;
+        };
         ExtMsgGroupEnsureInputBody: {
             /** @description Default handle for the group. */
             default_handle?: string;
@@ -3915,6 +3968,32 @@ export interface components {
             prior_first_seq: number;
             /** Format: int64 */
             prior_last_seq: number;
+        };
+        SSEErrorEvent: {
+            code: string;
+            event: string;
+            message: string;
+            /** Format: int64 */
+            retry_after_ms?: number;
+            retryable: boolean;
+            version: string;
+        };
+        SSEHeartbeatEvent: {
+            event: string;
+            /** Format: date-time */
+            ts: string;
+            version: string;
+        };
+        SSEMessageEvent: {
+            conversation: components["schemas"]["ConversationRef"];
+            /** Format: date-time */
+            created_at: string;
+            event: string;
+            /** Format: int64 */
+            sequence: number;
+            session_id: string;
+            text: string;
+            version: string;
         };
         ScopeGroup: Record<string, never>;
         ServiceRestartOutputBody: {
@@ -9421,6 +9500,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListBodySessionBindingRecord"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "register-extmsg-client": {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks. */
+                "X-GC-Request": string;
+            };
+            path: {
+                /** @description City name. */
+                cityName: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtMsgClientRegisterInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtMsgClientRegisterOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "subscribe-extmsg-client": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Bearer token from client registration. */
+                "X-GC-Client-Token"?: string;
+                /** @description Decimal sequence number for reconnect replay. */
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                /** @description City name. */
+                cityName: string;
+                /** @description Client identifier from POST /v0/extmsg/clients. */
+                client_id: string;
+                /** @description Opaque conversation identifier. */
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "X-GC-Request-Id": components["headers"]["X-GC-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": ({
+                        data: components["schemas"]["SSEErrorEvent"];
+                        /**
+                         * @description The event name.
+                         * @constant
+                         */
+                        event: "error";
+                        /** @description The event ID (composite cursor). */
+                        id?: string;
+                        /** @description The retry time in milliseconds. */
+                        retry?: number;
+                    } | {
+                        data: components["schemas"]["SSEHeartbeatEvent"];
+                        /**
+                         * @description The event name.
+                         * @constant
+                         */
+                        event: "heartbeat";
+                        /** @description The event ID (composite cursor). */
+                        id?: string;
+                        /** @description The retry time in milliseconds. */
+                        retry?: number;
+                    } | {
+                        data: components["schemas"]["SSEMessageEvent"];
+                        /**
+                         * @description The event name.
+                         * @constant
+                         */
+                        event?: "message";
+                        /** @description The event ID (composite cursor). */
+                        id?: string;
+                        /** @description The retry time in milliseconds. */
+                        retry?: number;
+                    })[];
                 };
             };
             /** @description Error */
