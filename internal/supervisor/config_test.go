@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestBuiltinDefaultHomeAvoidsSharedTempFallback(t *testing.T) {
+	got := builtinDefaultHomeFallback()
+	if got == "" {
+		t.Fatal("builtinDefaultHomeFallback: got empty string")
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("builtinDefaultHomeFallback: got non-absolute path %q", got)
+	}
+	if got == filepath.Join(os.TempDir(), ".gc") {
+		t.Fatalf("builtinDefaultHomeFallback: got shared temp fallback %q", got)
+	}
+}
+
 func TestLoadConfigMissing(t *testing.T) {
 	cfg, err := LoadConfig("/nonexistent/supervisor.toml")
 	if err != nil {

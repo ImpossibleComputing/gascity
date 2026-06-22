@@ -153,6 +153,13 @@ func EnsureBootstrapForCity(gcHome string, userImports map[string]config.Import)
 	return nil
 }
 
+func defaultGCHomeFallback() string {
+	if dir, err := os.MkdirTemp("", "gc-home-*"); err == nil {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("gc-home-%d", os.Getpid()))
+}
+
 func defaultGCHome() string {
 	if v := strings.TrimSpace(os.Getenv("GC_HOME")); v != "" {
 		return v
@@ -162,7 +169,7 @@ func defaultGCHome() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), ".gc")
+		return defaultGCHomeFallback()
 	}
 	return filepath.Join(home, ".gc")
 }

@@ -157,10 +157,17 @@ func DefaultHome() string {
 	return builtinDefaultHome()
 }
 
+func builtinDefaultHomeFallback() string {
+	if dir, err := os.MkdirTemp("", "gc-home-*"); err == nil {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("gc-home-%d", os.Getpid()))
+}
+
 func builtinDefaultHome() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), ".gc")
+		return builtinDefaultHomeFallback()
 	}
 	return filepath.Join(home, ".gc")
 }
