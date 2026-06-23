@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/shlex"
+
 	"github.com/gastownhall/gascity/internal/sessionlog"
 	"github.com/gastownhall/gascity/internal/worker"
 )
@@ -409,6 +411,15 @@ func normalizeStructuredToolInput(name string, raw json.RawMessage) *SessionStru
 		out.FilePath = firstNonEmptyString(out.FilePath, filePath)
 		return out
 	}
+	if out.Command != "" {
+		if derived := shellDerivedStructuredInput(out.Command); derived != nil {
+			derived.Command = out.Command
+			if len(out.Arguments) > 0 {
+				derived.Arguments = append(derived.Arguments, out.Arguments...)
+			}
+			return derived
+		}
+	}
 
 	switch {
 	case out.Command != "":
@@ -454,11 +465,40 @@ func inferStructuredToolResult(block worker.HistoryBlock, context structuredTool
 			IsImage:     isImage,
 		}
 	}
+	if isReadTool(name, context.Input) {
+		readContent := commandOutputPayload(content)
+		startLine, endLine := shellReadRange(inputCommand(context.Input))
+		numLines := countLines(readContent)
+		if startLine > 0 && endLine >= startLine {
+			numLines = endLine - startLine + 1
+		}
+		return &SessionStructuredToolResult{
+			Kind:       "read",
+			FilePath:   inputFilePath(context.Input),
+			Content:    readContent,
+			NumLines:   numLines,
+			StartLine:  startLine,
+			TotalLines: endLine,
+		}
+	}
+	if isSearchTool(name, context.Input) {
+		searchContent := commandOutputPayload(content)
+		filenames := searchResultFilenames(searchContent)
+		return &SessionStructuredToolResult{
+			Kind:      "grep",
+			Mode:      searchMode(context.Input),
+			Filenames: filenames,
+			NumFiles:  len(filenames),
+			Content:   searchContent,
+			NumLines:  countLines(searchContent),
+		}
+	}
 	if isCommandTool(name, context.Input) {
 		stdout, stderr, exitCode, interrupted, truncated, isImage := commandResultFields(block.Content, content)
+		text := firstNonEmptyString(stdout, stderr, content)
 		return &SessionStructuredToolResult{
 			Kind:        "bash",
-			Text:        content,
+			Text:        text,
 			Stdout:      stdout,
 			Stderr:      stderr,
 			ExitCode:    exitCode,
@@ -475,25 +515,6 @@ func inferStructuredToolResult(block worker.HistoryBlock, context structuredTool
 			FilePath: firstNonEmptyString(resultFile, patchFilePath(patch), patchFilePath(content), inputFilePath(context.Input)),
 			Patch:    patch,
 			Content:  content,
-		}
-	}
-	if isReadTool(name, context.Input) {
-		return &SessionStructuredToolResult{
-			Kind:     "read",
-			FilePath: inputFilePath(context.Input),
-			Content:  content,
-			NumLines: countLines(content),
-		}
-	}
-	if isSearchTool(name, context.Input) {
-		filenames := searchResultFilenames(content)
-		return &SessionStructuredToolResult{
-			Kind:      "grep",
-			Mode:      searchMode(context.Input),
-			Filenames: filenames,
-			NumFiles:  len(filenames),
-			Content:   content,
-			NumLines:  countLines(content),
 		}
 	}
 	return &SessionStructuredToolResult{
@@ -878,6 +899,13 @@ func inputCode(input *SessionStructuredToolInput) string {
 	return input.Code
 }
 
+func inputCommand(input *SessionStructuredToolInput) string {
+	if input == nil {
+		return ""
+	}
+	return input.Command
+}
+
 func resultCode(raw json.RawMessage) string {
 	var object struct {
 		Code   string `json:"code"`
@@ -906,7 +934,7 @@ func isCommandTool(name string, input *SessionStructuredToolInput) bool {
 		return true
 	}
 	switch name {
-	case "bash", "shell", "sh", "run_command", "exec_command", "terminal", "terminal.exec":
+	case "bash", "shell", "sh", "run_command", "exec_command", "shell_command", "terminal", "terminal.exec":
 		return true
 	default:
 		return false
@@ -960,6 +988,182 @@ func searchMode(input *SessionStructuredToolInput) string {
 	return ""
 }
 
+func shellDerivedStructuredInput(command string) *SessionStructuredToolInput {
+	args, err := shlex.Split(command)
+	if err != nil || len(args) == 0 {
+		return nil
+	}
+	switch args[0] {
+	case "cat":
+		if filePath := lastNonOptionArg(args[1:]); filePath != "" {
+			return &SessionStructuredToolInput{Kind: "file", FilePath: filePath}
+		}
+	case "sed":
+		if filePath := lastNonOptionArg(args[1:]); filePath != "" {
+			return &SessionStructuredToolInput{Kind: "file", FilePath: filePath}
+		}
+	case "nl":
+		if filePath := nlInputFile(args); filePath != "" {
+			return &SessionStructuredToolInput{Kind: "file", FilePath: filePath}
+		}
+	case "rg", "grep":
+		pattern, paths := grepPatternAndPaths(args)
+		if pattern == "" {
+			return nil
+		}
+		input := &SessionStructuredToolInput{
+			Kind:    "search",
+			Pattern: pattern,
+		}
+		if len(paths) == 1 {
+			input.FilePath = paths[0]
+		}
+		for _, path := range paths {
+			input.Arguments = append(input.Arguments, SessionStructuredArgument{Name: "path", Value: path})
+		}
+		return input
+	}
+	return nil
+}
+
+func lastNonOptionArg(args []string) string {
+	for i := len(args) - 1; i >= 0; i-- {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" || arg == "|" || strings.HasPrefix(arg, "-") || looksLikeSedAddress(arg) {
+			continue
+		}
+		return arg
+	}
+	return ""
+}
+
+func nlInputFile(args []string) string {
+	pipeIndex := len(args)
+	for i, arg := range args {
+		if arg == "|" {
+			pipeIndex = i
+			break
+		}
+	}
+	return lastNonOptionArg(args[1:pipeIndex])
+}
+
+func grepPatternAndPaths(args []string) (string, []string) {
+	if len(args) < 2 {
+		return "", nil
+	}
+	var pattern string
+	var paths []string
+	skipNext := false
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if arg == "--" {
+			if i+1 < len(args) && pattern == "" {
+				pattern = args[i+1]
+				paths = append(paths, args[i+2:]...)
+			}
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			if flagTakesValue(arg) && i+1 < len(args) {
+				skipNext = true
+			}
+			continue
+		}
+		if pattern == "" {
+			pattern = arg
+			continue
+		}
+		paths = append(paths, arg)
+	}
+	return pattern, paths
+}
+
+func flagTakesValue(flag string) bool {
+	switch flag {
+	case "-e", "--regexp", "-g", "--glob", "-t", "--type", "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context":
+		return true
+	default:
+		return false
+	}
+}
+
+func commandOutputPayload(content string) string {
+	before, after, ok := strings.Cut(content, "\nOutput:")
+	if !ok {
+		return content
+	}
+	if !strings.HasPrefix(strings.TrimSpace(before), "Command:") {
+		return content
+	}
+	return strings.TrimPrefix(after, "\n")
+}
+
+func shellReadRange(command string) (int, int) {
+	args, err := shlex.Split(command)
+	if err != nil || len(args) == 0 {
+		return 0, 0
+	}
+	for _, arg := range args {
+		start, end, ok := parseSedAddress(arg)
+		if ok {
+			return start, end
+		}
+	}
+	return 0, 0
+}
+
+func looksLikeSedAddress(value string) bool {
+	_, _, ok := parseSedAddress(value)
+	return ok
+}
+
+func parseSedAddress(value string) (int, int, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimSuffix(value, "p")
+	if value == "" {
+		return 0, 0, false
+	}
+	startText, endText, hasComma := strings.Cut(value, ",")
+	if !hasComma {
+		line, ok := parsePositiveInt(startText)
+		if !ok {
+			return 0, 0, false
+		}
+		return line, line, true
+	}
+	start, ok := parsePositiveInt(startText)
+	if !ok {
+		return 0, 0, false
+	}
+	end, ok := parsePositiveInt(endText)
+	if !ok {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func parsePositiveInt(value string) (int, bool) {
+	var out int
+	if value == "" {
+		return 0, false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		out = out*10 + int(r-'0')
+	}
+	if out <= 0 {
+		return 0, false
+	}
+	return out, true
+}
+
 func searchResultFilenames(content string) []string {
 	seen := make(map[string]struct{})
 	for _, line := range strings.Split(content, "\n") {
@@ -967,9 +1171,15 @@ func searchResultFilenames(content string) []string {
 		if line == "" {
 			continue
 		}
-		filename, _, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
+		var filename string
+		if strings.HasPrefix(line, "https://") || strings.HasPrefix(line, "http://") {
+			filename = strings.TrimRight(firstWhitespaceDelimitedToken(line), ":")
+		} else {
+			var ok bool
+			filename, _, ok = strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
 		}
 		filename = strings.TrimSpace(filename)
 		if filename == "" || strings.Contains(filename, " ") {
@@ -988,42 +1198,95 @@ func searchResultFilenames(content string) []string {
 	return filenames
 }
 
-func commandResultFields(raw json.RawMessage, content string) (stdout string, stderr string, exitCode *int, interrupted bool, truncated bool, isImage bool) {
-	var object struct {
-		Output        string `json:"output"`
-		Stdout        string `json:"stdout"`
-		Stderr        string `json:"stderr"`
-		ExitCode      *int   `json:"exit_code"`
-		ExitCodeCamel *int   `json:"exitCode"`
-		Interrupted   bool   `json:"interrupted"`
-		Canceled      bool   `json:"canceled"`
-		Truncated     bool   `json:"truncated"`
-		IsImage       bool   `json:"is_image"`
-		IsImageCamel  bool   `json:"isImage"`
-	}
-	if len(raw) > 0 && json.Unmarshal(raw, &object) == nil {
-		stdout = firstNonEmptyString(object.Stdout, object.Output)
-		stderr = object.Stderr
-		exitCode = object.ExitCode
-		if exitCode == nil {
-			exitCode = object.ExitCodeCamel
+func firstWhitespaceDelimitedToken(line string) string {
+	for i, r := range line {
+		if r == ' ' || r == '\t' {
+			return line[:i]
 		}
-		interrupted = object.Interrupted || object.Canceled || structuredJSONBool(raw, "cancel"+"led")
-		truncated = object.Truncated
-		isImage = object.IsImage || object.IsImageCamel
 	}
+	return line
+}
+
+func commandResultFields(raw json.RawMessage, content string) (stdout string, stderr string, exitCode *int, interrupted bool, truncated bool, isImage bool) {
+	stdout, stderr, exitCode, interrupted, truncated, isImage = commandResultFieldsDepth(raw, 0)
 	if stdout == "" && stderr == "" {
 		stdout = content
 	}
 	return stdout, stderr, exitCode, interrupted, truncated, isImage
 }
 
-func structuredJSONBool(raw json.RawMessage, field string) bool {
-	var object map[string]bool
-	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
-		return false
+func commandResultFieldsDepth(raw json.RawMessage, depth int) (stdout string, stderr string, exitCode *int, interrupted bool, truncated bool, isImage bool) {
+	if len(raw) == 0 || depth > 4 {
+		return "", "", nil, false, false, false
 	}
-	return object[field]
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil {
+		encoded = strings.TrimSpace(encoded)
+		if encoded != "" && json.Valid([]byte(encoded)) {
+			return commandResultFieldsDepth(json.RawMessage(encoded), depth+1)
+		}
+		return "", "", nil, false, false, false
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || len(object) == 0 {
+		return "", "", nil, false, false, false
+	}
+	for _, key := range []string{"tool_result", "toolUseResult", "provider_result"} {
+		if nested, ok := object[key]; ok {
+			stdout, stderr, exitCode, interrupted, truncated, isImage = commandResultFieldsDepth(nested, depth+1)
+			if stdout != "" || stderr != "" || exitCode != nil || interrupted || truncated || isImage {
+				return stdout, stderr, exitCode, interrupted, truncated, isImage
+			}
+		}
+	}
+	stdout = firstNonEmptyString(
+		jsonStringField(object, "stdout"),
+		jsonStringField(object, "output"),
+		jsonStringField(object, "text"),
+		jsonStringField(object, "result"),
+	)
+	stderr = jsonStringField(object, "stderr", "error")
+	exitCode = jsonIntField(object, "exit_code", "exitCode")
+	if exitCode == nil {
+		if metadata, ok := object["metadata"]; ok {
+			var metadataObject map[string]json.RawMessage
+			if json.Unmarshal(metadata, &metadataObject) == nil {
+				exitCode = jsonIntField(metadataObject, "exit_code", "exitCode")
+			}
+		}
+	}
+	interrupted = jsonBoolField(object, "interrupted") || jsonBoolField(object, "canceled") || jsonBoolField(object, "canceled")
+	truncated = jsonBoolField(object, "truncated")
+	isImage = jsonBoolField(object, "is_image") || jsonBoolField(object, "isImage")
+	return stdout, stderr, exitCode, interrupted, truncated, isImage
+}
+
+func jsonIntField(object map[string]json.RawMessage, names ...string) *int {
+	for _, name := range names {
+		raw, ok := object[name]
+		if !ok || len(raw) == 0 {
+			continue
+		}
+		var value int
+		if json.Unmarshal(raw, &value) == nil {
+			return &value
+		}
+	}
+	return nil
+}
+
+func jsonBoolField(object map[string]json.RawMessage, names ...string) bool {
+	for _, name := range names {
+		raw, ok := object[name]
+		if !ok || len(raw) == 0 {
+			continue
+		}
+		var value bool
+		if json.Unmarshal(raw, &value) == nil && value {
+			return true
+		}
+	}
+	return false
 }
 
 func countLines(content string) int {

@@ -247,7 +247,29 @@ func convertResponseItem(payload json.RawMessage, rawLine string, idx int, ts ti
 					Type:  "tool_use",
 					ID:    callID,
 					Name:  ri.Name,
-					Input: cloneRawJSON(ri.Input),
+					Input: codexToolCallInput(ri.Input, ri.Arguments),
+				}}),
+			}),
+			Raw: json.RawMessage(rawLine),
+		}
+
+	case "web_search_call":
+		callID := firstNonEmpty(ri.CallID, ri.ID)
+		return &Entry{
+			UUID:      uuid,
+			Type:      "assistant",
+			Timestamp: ts,
+			Message: mustMarshal(MessageContent{
+				Role: "assistant",
+				Content: mustMarshal([]ContentBlock{{
+					Type: "tool_use",
+					ID:   callID,
+					Name: "web_search",
+					Input: mustMarshal(struct {
+						Query string `json:"query,omitempty"`
+					}{
+						Query: ri.Query,
+					}),
 				}}),
 			}),
 			Raw: json.RawMessage(rawLine),
@@ -340,6 +362,27 @@ func codexPatchApplyResultContent(em codexEventMsg) json.RawMessage {
 		return nil
 	}
 	return raw
+}
+
+func codexToolCallInput(input json.RawMessage, arguments json.RawMessage) json.RawMessage {
+	if len(input) > 0 && string(input) != "null" {
+		return cloneRawJSON(input)
+	}
+	if len(arguments) == 0 || string(arguments) == "null" {
+		return nil
+	}
+	var argumentString string
+	if json.Unmarshal(arguments, &argumentString) == nil {
+		argumentString = strings.TrimSpace(argumentString)
+		if argumentString == "" {
+			return nil
+		}
+		if json.Valid([]byte(argumentString)) {
+			return cloneRawJSON(json.RawMessage(argumentString))
+		}
+		return mustMarshal(argumentString)
+	}
+	return cloneRawJSON(arguments)
 }
 
 func codexToolResultContentWithPatch(output json.RawMessage, patchResult json.RawMessage) json.RawMessage {
@@ -522,7 +565,9 @@ type codexResponseItem struct {
 	CallID    string             `json:"call_id,omitempty"`
 	Name      string             `json:"name,omitempty"`
 	Input     json.RawMessage    `json:"input,omitempty"`
+	Arguments json.RawMessage    `json:"arguments,omitempty"`
 	Output    json.RawMessage    `json:"output,omitempty"`
+	Query     string             `json:"query,omitempty"`
 	RequestID string             `json:"request_id,omitempty"`
 	ID        string             `json:"id,omitempty"`
 	Kind      string             `json:"kind,omitempty"`

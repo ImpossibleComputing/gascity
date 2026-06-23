@@ -35,6 +35,7 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 		inputKind     string
 		inputFilePath string
 		inputCommand  string
+		inputQuery    string
 		inputPattern  string
 		inputText     string
 		resultKind    string
@@ -43,7 +44,9 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 		resultStdout  string
 		resultExit    *int
 		resultFiles   []string
+		resultMode    string
 		resultPatch   []string
+		resultAbsent  []string
 	}{
 		{
 			name:          "claude read",
@@ -82,6 +85,59 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 			resultFile:    "city.toml",
 			resultContent: "Updated the following files",
 			resultPatch:   []string{"--- city.toml", "+++ city.toml", "+[workspace]"},
+		},
+		{
+			name:          "codex shell read",
+			provider:      "codex",
+			writeFixture:  writeStructuredCodexShellReadFixture,
+			toolCallID:    "call-codex-read",
+			toolName:      "exec_command",
+			inputKind:     "file",
+			inputFilePath: "src/app.ts",
+			inputCommand:  "sed -n '12,14p' src/app.ts",
+			resultKind:    "read",
+			resultFile:    "src/app.ts",
+			resultContent: "line 13",
+			resultAbsent:  []string{"Command:", "Output:"},
+		},
+		{
+			name:         "codex shell grep",
+			provider:     "codex",
+			writeFixture: writeStructuredCodexShellGrepFixture,
+			toolCallID:   "call-codex-grep",
+			toolName:     "exec_command",
+			inputKind:    "search",
+			inputCommand: "rg -n \"needle\" README.md src/app.ts",
+			inputPattern: "needle",
+			resultKind:   "grep",
+			resultMode:   "pattern",
+			resultFiles:  []string{"README.md", "src/app.ts"},
+			resultAbsent: []string{"Command:", "Output:"},
+		},
+		{
+			name:         "codex json string command output",
+			provider:     "codex",
+			writeFixture: writeStructuredCodexJSONStringCommandFixture,
+			toolCallID:   "call-codex-json-command",
+			toolName:     "exec_command",
+			inputKind:    "command",
+			inputCommand: "go test ./...",
+			resultKind:   "bash",
+			resultStdout: "ok ./...\n",
+			resultExit:   intPtr(0),
+			resultAbsent: []string{"{\"stdout\""},
+		},
+		{
+			name:         "codex web search",
+			provider:     "codex",
+			writeFixture: writeStructuredCodexWebSearchFixture,
+			toolCallID:   "call-codex-web-search",
+			toolName:     "web_search",
+			inputKind:    "search",
+			inputQuery:   "structured tool result formats",
+			resultKind:   "grep",
+			resultMode:   "query",
+			resultFiles:  []string{"https://example.com/provider-format"},
 		},
 		{
 			name:         "gemini grep",
@@ -179,6 +235,18 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 			resultStdout: "diff --git a/src/app.ts b/src/app.ts\n@@\n-old\n+new",
 		},
 		{
+			name:         "claude bash nested toolUseResult",
+			provider:     "claude",
+			writeFixture: writeStructuredClaudeBashToolUseResultFixture,
+			toolCallID:   "call-claude-bash",
+			toolName:     "Bash",
+			inputKind:    "command",
+			inputCommand: "npm test",
+			resultKind:   "bash",
+			resultStdout: "tests passed\n",
+			resultExit:   intPtr(0),
+		},
+		{
 			name:          "pi read",
 			provider:      "pi",
 			writeFixture:  writeStructuredPiReadFixture,
@@ -267,8 +335,8 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 			if toolUse.Input == nil {
 				t.Fatalf("tool input is nil")
 			}
-			assertStructuredInput(t, toolUse.Input, tt.inputKind, tt.inputFilePath, tt.inputCommand, tt.inputPattern, tt.inputText)
-			assertStructuredResult(t, toolResult.Structured, tt.resultKind, tt.resultFile, tt.resultContent, tt.resultStdout, tt.resultExit, tt.resultFiles, tt.resultPatch)
+			assertStructuredInput(t, toolUse.Input, tt.inputKind, tt.inputFilePath, tt.inputCommand, tt.inputQuery, tt.inputPattern, tt.inputText)
+			assertStructuredResult(t, toolResult.Structured, tt.resultKind, tt.resultFile, tt.resultContent, tt.resultStdout, tt.resultExit, tt.resultFiles, tt.resultMode, tt.resultPatch, tt.resultAbsent)
 
 			wire, err := json.Marshal(resp)
 			if err != nil {
@@ -466,7 +534,7 @@ func findStructuredToolPair(messages []SessionStructuredMessage, toolCallID stri
 	return toolUse, toolResult
 }
 
-func assertStructuredInput(t *testing.T, input *SessionStructuredToolInput, kind, filePath, command, pattern, text string) {
+func assertStructuredInput(t *testing.T, input *SessionStructuredToolInput, kind, filePath, command, query, pattern, text string) {
 	t.Helper()
 	if input.Kind != kind {
 		t.Fatalf("input kind = %q, want %q; input = %+v", input.Kind, kind, input)
@@ -477,6 +545,9 @@ func assertStructuredInput(t *testing.T, input *SessionStructuredToolInput, kind
 	if command != "" && input.Command != command {
 		t.Fatalf("input command = %q, want %q; input = %+v", input.Command, command, input)
 	}
+	if query != "" && input.Query != query {
+		t.Fatalf("input query = %q, want %q; input = %+v", input.Query, query, input)
+	}
 	if pattern != "" && input.Pattern != pattern {
 		t.Fatalf("input pattern = %q, want %q; input = %+v", input.Pattern, pattern, input)
 	}
@@ -485,7 +556,7 @@ func assertStructuredInput(t *testing.T, input *SessionStructuredToolInput, kind
 	}
 }
 
-func assertStructuredResult(t *testing.T, result *SessionStructuredToolResult, kind, filePath, content, stdout string, exitCode *int, filenames []string, patchSubstrings []string) {
+func assertStructuredResult(t *testing.T, result *SessionStructuredToolResult, kind, filePath, content, stdout string, exitCode *int, filenames []string, mode string, patchSubstrings []string, absentSubstrings []string) {
 	t.Helper()
 	if result == nil {
 		t.Fatal("structured result is nil")
@@ -499,6 +570,11 @@ func assertStructuredResult(t *testing.T, result *SessionStructuredToolResult, k
 	if content != "" && !strings.Contains(result.Content, content) {
 		t.Fatalf("result content = %q, want substring %q; result = %+v", result.Content, content, result)
 	}
+	for _, absent := range absentSubstrings {
+		if strings.Contains(result.Content, absent) || strings.Contains(result.Stdout, absent) || strings.Contains(result.Text, absent) {
+			t.Fatalf("result contains unwanted substring %q; result = %+v", absent, result)
+		}
+	}
 	if stdout != "" && result.Stdout != stdout {
 		t.Fatalf("result stdout = %q, want %q; result = %+v", result.Stdout, stdout, result)
 	}
@@ -506,6 +582,9 @@ func assertStructuredResult(t *testing.T, result *SessionStructuredToolResult, k
 		if result.ExitCode == nil || *result.ExitCode != *exitCode {
 			t.Fatalf("result exit_code = %v, want %d; result = %+v", result.ExitCode, *exitCode, result)
 		}
+	}
+	if mode != "" && result.Mode != mode {
+		t.Fatalf("result mode = %q, want %q; result = %+v", result.Mode, mode, result)
 	}
 	for _, want := range filenames {
 		if !stringSliceContains(result.Filenames, want) {
@@ -541,6 +620,14 @@ func writeStructuredClaudeEditFixture(t *testing.T, root, workDir, sessionKey st
 	)
 }
 
+func writeStructuredClaudeBashToolUseResultFixture(t *testing.T, root, workDir, sessionKey string) {
+	t.Helper()
+	writeNamedSessionJSONL(t, root, workDir, sessionKey+".jsonl",
+		`{"uuid":"claude-bash-1","parentUuid":"","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-claude-bash","name":"Bash","input":{"command":"npm test"}}]},"timestamp":"2026-06-01T00:00:00Z"}`,
+		`{"uuid":"claude-bash-2","parentUuid":"claude-bash-1","type":"tool_result","toolUseID":"call-claude-bash","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-claude-bash","content":"command completed"}]},"toolUseResult":{"stdout":"tests passed\n","stderr":"","exitCode":0},"timestamp":"2026-06-01T00:00:01Z"}`,
+	)
+}
+
 func writeStructuredCodexPatchFixture(t *testing.T, root, workDir, _ string) {
 	t.Helper()
 	dir := filepath.Join(root, "2026", "06", "01")
@@ -554,6 +641,52 @@ func writeStructuredCodexPatchFixture(t *testing.T, root, workDir, _ string) {
 		`{"timestamp":"2026-06-01T00:00:02Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-codex-patch","output":"{\"output\":\"Success. Updated the following files:\\nM city.toml\\n\"}"}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "rollout-2026-06-01T00-00-00-structured.jsonl"), []byte(payload), 0o644); err != nil {
+		t.Fatalf("write codex fixture: %v", err)
+	}
+}
+
+func writeStructuredCodexShellReadFixture(t *testing.T, root, workDir, _ string) {
+	t.Helper()
+	writeStructuredCodexFixture(t, root, workDir, "rollout-2026-06-01T00-01-00-read.jsonl", []string{
+		`{"timestamp":"2026-06-01T00:01:01Z","type":"response_item","payload":{"type":"function_call","call_id":"call-codex-read","name":"exec_command","arguments":"{\"cmd\":\"sed -n '12,14p' src/app.ts\"}"}}`,
+		`{"timestamp":"2026-06-01T00:01:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-codex-read","output":"Command: sed -n '12,14p' src/app.ts\nOutput:\nline 12\nline 13\nline 14\n"}}`,
+	})
+}
+
+func writeStructuredCodexShellGrepFixture(t *testing.T, root, workDir, _ string) {
+	t.Helper()
+	writeStructuredCodexFixture(t, root, workDir, "rollout-2026-06-01T00-02-00-grep.jsonl", []string{
+		`{"timestamp":"2026-06-01T00:02:01Z","type":"response_item","payload":{"type":"function_call","call_id":"call-codex-grep","name":"exec_command","arguments":"{\"cmd\":\"rg -n \\\"needle\\\" README.md src/app.ts\"}"}}`,
+		`{"timestamp":"2026-06-01T00:02:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-codex-grep","output":"Command: rg -n \"needle\" README.md src/app.ts\nOutput:\nREADME.md:1:needle\nsrc/app.ts:7:needle\n"}}`,
+	})
+}
+
+func writeStructuredCodexJSONStringCommandFixture(t *testing.T, root, workDir, _ string) {
+	t.Helper()
+	writeStructuredCodexFixture(t, root, workDir, "rollout-2026-06-01T00-03-00-json-command.jsonl", []string{
+		`{"timestamp":"2026-06-01T00:03:01Z","type":"response_item","payload":{"type":"function_call","call_id":"call-codex-json-command","name":"exec_command","arguments":"{\"cmd\":\"go test ./...\"}"}}`,
+		`{"timestamp":"2026-06-01T00:03:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-codex-json-command","output":"{\"stdout\":\"ok ./...\\n\",\"stderr\":\"\",\"exit_code\":0}"}}`,
+	})
+}
+
+func writeStructuredCodexWebSearchFixture(t *testing.T, root, workDir, _ string) {
+	t.Helper()
+	writeStructuredCodexFixture(t, root, workDir, "rollout-2026-06-01T00-04-00-web-search.jsonl", []string{
+		`{"timestamp":"2026-06-01T00:04:01Z","type":"response_item","payload":{"type":"web_search_call","id":"call-codex-web-search","query":"structured tool result formats"}}`,
+		`{"timestamp":"2026-06-01T00:04:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-codex-web-search","output":"Output:\nhttps://example.com/provider-format: Provider format notes\n"}}`,
+	})
+}
+
+func writeStructuredCodexFixture(t *testing.T, root, workDir, filename string, entries []string) {
+	t.Helper()
+	dir := filepath.Join(root, "2026", "06", "01")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	lines := []string{fmt.Sprintf(`{"timestamp":"2026-06-01T00:00:00Z","type":"session_meta","payload":{"cwd":%q}}`, workDir)}
+	lines = append(lines, entries...)
+	payload := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, filename), []byte(payload), 0o644); err != nil {
 		t.Fatalf("write codex fixture: %v", err)
 	}
 }

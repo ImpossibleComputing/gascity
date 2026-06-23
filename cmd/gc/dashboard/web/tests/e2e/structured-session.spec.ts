@@ -129,6 +129,10 @@ test("renders structured transcripts and streams across all session panels and f
   await expect(drawer).toContainText("[thinking]");
   await expect(drawer).toContainText("Read");
   await expect(drawer).toContainText("AGENTS.md");
+  await expect(drawer).toContainText("read result");
+  await expect(drawer).toContainText("content: Architecture Best Practices");
+  await expect(drawer).toContainText("start: 1");
+  await expect(drawer).toContainText("lines: 12");
   await expect(drawer).toContainText("Claude streamed completion.");
   await expect(drawer).toContainText("claude stream stdout");
 
@@ -138,7 +142,26 @@ test("renders structured transcripts and streams across all session panels and f
   await expect(drawer).toContainText("apply_patch");
   await expect(drawer).toContainText("src/app.ts");
   await expect(drawer).toContainText("+ new line");
+  const codexDiff = drawer.locator(".log-msg-diff").first();
+  await expect(codexDiff).toBeVisible();
+  await expect(codexDiff.locator(".log-msg-diff-hunk")).toHaveText("@@");
+  await expect(codexDiff.locator(".log-msg-diff-del")).toHaveText("- old line");
+  await expect(codexDiff.locator(".log-msg-diff-add")).toHaveText("+ new line");
+  const codexDiffColors = await codexDiff.evaluate((element) => {
+    const add = element.querySelector(".log-msg-diff-add");
+    const del = element.querySelector(".log-msg-diff-del");
+    const hunk = element.querySelector(".log-msg-diff-hunk");
+    if (!add || !del || !hunk) throw new Error("missing diff line spans");
+    return {
+      add: getComputedStyle(add).color,
+      del: getComputedStyle(del).color,
+      hunk: getComputedStyle(hunk).color,
+    };
+  });
+  expect(codexDiffColors.add).not.toBe(codexDiffColors.del);
+  expect(codexDiffColors.add).not.toBe(codexDiffColors.hunk);
   await expect(drawer).toContainText("tests passed");
+  await expect(drawer).toContainText("bash result");
   await expect(drawer).toContainText("exit 0");
 
   await openSessionLog(page, "gemini-pooled");
@@ -148,6 +171,9 @@ test("renders structured transcripts and streams across all session panels and f
   await expect(drawer).toContainText("print('hello from gemini')");
   await expect(drawer).toContainText("hello from gemini");
   await expect(drawer).toContainText("src/gemini.ts");
+  await expect(drawer).toContainText("grep result");
+  await expect(drawer).toContainText("mode: ripgrep");
+  await expect(drawer).toContainText("text: src/gemini.ts: hello");
   await expect(drawer).toContainText("streamed Gemini summary");
 
   await openSessionLog(page, "kimi-crew");
@@ -172,6 +198,9 @@ test("renders structured transcripts and streams across all session panels and f
   await expect(drawer).toContainText("mimocode");
   await expect(drawer).toContainText("mimo-coder");
   await expect(drawer).toContainText("go test ./cmd/gc/dashboard/...");
+  await expect(drawer).toContainText("bash result");
+  await expect(drawer).toContainText("stdout: mimocode tests passed");
+  await expect(drawer).toContainText("exit 0");
   await expect(drawer).toContainText("mimocode tests passed");
 
   await openSessionLog(page, "antigravity-rigged");

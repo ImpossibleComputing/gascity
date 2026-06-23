@@ -96,6 +96,89 @@ func TestInferStructuredToolResultNormalizesSearchFilenames(t *testing.T) {
 	}
 }
 
+func TestNormalizeStructuredToolInputDerivesCodexShellRead(t *testing.T) {
+	raw := mustMarshalForStructuredTest(t, struct {
+		Command string `json:"cmd"`
+	}{
+		Command: "sed -n '12,14p' src/app.ts",
+	})
+
+	got := normalizeStructuredToolInput("exec_command", raw)
+	if got == nil {
+		t.Fatal("normalizeStructuredToolInput returned nil")
+	}
+	if got.Kind != "file" {
+		t.Fatalf("Kind = %q, want file; input = %+v", got.Kind, got)
+	}
+	if got.FilePath != "src/app.ts" {
+		t.Fatalf("FilePath = %q, want src/app.ts; input = %+v", got.FilePath, got)
+	}
+	if got.Command != "sed -n '12,14p' src/app.ts" {
+		t.Fatalf("Command = %q, want original command; input = %+v", got.Command, got)
+	}
+}
+
+func TestInferStructuredToolResultUsesDerivedReadContent(t *testing.T) {
+	raw := mustMarshalForStructuredTest(t, "Command: sed -n '12,14p' src/app.ts\nOutput:\nline 12\nline 13\nline 14\n")
+	block := worker.HistoryBlock{
+		Kind:    worker.BlockKindToolResult,
+		Name:    "exec_command",
+		Content: raw,
+	}
+	context := structuredToolContext{
+		Name: "exec_command",
+		Input: &SessionStructuredToolInput{
+			Kind:     "file",
+			FilePath: "src/app.ts",
+			Command:  "sed -n '12,14p' src/app.ts",
+		},
+	}
+
+	got := inferStructuredToolResult(block, context, structuredJSONText(raw))
+	if got == nil {
+		t.Fatal("inferStructuredToolResult returned nil")
+	}
+	if got.Kind != "read" {
+		t.Fatalf("Kind = %q, want read; result = %+v", got.Kind, got)
+	}
+	if got.Content != "line 12\nline 13\nline 14\n" {
+		t.Fatalf("Content = %q, want command output only; result = %+v", got.Content, got)
+	}
+	if got.FilePath != "src/app.ts" {
+		t.Fatalf("FilePath = %q, want src/app.ts; result = %+v", got.FilePath, got)
+	}
+}
+
+func TestInferStructuredToolResultParsesJSONStringCommandOutput(t *testing.T) {
+	raw := mustMarshalForStructuredTest(t, `{"stdout":"ok ./...\n","stderr":"","exit_code":0}`)
+	block := worker.HistoryBlock{
+		Kind:    worker.BlockKindToolResult,
+		Name:    "exec_command",
+		Content: raw,
+	}
+	context := structuredToolContext{
+		Name: "exec_command",
+		Input: &SessionStructuredToolInput{
+			Kind:    "command",
+			Command: "go test ./...",
+		},
+	}
+
+	got := inferStructuredToolResult(block, context, structuredJSONText(raw))
+	if got == nil {
+		t.Fatal("inferStructuredToolResult returned nil")
+	}
+	if got.Kind != "bash" {
+		t.Fatalf("Kind = %q, want bash; result = %+v", got.Kind, got)
+	}
+	if got.Stdout != "ok ./...\n" {
+		t.Fatalf("Stdout = %q, want parsed stdout; result = %+v", got.Stdout, got)
+	}
+	if got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("ExitCode = %v, want 0; result = %+v", got.ExitCode, got)
+	}
+}
+
 func mustMarshalForStructuredTest(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	out, err := json.Marshal(value)
