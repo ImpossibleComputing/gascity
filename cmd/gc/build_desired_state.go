@@ -2973,20 +2973,19 @@ func selectOrPlanPoolSessionBead(
 
 	// Provider-health gate: refuse new creates when the registry reports this
 	// agent's provider as red. Reuse paths above are unaffected (they return
-	// before reaching this point). Fail-open when providerHealthSnapshot is nil.
+	// before reaching this point). loadProviderHealthSnapshot always returns a
+	// non-nil snapshot; check() fails-open when the registry is absent or stale.
 	// Symmetric with the respawn gate in session_reconciler.go:2424.
-	if bp.providerHealthSnapshot != nil {
-		provName := strings.TrimSpace(cfgAgent.Provider)
-		if provName == "" {
-			provName = strings.TrimSpace(cfgAgent.InheritedProvider)
-		}
-		if provName == "" && bp.workspace != nil {
-			provName = strings.TrimSpace(bp.workspace.Provider)
-		}
-		if healthy, present := bp.providerHealthSnapshot.check(provName); present && !healthy {
-			delete(usedSlots, slot)
-			return beads.Bead{}, 0, nil, errPoolSessionCreateProviderRed
-		}
+	provName := strings.TrimSpace(cfgAgent.Provider)
+	if provName == "" {
+		provName = strings.TrimSpace(cfgAgent.InheritedProvider)
+	}
+	if provName == "" && bp.workspace != nil {
+		provName = strings.TrimSpace(bp.workspace.Provider)
+	}
+	if healthy, present := bp.providerHealthSnapshot.check(provName); present && !healthy {
+		delete(usedSlots, slot)
+		return beads.Bead{}, 0, nil, errPoolSessionCreateProviderRed
 	}
 
 	if !bp.tryClaimPoolSessionCreate(template) {

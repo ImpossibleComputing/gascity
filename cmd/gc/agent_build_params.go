@@ -63,11 +63,12 @@ type agentBuildParams struct {
 	poolScaleCheckPartialTemplates map[string]bool
 
 	// providerHealthSnapshot is the per-build provider-health registry view.
-	// Loaded once at the start of buildDesiredState; nil when the registry
-	// file is absent, unreadable, or stale. A nil snapshot means fail-open
-	// (same semantics as the reconciler's gate at session_reconciler.go:2424).
-	// This field is assigned in buildDesiredState before the pool realization
-	// loop; newAgentBuildParams does not set it.
+	// Loaded once at the start of buildDesiredState via loadProviderHealthSnapshot,
+	// which always returns a non-nil snapshot. When the registry file is absent,
+	// unreadable, or empty the snapshot has present=false and check() fails-open
+	// (healthy=true, registryPresent=false). This field is assigned in
+	// buildDesiredState before the pool realization loop; newAgentBuildParams
+	// does not set it.
 	providerHealthSnapshot *providerHealthSnapshot
 
 	// beadNames caches qualifiedName → session_name mappings resolved
