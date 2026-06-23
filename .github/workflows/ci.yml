@@ -177,6 +177,13 @@ jobs:
         run: make install-tools
       - name: go.mod replace guard
         run: make check-gomod-replace
+      # ADVISORY: open-core boundary guard. Reports commercial coupling in the OSS
+      # module but does not block merge yet (continue-on-error). Promote to a
+      # required check via a separate human-operator-owned PR once the baseline is
+      # proven clean over several main runs.
+      - name: Open-core boundary guard (advisory)
+        continue-on-error: true
+        run: make check-core-boundary
       - name: Native dependency surface guard
         run: make check-native-dependency-surface
       - name: Native DoltLite beads tests
