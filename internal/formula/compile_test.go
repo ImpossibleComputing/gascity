@@ -2358,10 +2358,10 @@ required = true
 id = "brew"
 title = "Brew"
 
-[steps.brew.loop]
+[steps.loop]
 count = "{{cups}}"
 
-[[steps.brew.loop.body]]
+[[steps.loop.body]]
 id = "pour"
 title = "Pour"
 `
