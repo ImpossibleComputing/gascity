@@ -474,6 +474,11 @@ func buildDesiredStateWithSessionBeads(
 	// below so the probe wakes a cold pool from zero without overriding the
 	// pool's custom scale_check count.
 	coldWakeTemplates := map[string]bool{}
+	// namedOnDemandTemplates marks templates where namedSessionMode != "always"
+	// and a defaultScaleTargets entry was appended (on_demand named-backing).
+	// Their pool demand is clamped to 1 at the merge so one pool slot wakes the
+	// session without over-spawning {name}-N phantoms when N routed beads arrive.
+	namedOnDemandTemplates := map[string]bool{}
 	// activeStores is the set of stores a cold custom-scale_check pool is probed
 	// against (city + every non-suspended rig store), so routed demand a sleeping
 	// rig pool can't see locally — e.g. work queued in the city store — still
@@ -496,13 +501,14 @@ func buildDesiredStateWithSessionBeads(
 		if cfg.Agents[i].Suspended {
 			continue
 		}
-		backsNamedSession := false
+		namedSessionMode := ""
 		for j := range cfg.NamedSessions {
 			if cfg.NamedSessions[j].TemplateQualifiedName() == cfg.Agents[i].QualifiedName() {
-				backsNamedSession = true
+				namedSessionMode = cfg.NamedSessions[j].ModeOrDefault()
 				break
 			}
 		}
+		backsNamedSession := namedSessionMode != ""
 
 		sp := scaleParamsForBeads(&cfg.Agents[i], cfg.Beads)
 		// Expand {{.Rig}}/{{.AgentBase}} before the scale_check enters the
@@ -559,7 +565,16 @@ func buildDesiredStateWithSessionBeads(
 			poolDir := agentCommandDir(cityPath, &cfg.Agents[i], cfg.Rigs)
 			if store != nil && !hasCustomScaleCheck {
 				ownTarget := defaultScaleCheckTargetForAgent(cityPath, cfg, &cfg.Agents[i], store, rigStores)
-				defaultScaleTargets = append(defaultScaleTargets, ownTarget)
+				// mode='always': named session is unconditionally desired by the named
+				// pass; pool demand is redundant and creates {name}-N phantoms when N
+				// routed beads arrive. mode='on_demand': pool demand wakes the sleeping
+				// singleton (namedWorkReady covers only direct Assignee beads, not
+				// gc.routed_to). Leave defaultNamedScaleTargets unchanged for both modes
+				// (partial-query retention).
+				if namedSessionMode != "always" {
+					defaultScaleTargets = append(defaultScaleTargets, ownTarget)
+					namedOnDemandTemplates[template] = true
+				}
 				defaultNamedScaleTargets = append(defaultNamedScaleTargets, ownTarget)
 				// Cross-store cold-wake for named-backing pools (vp-cl4): mirror the
 				// generic-pool guard (vp-s37 / #3078 line ~598). A cold rig pool that
@@ -570,7 +585,9 @@ func buildDesiredStateWithSessionBeads(
 				// mirrors these probes only for partial-query retention bookkeeping.
 				if isCold && ownTarget.storeKey != "city" && ownTarget.store != nil && ownTarget.err == nil && ownTarget.store != store {
 					cityTarget := defaultScaleCheckTarget{template: template, store: store, storeKey: "city"}
-					defaultScaleTargets = append(defaultScaleTargets, cityTarget)
+					if namedSessionMode != "always" {
+						defaultScaleTargets = append(defaultScaleTargets, cityTarget)
+					}
 					defaultNamedScaleTargets = append(defaultNamedScaleTargets, cityTarget)
 				}
 				continue
@@ -706,6 +723,12 @@ func buildDesiredStateWithSessionBeads(
 				// contribution to 1 so it never overrides a custom scale_check's
 				// authoritative count for the same template.
 				if coldWakeTemplates[template] && count > 1 {
+					count = 1
+				}
+				// An on_demand named-session backing template is a singleton: one pool
+				// slot is enough to drain N queued routed tasks sequentially. Clamp to
+				// 1 so N unassigned gc.routed_to beads do not spawn {name}-N phantoms.
+				if namedOnDemandTemplates[template] && count > 1 {
 					count = 1
 				}
 				if count > scaleCheckCounts[template] {
