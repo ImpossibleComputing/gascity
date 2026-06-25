@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	agentname "github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -823,7 +824,7 @@ func buildDesiredStateWithSessionBeads(
 				continue
 			}
 			assignee := strings.TrimSpace(wb.Assignee)
-			if assignee != identity {
+			if !assigneeMatchesNamedIdentity(assignee, identity) {
 				continue
 			}
 			if !assignedWorkIndexReachableFromAgent(cityPath, cfg, spec.Agent, assignedWorkStoreRefs, i) {
@@ -1167,7 +1168,12 @@ func collectAssignedWorkBeadsWithStores(
 	// to a real Ready() match and silently treat blocked work as live demand.
 	skipReadyAssignees := readyCapturedAssigneeSet(result, readyAssignedIDs)
 	expandSkipAssigneesWithSessionIdentities(skipReadyAssignees, sessionBeads)
-	assignees := readyAssignedWorkAssignees(cfg, sessionBeads, skipReadyAssignees)
+	// Open-routed beads assigned in sanitized session-name form land in result
+	// (via appendOpenRoutedWorkUnique) without a readiness verdict. Treat their
+	// sanitized assignee as routing evidence so the Ready probe re-queries that
+	// form and can establish real readiness for a drained on_demand session.
+	routedSanitized := routedSanitizedNamedIdentities(result)
+	assignees := readyAssignedWorkAssignees(cfg, sessionBeads, skipReadyAssignees, routedSanitized)
 	if len(skipReadyAssignees) > 0 && len(assignees) == 0 {
 		return result, resultStores, resultStoreRefs, readyAssignedIDs, partial
 	}
@@ -1276,7 +1282,57 @@ func expandSkipAssigneesWithSessionIdentities(skip map[string]struct{}, sessionB
 	}
 }
 
-func readyAssignedWorkAssignees(cfg *config.City, sessionBeads *sessionBeadSnapshot, skip map[string]struct{}) []string {
+// assigneeMatchesNamedIdentity reports whether a work bead's stored assignee
+// refers to the given named-session identity. It accepts both the qualified
+// ("rig/agent") form and the sanitized session-name ("rig--agent") form that
+// routed control/work beads are written with (agent.SanitizeQualifiedNameForSession).
+// Without the sanitized form, an on_demand named session whose routed work is
+// assigned in session-name form never registers as direct demand, so a session
+// that has lost its canonical bead can never be re-materialized.
+//
+// Match broadening here is safe because the sanitized form is only ever probed
+// (and thus only ever collected into assignedWorkBeads) for identities that
+// carry genuine routing evidence — see routedSanitizedNamedIdentities. A bead
+// that merely names a future runtime, with no gc.routed_to marker, is never
+// queried, so it never reaches this comparison.
+func assigneeMatchesNamedIdentity(assignee, identity string) bool {
+	assignee = strings.TrimSpace(assignee)
+	identity = strings.TrimSpace(identity)
+	if assignee == "" || identity == "" {
+		return false
+	}
+	return assignee == identity || assignee == agentname.SanitizeQualifiedNameForSession(identity)
+}
+
+// routedSanitizedNamedIdentities returns the set of sanitized session-name forms
+// for which the already-collected work carries genuine routing evidence: a bead
+// assigned in the sanitized form whose gc.routed_to (or legacy workflow run
+// target) marker is set. This is the distinguishing factor between work that was
+// genuinely routed to a drained on_demand session (which must respawn it) and
+// work that merely names a future session's runtime (which must NOT materialize
+// it). The collision is exact under the default session template, where
+// config.NamedSessionRuntimeName equals agent.SanitizeQualifiedNameForSession,
+// so the assignee string alone cannot tell the two apart — only the routing
+// marker can.
+func routedSanitizedNamedIdentities(work []beads.Bead) map[string]struct{} {
+	if len(work) == 0 {
+		return nil
+	}
+	routed := make(map[string]struct{})
+	for _, b := range work {
+		assignee := strings.TrimSpace(b.Assignee)
+		if assignee == "" {
+			continue
+		}
+		if routedToOrLegacyWorkflowTarget(b) == "" {
+			continue
+		}
+		routed[assignee] = struct{}{}
+	}
+	return routed
+}
+
+func readyAssignedWorkAssignees(cfg *config.City, sessionBeads *sessionBeadSnapshot, skip map[string]struct{}, routedSanitized map[string]struct{}) []string {
 	seen := make(map[string]struct{})
 	var result []string
 	add := func(value string) {
@@ -1308,8 +1364,21 @@ func readyAssignedWorkAssignees(cfg *config.City, sessionBeads *sessionBeadSnaps
 			if cfg.NamedSessions[i].Mode != "on_demand" {
 				continue
 			}
+			// Always probe the qualified ("rig/agent") form. Probe the sanitized
+			// session-name ("rig--agent") form — the form routed control/work
+			// beads are assigned in — only when collected work carries genuine
+			// routing evidence for it. Probing it unconditionally would query a
+			// future on_demand session's runtime name purely because some bead
+			// names it, materializing a session that does not exist yet; gating
+			// on the routing marker keeps that invariant while still letting a
+			// genuinely-routed, drained session be re-probed and respawned.
 			identity := cfg.NamedSessions[i].QualifiedName()
 			add(identity)
+			if sanitized := agentname.SanitizeQualifiedNameForSession(identity); sanitized != identity {
+				if _, ok := routedSanitized[sanitized]; ok {
+					add(sanitized)
+				}
+			}
 		}
 	}
 	return result

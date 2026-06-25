@@ -2091,7 +2091,7 @@ func TestReadyAssignedWorkAssigneesExcludeBroadIdentities(t *testing.T) {
 			{Template: "mayor", Mode: "always"},
 			{Dir: "repo", Template: "named-worker", Mode: "on_demand"},
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	for _, disallowed := range []string{"repo/worker", "mayor"} {
 		for _, value := range got {
@@ -10452,4 +10452,157 @@ func TestCollectAssignedWorkBeads_ReadyProbeExcludesFutureNamedSessionRuntimeAss
 	if !queried[identity] {
 		t.Fatalf("rig Ready queries = %#v, want canonical named-session assignee %q", rigStore.readyQueries, identity)
 	}
+}
+
+func TestReadyAssignedWorkAssigneesIncludesSanitizedSessionNameForm(t *testing.T) {
+	// Routed control/work beads are assigned in sanitized session-name form
+	// ("repo--named-worker"), so the readiness probe must enumerate that form
+	// when collected work carries routing evidence for it. Regression for the
+	// gastown control-dispatcher freeze: the graph store held 273 beads assigned
+	// "gastown--control-dispatcher" and 0 assigned "gastown/control-dispatcher",
+	// so the slash-only probe found no demand and the dispatcher never respawned.
+	cfg := &config.City{
+		NamedSessions: []config.NamedSession{
+			{Dir: "repo", Template: "named-worker", Mode: "on_demand"},
+		},
+	}
+	// Routing evidence: an open bead assigned in the sanitized form that carries
+	// a gc.routed_to marker. Without this, the sanitized form is intentionally
+	// withheld so a future session's runtime name is not probed into existence.
+	routed := routedSanitizedNamedIdentities([]beads.Bead{{
+		Assignee: "repo--named-worker",
+		Status:   "open",
+		Metadata: map[string]string{"gc.routed_to": "repo/named-worker"},
+	}})
+	got := readyAssignedWorkAssignees(cfg, nil, nil, routed)
+
+	want := map[string]bool{"repo/named-worker": false, "repo--named-worker": false}
+	for _, value := range got {
+		if _, ok := want[value]; ok {
+			want[value] = true
+		}
+	}
+	for form, found := range want {
+		if !found {
+			t.Fatalf("ready assignees = %#v, want it to include %q", got, form)
+		}
+	}
+}
+
+func TestAssigneeMatchesNamedIdentityAcceptsSanitizedForm(t *testing.T) {
+	cases := []struct {
+		assignee string
+		identity string
+		want     bool
+	}{
+		{"gastown/control-dispatcher", "gastown/control-dispatcher", true},
+		{"gastown--control-dispatcher", "gastown/control-dispatcher", true},
+		{" gastown--control-dispatcher ", "gastown/control-dispatcher", true},
+		{"other--thing", "gastown/control-dispatcher", false},
+		{"", "gastown/control-dispatcher", false},
+		{"gastown--control-dispatcher", "", false},
+	}
+	for _, tc := range cases {
+		if got := assigneeMatchesNamedIdentity(tc.assignee, tc.identity); got != tc.want {
+			t.Errorf("assigneeMatchesNamedIdentity(%q, %q) = %v, want %v", tc.assignee, tc.identity, got, tc.want)
+		}
+	}
+}
+
+// TestBuildDesiredState_OnDemandNamedSession_SanitizedRouteRespawnsVsFutureName
+// is the reconciliation guard. Under graph_store=sqlite, work routed to a
+// single-session/pool target is assigned in sanitized session-name form
+// (config.NamedSessionRuntimeName == agent.SanitizeQualifiedNameForSession under
+// the default template) AND stamped with gc.routed_to (see
+// internal/dispatch/control.go applyAttemptStepRoute). A drained on_demand
+// session with such genuinely-routed work MUST respawn. By contrast, a bead that
+// merely names a future session's runtime — sanitized assignee, NO gc.routed_to —
+// must NOT materialize that session (main's invariant in
+// TestBuildDesiredState_OnDemandNamedSession_RuntimeAssigneeDoesNotMaterialize).
+// The two beads carry the SAME assignee string, so only the routing marker can
+// distinguish them.
+func TestBuildDesiredState_OnDemandNamedSession_SanitizedRouteRespawnsVsFutureName(t *testing.T) {
+	newCfg := func() *config.City {
+		return &config.City{
+			Workspace: config.Workspace{Name: "test-city"},
+			Rigs:      []config.Rig{{Name: "fixture", Path: ""}},
+			Agents: []config.Agent{{
+				Name:              "run-operator",
+				Dir:               "fixture",
+				StartCommand:      "true",
+				MaxActiveSessions: intPtr(1),
+				WorkQuery:         "printf ''",
+			}},
+			NamedSessions: []config.NamedSession{{
+				Template: "run-operator",
+				Dir:      "fixture",
+				Mode:     "on_demand",
+			}},
+		}
+	}
+
+	materializes := func(t *testing.T, routed bool) (bool, bool) {
+		t.Helper()
+		cityPath := t.TempDir()
+		rigPath := filepath.Join(cityPath, "fixture")
+		if err := os.MkdirAll(rigPath, 0o755); err != nil {
+			t.Fatalf("create rig dir: %v", err)
+		}
+		cfg := newCfg()
+		cfg.Rigs[0].Path = rigPath
+		identity := cfg.NamedSessions[0].QualifiedName()
+		runtimeName := config.NamedSessionRuntimeName(cfg.EffectiveCityName(), cfg.Workspace, identity)
+		if runtimeName == identity {
+			t.Fatalf("test requires sanitized runtime name to differ from identity %q", identity)
+		}
+		var metadata map[string]string
+		if routed {
+			metadata = map[string]string{"gc.routed_to": identity}
+		}
+		cityStore := beads.NewMemStore()
+		rigStore := beads.NewMemStore()
+		if _, err := rigStore.Create(beads.Bead{
+			Title:    "routed control work",
+			Type:     "task",
+			Status:   "open",
+			Assignee: runtimeName,
+			Metadata: metadata,
+		}); err != nil {
+			t.Fatalf("create rig work: %v", err)
+		}
+
+		dsResult := buildDesiredStateWithSessionBeads(
+			cfg.EffectiveCityName(), cityPath, time.Now().UTC(), cfg,
+			runtime.NewFake(), cityStore, map[string]beads.Store{"fixture": rigStore}, nil, nil, io.Discard,
+		)
+		demand := dsResult.NamedSessionDemand[identity]
+		found := false
+		for _, tp := range dsResult.State {
+			if tp.ConfiguredNamedIdentity == identity {
+				found = true
+				break
+			}
+		}
+		return demand, found
+	}
+
+	t.Run("genuinely routed sanitized assignee respawns", func(t *testing.T) {
+		demand, found := materializes(t, true)
+		if !demand {
+			t.Fatal("NamedSessionDemand = false for genuinely-routed sanitized assignee; drained session would never respawn")
+		}
+		if !found {
+			t.Fatal("genuinely-routed sanitized assignee should materialize the on-demand named session")
+		}
+	})
+
+	t.Run("future runtime name without route does not materialize", func(t *testing.T) {
+		demand, found := materializes(t, false)
+		if demand {
+			t.Fatal("NamedSessionDemand = true for future runtime assignee with no route marker")
+		}
+		if found {
+			t.Fatal("future runtime assignee with no route marker should not materialize the named session")
+		}
+	})
 }
