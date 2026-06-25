@@ -470,8 +470,12 @@ func TestEnsureCanonicalConfigWritesDoltModeWhenSupplied(t *testing.T) {
 	if !changed {
 		t.Fatal("EnsureCanonicalConfig() should report changes when adding dolt.mode")
 	}
-	if got := nestedConfigString(t, fs, path, "dolt", "mode"); got != "server" {
-		t.Fatalf("dolt.mode = %q, want %q", got, "server")
+	data, readErr := fs.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read config: %v", readErr)
+	}
+	if !strings.Contains(string(data), "dolt.mode: server") {
+		t.Fatalf("dolt.mode not written as flat key:\n%s", data)
 	}
 
 	changed, err = EnsureCanonicalConfig(fs, path, state)
@@ -481,8 +485,12 @@ func TestEnsureCanonicalConfigWritesDoltModeWhenSupplied(t *testing.T) {
 	if changed {
 		t.Fatal("second EnsureCanonicalConfig() should be idempotent with existing dolt.mode")
 	}
-	if got := nestedConfigString(t, fs, path, "dolt", "mode"); got != "server" {
-		t.Fatalf("dolt.mode after idempotent run = %q, want %q", got, "server")
+	data, readErr = fs.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read config after idempotent run: %v", readErr)
+	}
+	if !strings.Contains(string(data), "dolt.mode: server") {
+		t.Fatalf("dolt.mode missing after idempotent run:\n%s", data)
 	}
 }
 
@@ -495,6 +503,7 @@ func TestEnsureCanonicalConfigPreservesExistingDoltModeWhenStateOmitsIt(t *testi
 		"issue-prefix: gc",
 		"dolt.auto-start: false",
 		"export.auto: false",
+		"backup.enabled: false",
 		"dolt:",
 		"  disable-event-flush: true",
 		"  mode: server",
@@ -516,7 +525,8 @@ func TestEnsureCanonicalConfigPreservesExistingDoltModeWhenStateOmitsIt(t *testi
 		t.Fatalf("EnsureCanonicalConfig() error = %v", err)
 	}
 	if changed {
-		t.Fatal("EnsureCanonicalConfig() should preserve existing dolt.mode when state omits it")
+		data, _ := fs.ReadFile(path)
+		t.Fatalf("EnsureCanonicalConfig() should preserve existing dolt.mode when state omits it (changed=true):\n%s", data)
 	}
 	if got := nestedConfigString(t, fs, path, "dolt", "mode"); got != "server" {
 		t.Fatalf("dolt.mode = %q, want preserved %q", got, "server")
@@ -1999,10 +2009,10 @@ func TestEnsureCanonicalConfigDoltModeIdempotent(t *testing.T) {
 	}
 }
 
-// TestEnsureCanonicalConfigPreservesExistingDoltModeWhenStateOmitsIt verifies
-// that a pre-existing dolt.mode: server in config is not removed or changed
-// when ConfigState.DoltMode is empty ("caller doesn't know the mode").
-func TestEnsureCanonicalConfigPreservesExistingDoltModeWhenStateOmitsIt(t *testing.T) {
+// TestEnsureCanonicalConfigPreservesWrittenDoltModeWhenStateOmitsIt verifies
+// that a dolt.mode previously written by EnsureCanonicalConfig is not removed
+// or changed when a subsequent call omits DoltMode ("caller doesn't know the mode").
+func TestEnsureCanonicalConfigPreservesWrittenDoltModeWhenStateOmitsIt(t *testing.T) {
 	fs := fsys.OSFS{}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
