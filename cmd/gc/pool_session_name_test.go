@@ -2157,3 +2157,112 @@ func TestReleaseOrphanedPoolAssignments_PreservesNamedIdentityForSameStore(t *te
 		t.Fatalf("assignee = %q, want reviewer", got.Assignee)
 	}
 }
+
+// graphFederatingStore models the production primary store under graph_store=sqlite:
+// List/Get/Update federate the ClassGraph (gcg-) leg on top of the embedded work
+// (rig/Dolt analog) store, and the graph-only handle exposes the same graph beads
+// with the "gcg" id prefix. This is the store shape the orphan-release fix must
+// route graph-resident beads to (the rig store leg never sees the gcg- bead).
+type graphFederatingStore struct {
+	beads.Store
+	graph []beads.Bead
+}
+
+func (s *graphFederatingStore) graphIndex(id string) int {
+	for i := range s.graph {
+		if s.graph[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *graphFederatingStore) Get(id string) (beads.Bead, error) {
+	if i := s.graphIndex(id); i >= 0 {
+		return s.graph[i], nil
+	}
+	return s.Store.Get(id)
+}
+
+func (s *graphFederatingStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	base, err := s.Store.List(q)
+	if err != nil {
+		return nil, err
+	}
+	// Graph step beads carry no labels, so label-scoped queries (e.g. the
+	// session-bead liveness probe) never federate them.
+	if q.Label != "" {
+		return base, nil
+	}
+	for _, b := range s.graph {
+		if q.Status == "" || b.Status == q.Status {
+			base = append(base, b)
+		}
+	}
+	return base, nil
+}
+
+func (s *graphFederatingStore) Update(id string, opts beads.UpdateOpts) error {
+	if i := s.graphIndex(id); i >= 0 {
+		if opts.Status != nil {
+			s.graph[i].Status = *opts.Status
+		}
+		if opts.Assignee != nil {
+			s.graph[i].Assignee = *opts.Assignee
+		}
+		return nil
+	}
+	return s.Store.Update(id, opts)
+}
+
+func (s *graphFederatingStore) ListGraphOnlyHandle() (beads.GraphOnlyListStore, bool) {
+	return graphOnlyAssignedReader{graph: s.graph}, true
+}
+
+// TestReleaseOrphanedPoolAssignments_ReleasesGraphResidentBeadBoundToRigStore is
+// the graph_store=sqlite strand-heal regression. A graph-resident step bead
+// (gcg-…) physically lives in the primary graph store, but its collection binds it
+// to the rig store (gc.root_store_ref=rig:…), so the index-aligned ownerStore is
+// the rig (Dolt) store — whose List never returns the graph bead. Before the fix,
+// liveWorkAssignmentStillReleasable therefore failed and the orphan was never
+// released (the untreated analog of the close-check graph-only fix). The fix routes
+// graph-resident beads to the store that physically holds them.
+func TestReleaseOrphanedPoolAssignments_ReleasesGraphResidentBeadBoundToRigStore(t *testing.T) {
+	work := beads.Bead{
+		ID:       "gcg-9001",
+		Title:    "orphaned graph step",
+		Status:   "in_progress",
+		Assignee: "run-operator-dead",
+		Metadata: map[string]string{"gc.routed_to": "run-operator", "gc.root_store_ref": "rig:gascity"},
+	}
+	graphStore := &graphFederatingStore{Store: beads.NewMemStore(), graph: []beads.Bead{work}}
+
+	// The rig store does NOT hold the graph bead. assignedWorkStores binds the bead
+	// to it (the bug trigger): before the fix ownerStore would be this rig store,
+	// whose List never returns gcg-9001 -> skip -> orphan stranded forever.
+	rigStore := beads.NewMemStore()
+
+	released := releaseOrphanedPoolAssignments(
+		graphStore,
+		&config.City{Agents: []config.Agent{{Name: "run-operator", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
+		"",
+		nil,
+		[]beads.Bead{work},
+		[]beads.Store{rigStore},
+		[]string{"gascity"},
+		map[string]beads.Store{"gascity": rigStore},
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("released = %v, want [%s] — graph-resident orphan must release despite rig store-ref binding", released, work.ID)
+	}
+	got, err := graphStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("get work: %v", err)
+	}
+	if got.Status != "open" {
+		t.Fatalf("status = %q, want open", got.Status)
+	}
+	if got.Assignee != "" {
+		t.Fatalf("assignee = %q, want empty (reopened for re-dispatch)", got.Assignee)
+	}
+}

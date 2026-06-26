@@ -184,6 +184,22 @@ func releaseOrphanedPoolAssignments(
 				continue
 			}
 		}
+		// Graph-resident step beads (e.g. gcg-…) physically live in the primary
+		// graph store even when their routing carries a rig store-ref
+		// (gc.root_store_ref=rig:…). The index-aligned / storeForPoolAssignment
+		// ownerStore can therefore resolve to a rig (Dolt) store whose List never
+		// returns the bead — so liveWorkAssignmentStillReleasable fails and the
+		// release write targets the wrong leg, leaving the orphan unreleasable
+		// forever (the graph_store=sqlite strand-heal regression: the untreated
+		// analog of the close-check graph-only fix). Validate and write against the
+		// store that physically holds it. Identity-phase Dolt cities have no
+		// distinct ClassGraph backend, so GraphOnlyListFor is absent and this is a
+		// no-op there (byte-identical default).
+		if gol, ok := beads.GraphOnlyListFor(store); ok {
+			if pfx := gol.GraphIDPrefix(); pfx != "" && strings.HasPrefix(wb.ID, pfx+"-") {
+				ownerStore = store
+			}
+		}
 		if !liveWorkAssignmentStillReleasable(ownerStore, wb.ID, wb.Status, assignee) {
 			continue
 		}
@@ -194,6 +210,7 @@ func releaseOrphanedPoolAssignments(
 		if !releaseOrphanedPoolAssignment(ownerStore, wb.ID, clearDetached) {
 			continue
 		}
+		log.Printf("releaseOrphanedPoolAssignments: reopened orphaned pool work %q (dead assignee %q) for re-dispatch", wb.ID, assignee)
 		released = append(released, releasedPoolAssignment{ID: wb.ID, Index: i})
 	}
 	return released
