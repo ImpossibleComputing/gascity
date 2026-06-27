@@ -153,3 +153,27 @@ The wizard's contract is the agreed target; the backend builds to it.
 - ⛔ **crucible#30 BLOCKED on rebase** — `main` landed the parallel **ER-410 workspace tier** (`enforceWorkspaceGate`, immutable `workspace_id`) which interleaves with the credential spine across the cities surface (24 conflict blocks). They **compose** (unify on ER-410's `WorkspaceID`; Pack/Provisioning/discovery are additive) but it is a careful, reviewed reconciliation of the **live cities tenancy model** + full re-test — NOT a mid-deploy rush. Rebase guidance posted on the PR. This is the **critical-path blocker** for the provisioner (its code rides this branch).
 - ⏸ **design-system#234 (wizard) HELD** — merging it would ship a UI whose backend (crucible cities) isn't deployed yet (until #30 lands), so "create city" would 404. Merge after the crucible cities surface is live.
 - **Remaining after the crucible rebase lands + deploys:** build/publish the **provisioner image** + the **controller image** (no existing CI builds them — `Dockerfile.crucible` builds only `cmd/crucible`); apply the **INFRA** (`infra/`) — **gated on founder open-Q7** (per-cell egress allowlist) + the egress-CIDR REVIEW; mint the **platform `city.provision` key** + enroll per-org provisioningTokens (**prod-credential gate**); allow-list the platform subject; live verify.
+
+## ⚠️ Architectural finding (2026-06-27, surfaced by the crucible#30 rebase attempt)
+The crucible#30 rebase isn't mechanical — it exposed that **the create path is the rejected
+synchronous-mint shape**: `handleCreateCity` → `setupCityProvisioning` wires
+`cityidentity.HTTPAdmin{AdminToken: CRUCIBLE_ACCOUNTS_ADMIN_TOKEN}` and synchronously calls Accounts
+**from crucible.ops (corp-public, zero egress to identity-v0)** — the forbidden god-token shape `main`
+deliberately removed (the whole reason B0/B2/B3's pull provisioner exists). The pull provisioner is
+correct, but `handleCreateCity` was never converted to feed it. **crucible#30 needs a reviewed rework
+before it can merge/deploy** (not a slam-merge):
+1. crucible create → persist a **pending** city (no in-crucible Accounts call, drop the admin token).
+2. Move the **orchestrator-SP mint into the provisioner** (`cmd/city-provisioner` already has the
+   caller-less `AccountsProvisioner` B0 machine path): extend `ProvisionOne` to mint the orchestrator
+   SP + write it to OpenBao, alongside beads + controller, and report via `/complete`.
+3. `/complete` records the orchestrator credential; `/status` surfaces it.
+4. Rework the synchronous-mint cities tests + rebase onto `main`'s ER-410 workspace tier (data-model
+   reconciliation worked out: unify on ER-410 `WorkspaceID`; `Pack`/`Provisioning`/discovery additive;
+   keep both `discoverySubjects` + `enforceWorkspaceGate`; `gateSandbox`-wrap the sandbox routes).
+Detail on crucible#30 (comment 4822656027). This is the "identity-side broker lands" work `main`
+anticipated — B2/B3 is most of it; the create→pending conversion + orchestrator-mint move remain.
+
+**Net live-deploy state:** B0 foundation MERGED + deploying (gasworks#203); crucible#30 needs the
+above reviewed rework; wizard (#234) held. The create-city SOFTWARE exists end-to-end, but the
+crucible create path must be converted to the pull model (a focused, reviewed change) before a live
+city can be produced.
