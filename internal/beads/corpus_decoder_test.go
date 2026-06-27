@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,58 @@ func TestCorpusCreateDecodesSingleIssue(t *testing.T) {
 	if issue.Title != "Corpus root issue" {
 		t.Errorf("Title = %q, want Corpus root issue", issue.Title)
 	}
+}
+
+// TestCorpusMutationBlobsDecode covers the mutation command surface: update,
+// close, and reopen each return an array of the affected issue, which gc decodes
+// through the same tolerant parser as show/list. It also exercises bd's metadata
+// coercion (--set-metadata phase=2 is emitted as the integer 2) through gc's
+// StringMap.UnmarshalJSON — a shape the corpus did not previously pin.
+func TestCorpusMutationBlobsDecode(t *testing.T) {
+	t.Run("update", func(t *testing.T) {
+		issues, err := parseIssuesTolerant(rehydrateTimestamps(loadCorpusBlob(t, "flat/update.json")))
+		if err != nil {
+			t.Fatalf("parseIssuesTolerant(flat/update): %v", err)
+		}
+		if len(issues) != 1 || issues[0].ID != "corpus-root" {
+			t.Fatalf("update: got %+v, want one issue corpus-root", issues)
+		}
+		got := issues[0]
+		if got.Priority == nil || *got.Priority != 0 {
+			t.Errorf("update Priority = %v, want 0 (updated)", got.Priority)
+		}
+		if !slices.Contains(got.Labels, "corpus-label") {
+			t.Errorf("update Labels = %v, want to contain corpus-label", got.Labels)
+		}
+		// bd coerces --set-metadata phase=2 to the integer 2; gc's StringMap must
+		// still decode it (as "2") rather than failing on the non-string value.
+		if got.Metadata["phase"] != "2" {
+			t.Errorf("update Metadata[phase] = %q, want \"2\" (coerced from integer)", got.Metadata["phase"])
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		issues, err := parseIssuesTolerant(rehydrateTimestamps(loadCorpusBlob(t, "flat/close.json")))
+		if err != nil {
+			t.Fatalf("parseIssuesTolerant(flat/close): %v", err)
+		}
+		if len(issues) != 1 || issues[0].ID != "corpus-closed" {
+			t.Fatalf("close: got %+v, want one issue corpus-closed", issues)
+		}
+		if issues[0].Status != "closed" {
+			t.Errorf("close Status = %q, want closed", issues[0].Status)
+		}
+	})
+
+	t.Run("reopen", func(t *testing.T) {
+		issues, err := parseIssuesTolerant(rehydrateTimestamps(loadCorpusBlob(t, "flat/reopen.json")))
+		if err != nil {
+			t.Fatalf("parseIssuesTolerant(flat/reopen): %v", err)
+		}
+		if len(issues) != 1 || issues[0].Status != "open" {
+			t.Fatalf("reopen: got %+v, want one reopened (open) issue", issues)
+		}
+	})
 }
 
 // TestCorpusErrorEnvelopeClassified pins the {error, schema_version} not-found
