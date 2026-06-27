@@ -177,3 +177,15 @@ anticipated — B2/B3 is most of it; the create→pending conversion + orchestra
 above reviewed rework; wizard (#234) held. The create-city SOFTWARE exists end-to-end, but the
 crucible create path must be converted to the pull model (a focused, reviewed change) before a live
 city can be produced.
+
+### Deeper finding (the rework is an auth-model redesign, not just create→pending)
+Continuing the crucible#30 rework surfaced that **the whole create-city auth surface assumes
+crucible→Accounts**, forbidden in corp-public (existing crucible verifies EIAs OFFLINE + trusts their
+scopes; the edge does gateOrgAdmin at mint). TWO forbidden calls: (1) `handleCreateCity`'s synchronous
+`ProvisionCityOrchestrator` + admin token; (2) `requireOrgAdmin` (the B2 `/status` gate) →
+`ListServicePrincipals`. Correct rework (reviewed design pass, consistent with existing crucible):
+create→persist-pending trusting the EIA scope; **drop `requireOrgAdmin`** and decide the `/status`
+within-org confused-deputy WITHOUT Accounts (a `crucible:city.read` scope the edge mints for the wizard
+user but not orchestrator SPs, OR accept within-org reads — **the design decision needing review**);
+move the orchestrator-SP mint into the provisioner; rebase onto ER-410. Detail: crucible#30 comment
+4822729416. This is the auth-model design + review item that gates crucible#30's merge.
