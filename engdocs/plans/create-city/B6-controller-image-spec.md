@@ -35,20 +35,24 @@ connect** via a dolt credential command. The controller mints it from its **orch
 `aud=beads` EIA — exactly the spine the provisioner already implements in `internal/cityprovision`
 (`STSExchanger` + `AccountsProvisioner`), but run *inside the controller* against its own key.
 
-To finish B6:
-1. **Build the eia-helper** — a small binary/script the controller runs as `GC_DOLT_CRED_CMD`: read
-   the orchestrator key (mounted from OpenBao), STS machine-login + token-exchange `aud=beads`, print
-   the EIA bd uses as the dolt credential. (It can reuse `STSExchanger` from the provisioner package,
-   or be a thin `gc` subcommand.) The same mechanism yields the `aud=crucible` EIA the controller
-   needs to spawn child agents via the Crucible API.
-2. **Deliver the orchestrator key to the sandbox** — the provisioner/crucible must mount the city's
-   OpenBao `SecretRef` into the controller sandbox (out-of-band, per the adapter contract). Confirm
-   the Crucible sandbox API supports a secret mount or an in-sandbox OpenBao fetch.
-3. **Set `GC_DOLT_CRED_CMD=/usr/local/bin/eia-helper`** in the Dockerfile (the commented line) once
-   the helper is installed.
-4. **Verify live**: build the image (base→agent→controller), launch via the provisioner against a
-   real hosted beads project + STS, and confirm the controller connects, `gc start` comes up, and a
-   child agent + a slung bead work end-to-end (the spike proved this manually; B6 packages it).
+1. ✅ **eia-helper BUILT** (`crucible 95946ca`, `cmd/eia-helper`): reads the orchestrator key from
+   `ORCHESTRATOR_KEY_FILE`, STS machine-login + token-exchange for `EIA_AUDIENCE`/`EIA_SCOPES`, prints
+   the EIA — REUSING the red-teamed `STSExchanger` (no duplicated crypto). `run()` is behind an
+   `eiaMinter` interface; unit-tested (key read/trim, mint wiring, error surfacing, scope parsing).
+   The Dockerfile now `COPY`s it, sets `GC_DOLT_CRED_CMD=/usr/local/bin/eia-helper` +
+   `EIA_AUDIENCE=beads` + `EIA_SCOPES`; the entrypoint exports it as `BEADS_DOLT_CREDENTIAL_COMMAND`.
+   `AUDIENCE=crucible` yields the EIA for spawning child agents.
+2. **Deliver the orchestrator key to the sandbox** (live) — the provisioner/crucible must mount the
+   city's OpenBao `SecretRef` into the controller sandbox at `ORCHESTRATOR_KEY_FILE` (out-of-band, per
+   the adapter contract). Confirm the Crucible sandbox API supports a secret mount or in-sandbox fetch.
+3. **Confirm bd's dolt credential-command contract** — verify bd (server/external mode) invokes
+   `BEADS_DOLT_CREDENTIAL_COMMAND` and consumes the helper's stdout EIA as the gateway username. The
+   `dolt-credential-command` beads feature (branch `feat/dolt-credential-command`, `cb252c4be`) is the
+   reference; if the contract differs (JSON `{user,password}` vs raw, or a credentials FILE), adjust
+   the helper's output shape (one localized change) — the mint logic is unaffected.
+4. **Verify live**: build the image (base→agent→controller), launch via the provisioner against a real
+   hosted beads project + STS, and confirm the controller connects, `gc start` comes up, and a child
+   agent + a slung bead work end-to-end (the spike proved this manually; B6 packages it).
 
 ## Why this is the honest stopping point for B6
 
