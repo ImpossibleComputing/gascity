@@ -60,7 +60,7 @@ between slices; a design workflow is spun up when a slice is ambiguous.
 ### Track B — Backend (cross-cluster minting + orchestration + Model-B launch)
 | ID | Slice | Repo | Status | Depends |
 |----|-------|------|--------|---------|
-| **B0** | **Accounts `provisioningToken`** (token type + `WithProvisioningToken` + gate 3 org-bound SP/key routes, `created_by=NULL`) + `UNIQUE(org_id, sp_name)` | gasworks-platform | TODO | — (UNBLOCK) |
+| **B0** | **Accounts `provisioningToken`** — DB-backed **per-org** token re-gating the 3 org-bound SP/key routes (drop `adminToken`); `created_by`=non-NULL system sentinel; `UNIQUE(org_id,name)`. Red-teamed spec: [B0-provisioning-token-spec.md](B0-provisioning-token-spec.md) | gasworks-platform | SPEC (red-teamed) | — (UNBLOCK) |
 | B1 | crucible `/v0/cities` pull-intent rework: drop admin-token; mint eiasign intent (nonce+TTL); citystore pending→ready; `GET /v0/cities/pending` (mTLS) + `POST /v0/cities/{id}/complete` | forge | TODO | B0 |
 | B2 | identity-v0 provisioner binary: pull intents → verify → mint crucible+beads+manifold keys via provisioningToken → OpenBao → `/complete` | forge | TODO | B0, B1 |
 | B3 | Infra: provisioner Deployment/SA/netpol, ESO ExternalSecret (corp-public ← bao-product-eu), RWO PVC; remove admin-token env | _infra | TODO | B2 |
