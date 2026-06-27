@@ -212,3 +212,22 @@ SP + write OpenBao + report via `/complete`); (2) DEPLOY — set `CRUCIBLE_CITIE
 on crucible, apply the provisioner INFRA + run the RUNBOOK bootstrap (platform key, per-org tokens),
 **founder egress open-Q7**; (3) build/publish the provisioner + controller images; (4) merge wizard#234
 (after the crucible cities surface is configured-live) + live end-to-end verify.
+
+## ✅✅ create-city SOFTWARE COMPLETE — all 3 backend PRs merged to production
+- **gasworks-platform#203** (B0 provisioningToken + machine-only `crucible:city.{provision,work}` scopes) — MERGED.
+- **crucible#30** (pull-model cities surface + autonomous provisioner + credential spine, no god-token; ER-410 reconciled) — MERGED `aab15ac`.
+- **crucible#32** (Stage C — the provisioner mints each city's orchestrator SP via the Accounts machine
+  path → OpenBao → `/complete`; resume-aware; + fixed the latent `PendingCity` JSON-tag decode bug) — MERGED `b28a470`.
+  **This was the last code piece.** The end-to-end software path now exists with no gaps:
+  wizard → crucible persists PENDING → provisioner discovers (ID-only) → mints per-org creds + the
+  city's orchestrator SP + beads ledger + Model-B controller → `/complete` → `ready` → wizard renders.
+
+**REMAINING is operational only (needs cluster/OpenBao/founder — no more code):**
+1. **Deploy config:** set `CRUCIBLE_CITIES_DB` + `CRUCIBLE_CITY_DISCOVERY_SUBJECTS` on the crucible
+   deployment (flips the cities surface from inert→live).
+2. **Build/publish images:** `cmd/city-provisioner` + the controller image (`Dockerfile.controller-crucible`,
+   bakes the `cmd/eia-helper`) — no CI builds them yet; add to image pipelines or build+push.
+3. **Apply provisioner INFRA + RUNBOOK bootstrap** (`engdocs/plans/create-city/infra/`): Deployment/ESO/netpol;
+   seed the platform `city.provision` key + per-org provisioningTokens; allow-list the platform subject.
+   **Gated on founder open-Q7 (per-cell egress).**
+4. **Merge wizard#234** once the crucible cities surface is configured-live; **live end-to-end verify**.
