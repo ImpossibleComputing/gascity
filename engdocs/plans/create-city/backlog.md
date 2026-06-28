@@ -267,6 +267,19 @@ controller-on-hosted-ledger needs (a) the credential-command bd in the released 
 integration's last gc+bd pieces — **code changes, not deploy/config.** (Test resources left for cleanup: SP `sp_019f0c13…`
 + ledger `bd_prj_47890a40d5bee1d9` in org_internal.)
 
+**Conclusive root cause (after exhaustive live testing of `gc start`):** the controller can't drive its own beads on the
+hosted ledger because **gc (b6f5885) does not propagate `BEADS_DOLT_CREDENTIAL_COMMAND` + eia-helper's env
+(`ORCHESTRATOR_KEY_FILE`/`EIA_AUDIENCE`/`EIA_SCOPES`/`STS_MACHINE_URL`/`STS_TOKEN_URL`) to the bd subprocesses it spawns**
+(`bd_env.go` has zero references to them; `gc-beads-bd.sh` exports only `GC_DOLT_*`/`BEADS_DOLT_SERVER_{HOST,PORT,USER}`). So
+gc's own `bd init`/controller bd calls run without the credential → can't auth to the gateway → "managed Dolt server
+unreachable while inspecting existing store". A *direct* `bd ready` with the cred env set connects fine and lists the city's
+beads. Other confirmed facts: `backend=doltlite` is EMBEDDED (CGO) dolt, not hosted (hosted = `backend=dolt` + external
+endpoint); the HQ scope external endpoint must be `gc.endpoint_origin: city_canonical` (NOT `explicit` — rejected for the
+city scope) + `dolt.host`/`dolt.port` in `.beads/config.yaml`, which `gc beads city use-external` does not fully persist.
+**To finish (code):** (1) propagate the credential-command env to gc's bd subprocesses; (2) ship the credential-command bd
+(beads `feat/dolt-credential-command` cb252c4be) in the released line + bake into the controller image; (3) persist the
+`city_canonical` + `dolt.host`/`dolt.port` HQ-scope config. These are the active integration's final pieces.
+
 **REMAINING is operational only (needs cluster/OpenBao/founder — no more code, images DONE):**
 1. **Deploy config:** set `CRUCIBLE_CITIES_DB` + `CRUCIBLE_CITY_DISCOVERY_SUBJECTS` on the crucible
    deployment (flips the cities surface from inert→live). In a Flux-managed cluster this is a GitOps
