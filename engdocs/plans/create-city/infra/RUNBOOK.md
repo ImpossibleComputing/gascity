@@ -51,6 +51,20 @@ so it is the only subject permitted to enumerate. Without this, discovery 403s (
 ### 4. ghcr-pull
 Ensure `product-eu/apps/identity-v0/ghcr-pull` exists (shared with the other identity-v0 apps).
 
+### 5. OpenBao k8s-auth role for the orchestrator-secret writer
+The provisioner WRITES each city's reveal-once orchestrator secret to OpenBao (baokv), authenticating
+via kubernetes-auth with its pod SA — no long-lived token. Create a role bound to the provisioner SA
+with write access to the cities path:
+```
+bao write auth/kubernetes/role/city-provisioner \
+  bound_service_account_names=city-provisioner \
+  bound_service_account_namespaces=city-provisioner \
+  policies=city-provisioner-orchestrator ttl=15m
+# policy city-provisioner-orchestrator: write/read on product-eu KV path apps/crucible/cities/*
+```
+This matches the deployment's `BAO_K8S_ROLE=city-provisioner` / `BAO_MOUNT=product-eu`. Without it the
+pod cannot write orchestrator secrets and every pass fails at the orchestrator-mint step.
+
 ## Deploy
 
 1. Resolve the REVIEW notes in `city-provisioner.yaml` (the `CRUCIBLE_URL` machine-edge route +

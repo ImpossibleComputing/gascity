@@ -97,6 +97,11 @@ spec:
             - {name: CRUCIBLE_URL, value: "https://works.gascity.com/crucible-api"}
             # beads-web origin (the adapter appends /beads/api/projects).
             - {name: BEADS_URL, value: "https://beads.ops.gascity.com"}
+            # The hosted Dolt gateway the provisioned controller's bd connects to (threaded into the
+            # controller sandbox as GC_DOLT_HOST). REVIEW: confirm the routable host:port the Crucible
+            # sandbox reaches — candidate in-cluster service is beads-dolt:3306; a sandbox on a
+            # different cell needs the externally-routable gateway address instead.
+            - {name: BEADS_DOLT_HOST, value: "beads-dolt:3306"} # REVIEW (open-Q7 topology)
             # The Model-B controller workspace image launched as a Crucible sandbox (B6).
             - {name: CONTROLLER_IMAGE, value: "ghcr.io/gascity/gascity-controller:main"}
             # --- Identity plane (in-cluster) ---
@@ -108,6 +113,13 @@ spec:
             # signing the public htu is a later hairpin optimization; v1 dials the public URL.)
             - {name: STS_MACHINE_URL, value: "https://works.gascity.com/sts/v0/machine"}
             - {name: STS_TOKEN_URL, value: "https://works.gascity.com/sts/v0/token"}
+            # --- OpenBao writer (for the reveal-once orchestrator secret the controller later reads) ---
+            # Separate from the ESO file mounts above: the provisioner WRITES each city's orchestrator
+            # secret to OpenBao via baokv, authenticating with kubernetes-auth (the pod SA token, no
+            # long-lived secret). Bootstrap: create an OpenBao k8s-auth role bound to this SA (RUNBOOK).
+            - {name: BAO_ADDR, value: "http://openbao.openbao.svc.cluster.local:8200"}
+            - {name: BAO_K8S_ROLE, value: "city-provisioner"} # REVIEW: must exist as an OpenBao k8s-auth role
+            - {name: BAO_MOUNT, value: "product-eu"} # REVIEW: the KV-v2 mount holding apps/crucible/cities/*
             # --- Credential mounts (ESO; see the externalsecret) ---
             - {name: PLATFORM_DISCOVERY_KEY_FILE, value: "/etc/city-provisioner/platform/key"}
             - {name: PROVISIONING_TOKENS_DIR, value: "/etc/city-provisioner/org-tokens"}
