@@ -993,6 +993,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	}
 	maxAgeTr := reconcileOpts.maxSessionAgeTr
 	asyncStopTracker := reconcileOpts.asyncStopTracker
+	bootReconcile := reconcileOpts.bootReconcile
 	recordPhase := func(site TraceSiteCode, name string, start time.Time, fields map[string]any) {
 		if trace != nil {
 			trace.RecordControllerOperation(site, TraceReasonRetained, TraceOutcomeComplete, name, time.Since(start), fields)
@@ -2552,16 +2553,25 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// restart-handoff machinery as `gc runtime request-restart`.
 			// See #1893 (controller: alive on_demand session ignores
 			// bd update --assignee).
-			if decision.RequiresFreshCycle && target.session.Metadata["wake_mode"] == "fresh" {
-				if cycleAliveSessionForFreshReassign(target.session, target.tp, sp, store, cfg, cb, name, decision.AssignedWorkBeadID, clk.Now(), stdout, stderr, trace) {
-					continue
+			// During boot every alive named session would otherwise take the
+			// fresh-cycle write (or the baseline stamp below) in one synchronous
+			// wave that contends with the boot sweep's reads on the shared rig
+			// Dolt server and can wedge readiness (#3288). Defer both writes to
+			// the first steady-state tick, where they spread across patrol
+			// cadence; the divergence baseline they establish is only consumed on
+			// later ticks, so deferring one tick is safe.
+			if !bootReconcile {
+				if decision.RequiresFreshCycle && target.session.Metadata["wake_mode"] == "fresh" {
+					if cycleAliveSessionForFreshReassign(target.session, target.tp, sp, store, cfg, cb, name, decision.AssignedWorkBeadID, clk.Now(), stdout, stderr, trace) {
+						continue
+					}
 				}
+				// Stamp currently_processing_bead_id so the next divergence
+				// check has a baseline. Backfills legacy sessions that were
+				// already alive before this metadata existed and refreshes the
+				// record after the agent picks up its next bead in resume mode.
+				recordCurrentBeadIDOnWake(target.session, store, decision.AssignedWorkBeadID, stderr)
 			}
-			// Stamp currently_processing_bead_id so the next divergence
-			// check has a baseline. Backfills legacy sessions that were
-			// already alive before this metadata existed and refreshes the
-			// record after the agent picks up its next bead in resume mode.
-			recordCurrentBeadIDOnWake(target.session, store, decision.AssignedWorkBeadID, stderr)
 			// Session is correctly awake. Cancel any non-drift drain
 			// (handles scale-back-up: agent returns to desired set while draining).
 			cancelSessionDrain(*target.session, sp, dt)

@@ -265,6 +265,7 @@ type startExecutionOptions struct {
 	asyncStopTracker *asyncStartTracker
 	maxSessionAgeTr  maxSessionAgeTracker
 	workDirResolver  taskWorkDirResolver
+	bootReconcile    bool
 }
 
 type startExecutionOption func(*startExecutionOptions)
@@ -312,6 +313,20 @@ func withMaxSessionAgeTracker(tr maxSessionAgeTracker) startExecutionOption {
 func withTaskWorkDirResolver(resolver taskWorkDirResolver) startExecutionOption {
 	return func(opts *startExecutionOptions) {
 		opts.workDirResolver = resolver
+	}
+}
+
+// withBootReconcile marks a reconcile pass as part of city startup
+// (phase=adopting_sessions). During boot the per-session
+// currently_processing_bead_id stamp is brand-new on every alive named
+// session, so the steady-state code would fire one bd write per session in a
+// single synchronous wave that contends with the boot sweep's reads on the
+// shared rig Dolt server and can wedge readiness (#3288). Marking the pass as
+// boot defers those stamps (and the heavier fresh-reassign cycle write) to the
+// first steady-state tick, where they spread across normal patrol cadence.
+func withBootReconcile() startExecutionOption {
+	return func(opts *startExecutionOptions) {
+		opts.bootReconcile = true
 	}
 }
 

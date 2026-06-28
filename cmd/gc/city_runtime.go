@@ -586,7 +586,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 		}
 
 		if cr.sessionDrains != nil {
-			cr.beadReconcileTick(ctx, result, sessionBeads, startupTrace)
+			cr.beadReconcileTick(ctx, result, sessionBeads, startupTrace, true)
 		}
 		completion = TraceCompletionCompleted
 		startupComplete = true
@@ -1220,7 +1220,7 @@ func (cr *CityRuntime) tick(
 	// Bead-driven reconciliation (requires bead store / drain tracker).
 	if cr.sessionDrains != nil {
 		phaseStart = time.Now()
-		cr.beadReconcileTick(ctx, result, sessionBeads, trace)
+		cr.beadReconcileTick(ctx, result, sessionBeads, trace, false)
 		recordPhase(TraceSiteControllerTickPhase, "bead_reconcile_tick", phaseStart, traceDesiredStateFields(result))
 	}
 
@@ -2084,8 +2084,11 @@ func (cr *CityRuntime) stopConfigWatcher() {
 
 // beadReconcileTick runs one reconciliation tick using the bead-driven
 // reconciler. It loads session beads from the store, uses the provided
-// desired state, and delegates to reconcileSessionBeads.
-func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStateResult, sessionBeads *sessionBeadSnapshot, trace *sessionReconcilerTraceCycle) {
+// desired state, and delegates to reconcileSessionBeads. bootReconcile is true
+// only for the one-shot startup reconcile (phase=adopting_sessions); it defers
+// the per-session currently_processing_bead_id write wave to steady state so a
+// contended rig Dolt server cannot wedge readiness (#3288).
+func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStateResult, sessionBeads *sessionBeadSnapshot, trace *sessionReconcilerTraceCycle, bootReconcile bool) {
 	desiredState := result.State
 	store := cr.cityBeadStore()
 	if store == nil {
@@ -2217,6 +2220,17 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		"awake_assigned_work_bead_count": len(awakeAssignedWorkBeads),
 	})
 	phaseStart = time.Now()
+	reconcileOpts := []startExecutionOption{
+		withAsyncStartExecution(),
+		withAsyncStartFollowUp(cr.requestAsyncStartFollowUpTick),
+		withAsyncStartLimiter(cr.ensureAsyncStartLimiter()),
+		withAsyncStartTracker(&cr.asyncStarts),
+		withAsyncDrainAckStopTracker(&cr.asyncStops),
+		withMaxSessionAgeTracker(cr.mat),
+	}
+	if bootReconcile {
+		reconcileOpts = append(reconcileOpts, withBootReconcile())
+	}
 	reconcileSessionBeadsTracedWithNamedDemand(
 		ctx, cr.cityPath, open, desiredState, cfgNames, cr.cfg, cr.sp, store,
 		cr.dops,
@@ -2228,12 +2242,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		cr.it, clock.Real{}, cr.rec, cr.cfg.Session.StartupTimeoutDuration(),
 		cr.cfg.Daemon.DriftDrainTimeoutDuration(),
 		cr.stdout, cr.stderr, trace,
-		withAsyncStartExecution(),
-		withAsyncStartFollowUp(cr.requestAsyncStartFollowUpTick),
-		withAsyncStartLimiter(cr.ensureAsyncStartLimiter()),
-		withAsyncStartTracker(&cr.asyncStarts),
-		withAsyncDrainAckStopTracker(&cr.asyncStops),
-		withMaxSessionAgeTracker(cr.mat),
+		reconcileOpts...,
 	)
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.reconcile_sessions", phaseStart, map[string]any{
 		"open_session_count":             len(open),

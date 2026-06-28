@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,12 +44,16 @@ func postgresCredentialResolvedKey(cityPath string, payload pgauth.PostgresCrede
 // GC-managed bd calls resolve Dolt against the same city-scoped runtime.
 // Env is rebuilt on each call so GC_DOLT_PORT reflects the current managed
 // dolt port (which can change across city restarts).
-func bdCommandRunnerForCity(cityPath string) beads.CommandRunner {
-	return bdCommandRunnerWithManagedRetryErr(cityPath, func(dir string) (map[string]string, error) {
+func bdCityEnvFn(cityPath string) func(dir string) (map[string]string, error) {
+	return func(dir string) (map[string]string, error) {
 		env, err := bdRuntimeEnvWithError(cityPath)
 		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
 		return env, err
-	})
+	}
+}
+
+func bdCommandRunnerForCity(cityPath string) beads.CommandRunner {
+	return bdCommandRunnerWithManagedRetryErr(cityPath, bdCityEnvFn(cityPath))
 }
 
 func bdStoreForCity(dir, cityPath string) *beads.BdStore {
@@ -57,11 +62,13 @@ func bdStoreForCity(dir, cityPath string) *beads.BdStore {
 		cfg = nil
 	}
 	reapStaleBdExportJSONL(dir)
+	opts := append(bdStoreOptionsForConfig(cfg),
+		beads.WithBdStoreContextRunner(bdCtxCommandRunnerWithManagedRetryErr(cityPath, bdCityEnvFn(cityPath))))
 	return beads.NewBdStoreWithPrefix(
 		dir,
 		bdCommandRunnerForCity(cityPath),
 		issuePrefixForScope(dir, cityPath, cfg),
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
@@ -79,11 +86,13 @@ func bdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix ...str
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
+	opts := append(bdStoreOptionsForConfig(cfg),
+		beads.WithBdStoreContextRunner(bdCtxCommandRunnerWithManagedRetryErr(cityPath, bdRigEnvFn(cityPath, cfg, rigDir))))
 	return beads.NewBdStoreWithPrefix(
 		rigDir,
 		bdCommandRunnerForRig(cityPath, cfg, rigDir),
 		prefix,
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
@@ -176,11 +185,13 @@ func scopeIsGCManaged(scopeRoot string) bool {
 
 func controlBdStoreForCity(dir, cityPath string, cfg *config.City) *beads.BdStore {
 	reapStaleBdExportJSONL(dir)
+	opts := append(bdStoreOptionsForConfig(cfg),
+		beads.WithBdStoreContextRunner(bdCtxCommandRunnerWithManagedRetryErr(cityPath, controlBdCityEnvFn(cityPath))))
 	return beads.NewBdStoreWithPrefix(
 		dir,
 		controlBdCommandRunnerForCity(cityPath),
 		issuePrefixForScope(dir, cityPath, cfg),
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
@@ -195,29 +206,39 @@ func controlBdStoreForRig(rigDir, cityPath string, cfg *config.City, knownPrefix
 		}
 	}
 	reapStaleBdExportJSONL(rigDir)
+	opts := append(bdStoreOptionsForConfig(cfg),
+		beads.WithBdStoreContextRunner(bdCtxCommandRunnerWithManagedRetryErr(cityPath, controlBdRigEnvFn(cityPath, cfg, rigDir))))
 	return beads.NewBdStoreWithPrefix(
 		rigDir,
 		controlBdCommandRunnerForRig(cityPath, cfg, rigDir),
 		prefix,
-		bdStoreOptionsForConfig(cfg)...,
+		opts...,
 	)
 }
 
-func controlBdCommandRunnerForCity(cityPath string) beads.CommandRunner {
-	return bdCommandRunnerWithManagedRetryErr(cityPath, func(dir string) (map[string]string, error) {
+func controlBdCityEnvFn(cityPath string) func(dir string) (map[string]string, error) {
+	return func(dir string) (map[string]string, error) {
 		env, err := bdRuntimeEnvWithError(cityPath)
 		env["BEADS_DIR"] = filepath.Join(dir, ".beads")
 		applyControllerBdEnv(env)
 		return env, err
-	})
+	}
 }
 
-func controlBdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
-	return bdCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
+func controlBdRigEnvFn(cityPath string, cfg *config.City, rigDir string) func(dir string) (map[string]string, error) {
+	return func(_ string) (map[string]string, error) {
 		env, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
 		applyControllerBdEnv(env)
 		return env, err
-	})
+	}
+}
+
+func controlBdCommandRunnerForCity(cityPath string) beads.CommandRunner {
+	return bdCommandRunnerWithManagedRetryErr(cityPath, controlBdCityEnvFn(cityPath))
+}
+
+func controlBdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
+	return bdCommandRunnerWithManagedRetryErr(cityPath, controlBdRigEnvFn(cityPath, cfg, rigDir))
 }
 
 func applyExportSuppressionEnv(env map[string]string) {
@@ -259,10 +280,14 @@ func readScopeIssuePrefix(scopeRoot string) string {
 	return prefix
 }
 
-func bdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
-	return bdCommandRunnerWithManagedRetryErr(cityPath, func(_ string) (map[string]string, error) {
+func bdRigEnvFn(cityPath string, cfg *config.City, rigDir string) func(dir string) (map[string]string, error) {
+	return func(_ string) (map[string]string, error) {
 		return bdRuntimeEnvForRigWithError(cityPath, cfg, rigDir)
-	})
+	}
+}
+
+func bdCommandRunnerForRig(cityPath string, cfg *config.City, rigDir string) beads.CommandRunner {
+	return bdCommandRunnerWithManagedRetryErr(cityPath, bdRigEnvFn(cityPath, cfg, rigDir))
 }
 
 func canonicalScopeDoltTarget(cityPath, scopeRoot string) (contract.DoltConnectionTarget, bool, error) {
@@ -1083,52 +1108,82 @@ func bdCommandRunnerWithManagedRetry(cityPath string, envFn func(dir string) map
 
 func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) (map[string]string, error)) beads.CommandRunner {
 	return func(dir, name string, args ...string) ([]byte, error) {
-		env, envErr := envFn(dir)
-		if envErr != nil {
-			return nil, envErr
-		}
-		if env == nil {
-			env = map[string]string{}
-		}
-		ensureProjectedDoltEnvExplicit(env)
-		ensureProjectedPostgresEnvExplicit(env)
-		runner := beadsExecCommandRunnerWithEnv(env)
-		out, err := runner(dir, name, args...)
-		if name != "bd" {
-			return out, err
-		}
-		// PG-backed scopes never invoke managed-Dolt recovery. A transport
-		// error gets wrapped with an operator-facing hint and surfaced; gc
-		// does not manage external PG endpoints.
-		if err != nil {
-			meta, ok, classifyErr := postgresMetadataForScope(cityPath, dir)
-			if classifyErr != nil {
-				return out, fmt.Errorf("classifying scope backend (bd error: %w): %w", err, classifyErr)
-			}
-			if ok {
-				return out, fmt.Errorf("postgres at %s:%s: gc does not manage external PG endpoints (no managed recovery attempted): %w", meta.PostgresHost, meta.PostgresPort, err)
-			}
-		}
-		if err == nil && scopeBackendIsPostgres(cityPath, dir) {
-			return out, err
-		}
-		if !bdTransportRetryableError(cityPath, dir, env, err) {
-			return out, err
-		}
-		if bdTransportRecoverableError(cityPath, dir, env, err) {
-			if recErr := recoverManagedBDCommand(cityPath); recErr != nil {
-				return out, err
-			}
-		}
-		retryEnv, retryEnvErr := envFn(dir)
-		if retryEnvErr != nil {
-			return nil, retryEnvErr
-		}
-		ensureProjectedDoltEnvExplicit(retryEnv)
-		ensureProjectedPostgresEnvExplicit(retryEnv)
-		retryRunner := beadsExecCommandRunnerWithEnv(retryEnv)
-		return retryRunner(dir, name, args...)
+		return managedRetryBdExec(cityPath, envFn, beadsExecCommandRunnerWithEnv, dir, name, args...)
 	}
+}
+
+// bdCtxCommandRunnerWithManagedRetryErr is the context-aware sibling of
+// bdCommandRunnerWithManagedRetryErr. Each exec attempt is bound to the
+// caller's context (via ExecCommandRunnerWithEnvContext) so a short per-call
+// deadline cancels a stuck bd child promptly. BdStore installs this on the
+// transient read/write path so the boot reconcile cannot wedge on a contended
+// rig Dolt server (#3288). All managed-Dolt transport recovery and retry
+// behavior is shared with the non-ctx runner.
+func bdCtxCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) (map[string]string, error)) beads.CtxCommandRunner {
+	return func(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+		execWithEnv := func(env map[string]string) beads.CommandRunner {
+			return beads.ExecCommandRunnerWithEnvContext(ctx, env)
+		}
+		return managedRetryBdExec(cityPath, envFn, execWithEnv, dir, name, args...)
+	}
+}
+
+// managedRetryBdExec runs one bd invocation through the managed-Dolt
+// transport-recovery wrapper shared by the context-bound and unbound runners.
+// execWithEnv builds the underlying exec runner for a resolved env map; the two
+// public entrypoints differ only in whether that runner is context-bound.
+func managedRetryBdExec(
+	cityPath string,
+	envFn func(dir string) (map[string]string, error),
+	execWithEnv func(map[string]string) beads.CommandRunner,
+	dir, name string,
+	args ...string,
+) ([]byte, error) {
+	env, envErr := envFn(dir)
+	if envErr != nil {
+		return nil, envErr
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	ensureProjectedDoltEnvExplicit(env)
+	ensureProjectedPostgresEnvExplicit(env)
+	runner := execWithEnv(env)
+	out, err := runner(dir, name, args...)
+	if name != "bd" {
+		return out, err
+	}
+	// PG-backed scopes never invoke managed-Dolt recovery. A transport
+	// error gets wrapped with an operator-facing hint and surfaced; gc
+	// does not manage external PG endpoints.
+	if err != nil {
+		meta, ok, classifyErr := postgresMetadataForScope(cityPath, dir)
+		if classifyErr != nil {
+			return out, fmt.Errorf("classifying scope backend (bd error: %w): %w", err, classifyErr)
+		}
+		if ok {
+			return out, fmt.Errorf("postgres at %s:%s: gc does not manage external PG endpoints (no managed recovery attempted): %w", meta.PostgresHost, meta.PostgresPort, err)
+		}
+	}
+	if err == nil && scopeBackendIsPostgres(cityPath, dir) {
+		return out, err
+	}
+	if !bdTransportRetryableError(cityPath, dir, env, err) {
+		return out, err
+	}
+	if bdTransportRecoverableError(cityPath, dir, env, err) {
+		if recErr := recoverManagedBDCommand(cityPath); recErr != nil {
+			return out, err
+		}
+	}
+	retryEnv, retryEnvErr := envFn(dir)
+	if retryEnvErr != nil {
+		return nil, retryEnvErr
+	}
+	ensureProjectedDoltEnvExplicit(retryEnv)
+	ensureProjectedPostgresEnvExplicit(retryEnv)
+	retryRunner := execWithEnv(retryEnv)
+	return retryRunner(dir, name, args...)
 }
 
 func applyResolvedCityDoltEnv(env map[string]string, cityPath string, allowRecovery bool) error {

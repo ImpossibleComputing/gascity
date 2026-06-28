@@ -28,6 +28,13 @@ const (
 // The dir argument sets the working directory; name and args specify the command.
 type CommandRunner func(dir, name string, args ...string) ([]byte, error)
 
+// CtxCommandRunner is a CommandRunner variant that binds each invocation to ctx,
+// so callers can impose a short per-call deadline on top of the per-command bd
+// timeout. BdStore uses it for the retrying transient read/write helpers, where a
+// stuck attempt must be cancelled quickly so the next retry (or the caller) can
+// make progress rather than blocking on the long-lived city context.
+type CtxCommandRunner func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+
 var (
 	bdCommandTimeout = 120 * time.Second
 	// bdReadCommandTimeout bounds bd read-only subcommands (count, list,
@@ -49,6 +56,19 @@ var (
 	// bdSlowTelemetryThreshold is fixed in production via telemetry.BDSlowThreshold:
 	// high enough to avoid normal bd list calls, but below the wrapper timeout.
 	bdSlowTelemetryThreshold = telemetry.BDSlowThreshold
+	// bdTransientCommandTimeout bounds a single attempt of the retrying
+	// transient read/write helpers (runBDTransientRead / runBDTransientWrite).
+	// Those paths exist precisely to ride out brief Dolt contention by retrying,
+	// so each attempt must fail fast rather than inherit the full per-command
+	// budget. The boot reconcile runs these on the synchronous readiness path
+	// (sweepUndesiredPoolSessionBeads → listWispsTier read; recordCurrentBeadIDOnWake
+	// → update --set-metadata write), so an unbounded attempt against a contended
+	// rig Dolt server wedges the entire city until the startup watchdog (#3288).
+	// The bound is honored only when a context-aware runner is installed via
+	// WithBdStoreContextRunner; it is well below bdReadCommandTimeout/bdCommandTimeout
+	// so the exec layer's cancel/WaitDelay/killCommandTree fire promptly, and the
+	// resulting deadline error is retryable (isBdAmbiguousWriteError).
+	bdTransientCommandTimeout = 20 * time.Second
 )
 
 // ExecCommandRunner returns a CommandRunner that uses os/exec to run commands.
@@ -292,10 +312,11 @@ type PurgeResult struct {
 // BdStore implements Store by shelling out to the bd CLI (beads v0.55.1+).
 // It delegates all persistence to bd's embedded Dolt database.
 type BdStore struct {
-	dir         string          // city root directory (where .beads/ lives)
-	runner      CommandRunner   // injectable for testing
-	purgeRunner PurgeRunnerFunc // injectable for testing; nil uses exec default
-	idPrefix    string          // bead ID prefix owned by this store, without trailing "-"
+	dir         string           // city root directory (where .beads/ lives)
+	runner      CommandRunner    // injectable for testing
+	ctxRunner   CtxCommandRunner // optional; when set, transient read/write attempts run under a bounded context
+	purgeRunner PurgeRunnerFunc  // injectable for testing; nil uses exec default
+	idPrefix    string           // bead ID prefix owned by this store, without trailing "-"
 
 	listSkipLabelsEnabled bool // whether bd list may receive --skip-labels
 
@@ -320,6 +341,19 @@ type BdStoreOption func(*BdStore)
 func WithBdStoreListSkipLabels(enabled bool) BdStoreOption {
 	return func(s *BdStore) {
 		s.listSkipLabelsEnabled = enabled
+	}
+}
+
+// WithBdStoreContextRunner installs a context-aware runner used to bound a
+// single attempt of the retrying transient read/write helpers. When set, each
+// transient attempt runs under a bdTransientCommandTimeout-bounded context so a
+// stuck bd subprocess is cancelled promptly (via the exec layer's cancel /
+// WaitDelay / killCommandTree machinery) and the attempt is retried instead of
+// blocking the long-lived city context. When unset, transient attempts use the
+// plain CommandRunner unchanged.
+func WithBdStoreContextRunner(runner CtxCommandRunner) BdStoreOption {
+	return func(s *BdStore) {
+		s.ctxRunner = runner
 	}
 }
 
@@ -1793,13 +1827,26 @@ func (s *BdStore) runBDTransientWriteOutputWhen(shouldRetry func(error) bool, ar
 	var out []byte
 	args = s.bdTransientWriteArgs(args)
 	for attempt := 1; attempt <= bdTransientWriteAttempts; attempt++ {
-		out, err = s.runner(s.dir, "bd", args...)
+		out, err = s.runTransientAttempt(args...)
 		if err == nil || !shouldRetry(err) || attempt == bdTransientWriteAttempts {
 			return out, err
 		}
 		time.Sleep(time.Duration(attempt) * 25 * time.Millisecond)
 	}
 	return out, err
+}
+
+// runTransientAttempt runs one bd attempt for the retrying transient helpers.
+// When a context-aware runner is installed it bounds the attempt with
+// bdTransientCommandTimeout so a stuck subprocess is cancelled promptly and the
+// caller can retry; otherwise it falls back to the plain runner unchanged.
+func (s *BdStore) runTransientAttempt(args ...string) ([]byte, error) {
+	if s.ctxRunner == nil {
+		return s.runner(s.dir, "bd", args...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bdTransientCommandTimeout)
+	defer cancel()
+	return s.ctxRunner(ctx, s.dir, "bd", args...)
 }
 
 // runBDTransientRead runs a read-only bd command, retrying on transient Dolt
@@ -1812,7 +1859,7 @@ func (s *BdStore) runBDTransientRead(args ...string) ([]byte, error) {
 		err error
 	)
 	for attempt := 1; attempt <= bdTransientReadAttempts; attempt++ {
-		out, err = s.runner(s.dir, "bd", args...)
+		out, err = s.runTransientAttempt(args...)
 		if err == nil || !isBdAmbiguousWriteError(err) || attempt == bdTransientReadAttempts {
 			return out, err
 		}
@@ -1873,6 +1920,12 @@ func isBdTransientWriteError(err error) bool {
 func isBdAmbiguousWriteError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// A per-attempt context deadline (bdTransientCommandTimeout) cancels a stuck
+	// bd subprocess; treat it as ambiguous/retryable so the transient helpers
+	// retry rather than surfacing it as terminal.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "i/o timeout") ||
