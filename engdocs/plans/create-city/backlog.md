@@ -251,6 +251,22 @@ un-draft bd v1.0.5 (or repin deps.env) so builds honor `deps.env` without the ov
 
 **Both create-city images are now LIVE in GHCR: `crucible-city-provisioner` + `gascity-controller`.**
 
+**LIVE END-TO-END VERIFICATION (2026-06-28) — architecture PROVEN on prod up to the controller process; ONE gc code gap.**
+Drove the real flow by hand on live prod (cluster-admin on identity-v0 + corp-public). PROVEN: minted a real beads SP+key
+(Accounts admin API, org_internal); the **STS spine mints a real `aud=beads` EIA** (eia-helper: machine-login+DPoP+exchange);
+**created a real hosted beads ledger** `bd_prj_47890a40d5bee1d9` via `POST beads.ops.gascity.com/beads/api/projects`; and
+**bd connects to that hosted ledger over the gateway (`gw.beads.gascity.com`, EIA-as-username, TLS+internal-CA) and reads the
+city's seed beads** (the gascity pack's E2ECITY1-* issues) — using a bd built from beads `feat/dolt-credential-command`
+(cb252c4be / 1.1.0-rc.1; the released **bd v1.0.4 the image bakes lacks the credential-command + HostedGateway flag**, so it
+cannot talk to the gateway). The controller image inits a full Gas City (all 8 `gc init` steps). **THE ONE REMAINING GAP is
+gc-side code (build b6f5885):** `gc start` resolves the controller's own city/HQ beads to **managed-local dolt
+(127.0.0.1:11153)**, not the external hosted endpoint — neither `gc beads city use-external` (city_canonical) nor
+`gc rig set-endpoint --external` (rig EndpointOriginExplicit) redirects gc start's HQ-scope bd-env. So a fully *running*
+controller-on-hosted-ledger needs (a) the credential-command bd in the released line baked into the controller image, and
+(b) gc start honoring an external/hosted endpoint for the city/HQ beads scope. Both are the in-flight DoltLite/hosted-beads
+integration's last gc+bd pieces — **code changes, not deploy/config.** (Test resources left for cleanup: SP `sp_019f0c13…`
++ ledger `bd_prj_47890a40d5bee1d9` in org_internal.)
+
 **REMAINING is operational only (needs cluster/OpenBao/founder — no more code, images DONE):**
 1. **Deploy config:** set `CRUCIBLE_CITIES_DB` + `CRUCIBLE_CITY_DISCOVERY_SUBJECTS` on the crucible
    deployment (flips the cities surface from inert→live). In a Flux-managed cluster this is a GitOps
