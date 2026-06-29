@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { getActiveCity } from '../api/cityBase';
 import { Field } from '../components/Field';
+import { FormulaLauncher } from '../components/formulas/FormulaLauncher';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { useNow } from '../contexts/NowContext';
@@ -40,10 +41,11 @@ export function FormulaDetailPage() {
   const { data: formulas } = useCachedData(`formulas:list:${cityName ?? ''}`, () =>
     listSupervisorFormulas(),
   );
-  const { data: runs, error: runsError } = useCachedData(
-    `formulas:runs:${cityName ?? ''}:${name}`,
-    () => getSupervisorFormulaRuns(name),
-  );
+  const {
+    data: runs,
+    error: runsError,
+    refresh: refreshRuns,
+  } = useCachedData(`formulas:runs:${cityName ?? ''}:${name}`, () => getSupervisorFormulaRuns(name));
 
   const formula = formulas?.find((f) => f.name === name) ?? null;
 
@@ -89,8 +91,15 @@ export function FormulaDetailPage() {
             )}
           </section>
 
-          {/* Launcher mounts here in slice 4 (target picker → compiled steps preview → run). */}
-          <div data-testid="formula-launcher-slot" />
+          <div data-testid="formula-launcher-slot">
+            {formula && (
+              <FormulaLauncher
+                name={name}
+                varDefs={formula.var_defs ?? []}
+                onLaunched={() => void refreshRuns()}
+              />
+            )}
+          </div>
         </div>
 
         <aside>

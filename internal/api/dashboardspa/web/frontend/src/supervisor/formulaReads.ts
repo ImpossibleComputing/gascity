@@ -1,5 +1,7 @@
 import type {
+  FormulaDetailResponse,
   FormulaRecentRunResponse,
+  FormulaStepResponse,
   FormulaSummaryResponse,
   GetV0CityByCityNameFormulasByNameRunsData,
   GetV0CityByCityNameFormulasData,
@@ -19,6 +21,7 @@ import { supervisorApi } from './client';
 
 export type SupervisorFormula = FormulaSummaryResponse;
 export type SupervisorFormulaRun = FormulaRecentRunResponse;
+export type SupervisorFormulaStep = FormulaStepResponse;
 
 export interface FormulaScope {
   scope_kind?: string;
@@ -46,6 +49,25 @@ export async function getSupervisorFormulaRuns(
       : { ...(base ?? {}), ...(limit === undefined ? {} : { limit }) };
   const body = await supervisorApi().formulaRuns(cityName, name, query);
   return body.recent_runs ?? [];
+}
+
+/**
+ * Compile a formula's preview for a chosen target. The supervisor only compiles
+ * a formula's step graph against a concrete target, so this is called from the
+ * launcher (after a target is picked), never on a bare detail render. Steps are
+ * null-normalized to [].
+ */
+export async function getSupervisorFormulaSteps(
+  name: string,
+  target: string,
+  scope?: FormulaScope,
+): Promise<SupervisorFormulaStep[]> {
+  const cityName = activeCityOrThrow('compile supervisor formula preview');
+  const detail: FormulaDetailResponse = await supervisorApi().formulaDetail(cityName, name, {
+    target,
+    ...(scopeQuery(scope) ?? {}),
+  });
+  return detail.steps ?? [];
 }
 
 function scopeQuery(
