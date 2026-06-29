@@ -10,7 +10,12 @@ import {
   resetSupervisorApiForTests,
   setSupervisorApiForTests,
 } from './client';
-import { getSupervisorFormulaRuns, listSupervisorFormulas, recentRunTone } from './formulaReads';
+import {
+  getSupervisorFormulaRuns,
+  getSupervisorFormulaSteps,
+  listSupervisorFormulas,
+  recentRunTone,
+} from './formulaReads';
 
 function stub(over: Partial<SupervisorApi>): void {
   setSupervisorApiForTests(over as unknown as SupervisorApi);
@@ -104,6 +109,35 @@ describe('formulaReads', () => {
       }),
     });
     await expect(listSupervisorFormulas()).rejects.toBeInstanceOf(SupervisorApiError);
+  });
+
+  it('compiles target-bound steps and normalizes null steps to []', async () => {
+    const formulaDetail = vi.fn(async () => ({
+      name: 'demo',
+      description: '',
+      version: 'v1',
+      preview: { nodes: [], edges: [] },
+      deps: null,
+      var_defs: null,
+      steps: [{ id: 'review', kind: 'agent', title: 'Review' }],
+    }));
+    stub({ formulaDetail });
+
+    await expect(getSupervisorFormulaSteps('demo', 'reviewer')).resolves.toEqual([
+      expect.objectContaining({ id: 'review' }),
+    ]);
+    expect(formulaDetail).toHaveBeenCalledWith('test-city', 'demo', { target: 'reviewer' });
+
+    formulaDetail.mockResolvedValueOnce({
+      name: 'demo',
+      description: '',
+      version: 'v1',
+      preview: { nodes: [], edges: [] },
+      deps: null,
+      var_defs: null,
+      steps: null,
+    });
+    await expect(getSupervisorFormulaSteps('demo', 'reviewer')).resolves.toEqual([]);
   });
 
   it('maps run status to a glyph+word StatusBadge tone', () => {
