@@ -9,11 +9,11 @@ import { useCachedData } from '../hooks/useCachedData';
 import { formatRelative } from '../hooks/time';
 import {
   type SupervisorFormula,
+  type SupervisorFormulaVarDef,
   getSupervisorFormulaRuns,
   listSupervisorFormulas,
   recentRunTone,
 } from '../supervisor/formulaReads';
-import type { FormulaVarDefResponse } from 'gas-city-dashboard-shared/gc-supervisor';
 
 // /formulas/:name — a single formula. The catalog summary (name, description,
 // version, var defs) needs no target, so it comes from the shared formulas list
@@ -155,7 +155,7 @@ function detailSynopsis(formula: SupervisorFormula): string {
   return formula.description ? `${lead} ${formula.description}` : lead;
 }
 
-function varTypeLine(v: FormulaVarDefResponse): string {
+function varTypeLine(v: SupervisorFormulaVarDef): string {
   const parts = [v.type];
   if (v.required) parts.push('required');
   if (v.default !== undefined && v.default !== null)

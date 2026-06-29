@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { FormulaVarDefResponse } from 'gas-city-dashboard-shared/gc-supervisor';
 import { getActiveCity } from '../../api/cityBase';
 import { Button } from '../Button';
 import { Field } from '../Field';
@@ -11,7 +10,10 @@ import {
 } from '../../contexts/ReadOnlyContext';
 import { useCachedData } from '../../hooks/useCachedData';
 import { listSupervisorAgents } from '../../supervisor/agentReads';
-import { getSupervisorFormulaSteps } from '../../supervisor/formulaReads';
+import {
+  type SupervisorFormulaVarDef,
+  getSupervisorFormulaSteps,
+} from '../../supervisor/formulaReads';
 import { slingFormula } from '../../supervisor/formulaWrites';
 import { FormulaSteps } from './FormulaSteps';
 
@@ -20,7 +22,7 @@ const CONTROL =
 
 interface FormulaLauncherProps {
   name: string;
-  varDefs: ReadonlyArray<FormulaVarDefResponse>;
+  varDefs: ReadonlyArray<SupervisorFormulaVarDef>;
   /** Called with the new run id after a successful launch (parent refreshes runs). */
   onLaunched?: (workflowId: string) => void;
 }
@@ -185,7 +187,7 @@ function StepsPreview({ name, target }: { name: string; target: string }) {
   );
 }
 
-function initialVars(varDefs: ReadonlyArray<FormulaVarDefResponse>): Record<string, string> {
+function initialVars(varDefs: ReadonlyArray<SupervisorFormulaVarDef>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const v of varDefs) {
     out[v.name] = v.default !== undefined && v.default !== null ? String(v.default) : '';
@@ -193,6 +195,6 @@ function initialVars(varDefs: ReadonlyArray<FormulaVarDefResponse>): Record<stri
   return out;
 }
 
-function varFieldLabel(v: FormulaVarDefResponse): string {
+function varFieldLabel(v: SupervisorFormulaVarDef): string {
   return v.required ? `${v.name} (required)` : v.name;
 }

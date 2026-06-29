@@ -3,6 +3,7 @@ import type {
   FormulaRecentRunResponse,
   FormulaStepResponse,
   FormulaSummaryResponse,
+  FormulaVarDefResponse,
   GetV0CityByCityNameFormulasByNameRunsData,
   GetV0CityByCityNameFormulasData,
 } from 'gas-city-dashboard-shared/gc-supervisor';
@@ -22,6 +23,7 @@ import { supervisorApi } from './client';
 export type SupervisorFormula = FormulaSummaryResponse;
 export type SupervisorFormulaRun = FormulaRecentRunResponse;
 export type SupervisorFormulaStep = FormulaStepResponse;
+export type SupervisorFormulaVarDef = FormulaVarDefResponse;
 
 export interface FormulaScope {
   scope_kind?: string;
