@@ -825,6 +825,13 @@ func editPatchFromRawInput(raw json.RawMessage) (string, string) {
 	return "", ""
 }
 
+// editPatchFromRawResult extracts a unified-diff patch and file path from a
+// tool RESULT payload. It must only ever be passed result-side bytes
+// (block.Content), never tool input: the structured contract requires that a
+// result patch come from provider/result-side evidence and is never fabricated
+// from input fields such as old_string/new_string or an apply_patch input. Keep
+// this signature input-free so that invariant cannot regress unnoticed. See
+// TestInferStructuredToolResultDoesNotFabricateEditPatchFromInput.
 func editPatchFromRawResult(raw json.RawMessage) (string, string) {
 	if len(raw) == 0 {
 		return "", ""

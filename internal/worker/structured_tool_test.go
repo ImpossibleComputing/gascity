@@ -1788,6 +1788,53 @@ func TestInferStructuredToolResultExposesTypedPatchHunks(t *testing.T) {
 	}
 }
 
+func TestInferStructuredToolResultDoesNotFabricateEditPatchFromInput(t *testing.T) {
+	// A high-level edit tool (the isEditTool path, e.g. Edit/str_replace) whose
+	// RESULT carries no result-side patch evidence. The tool INPUT supplies a
+	// patch and file content; none of it may be fabricated into a result-side
+	// diff. This is the symmetric counterpart to the apply_patch guard, covering
+	// the isEditTool branch rather than name == "apply_patch".
+	inputPatch := strings.Join([]string{
+		"@@ -1 +1 @@",
+		"-old line",
+		"+new line",
+	}, "\n")
+	raw := mustMarshalStructuredToolTest(t, map[string]string{
+		"filePath": "/tmp/project/app.go",
+	})
+	block := HistoryBlock{
+		Kind:    BlockKindToolResult,
+		Name:    "str_replace",
+		Content: raw,
+	}
+	context := structuredToolContext{
+		Name: "str_replace",
+		Input: &StructuredToolInput{
+			Kind:     "edit",
+			FilePath: "/tmp/project/app.go",
+			Patch:    inputPatch,
+			Code:     "new line\n",
+		},
+	}
+
+	got := inferStructuredToolResult(block, context, structuredJSONText(raw))
+	if got == nil {
+		t.Fatal("inferStructuredToolResult returned nil")
+	}
+	if got.Kind != "edit" {
+		t.Fatalf("Kind = %q, want edit; result = %+v", got.Kind, got)
+	}
+	if got.Patch != "" || len(got.PatchHunks) != 0 {
+		t.Fatalf("patch data = patch %q hunks %#v, want no input-derived result patch", got.Patch, got.PatchHunks)
+	}
+	if got.OldString != "" || got.NewString != "" {
+		t.Fatalf("old/new = %q/%q, want empty: the result carried none and input must not leak", got.OldString, got.NewString)
+	}
+	if got.FilePath != "/tmp/project/app.go" {
+		t.Fatalf("FilePath = %q, want input file path for edit association", got.FilePath)
+	}
+}
+
 func TestInferStructuredToolResultDoesNotUseInputPatchForCodexApplyPatch(t *testing.T) {
 	patch := strings.Join([]string{
 		"*** Begin Patch",
