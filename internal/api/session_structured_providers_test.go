@@ -19,6 +19,20 @@ import (
 	"github.com/gastownhall/gascity/internal/session"
 )
 
+// isolateProviderDiscovery points provider transcript discovery at an empty,
+// per-test HOME so the structured handler tests never wander into the
+// developer's real provider session directories (for example a large
+// ~/.codex). Real provider dirs make discovery slow and the no-transcript
+// downgrade path nondeterministic against the streaming read deadline; this
+// keeps these tests hermetic regardless of the host machine.
+func isolateProviderDiscovery(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+}
+
 func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testing.T) {
 	resume := session.ProviderResume{
 		ResumeFlag:    "--resume",
@@ -711,6 +725,7 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 }
 
 func TestHandleSessionTranscriptStructuredGracefullyDowngradesAllBuiltinProviders(t *testing.T) {
+	isolateProviderDiscovery(t)
 	for _, provider := range config.BuiltinProviderOrder() {
 		t.Run(provider, func(t *testing.T) {
 			fs := newSessionFakeState(t)
@@ -1101,6 +1116,7 @@ func TestHandleSessionTranscriptStructuredLinksClaudeWriteStdin(t *testing.T) {
 }
 
 func TestHandleSessionStreamStructuredGracefullyDowngradesWithoutTranscript(t *testing.T) {
+	isolateProviderDiscovery(t)
 	for _, provider := range config.BuiltinProviderOrder() {
 		t.Run(provider, func(t *testing.T) {
 			fs := newSessionFakeState(t)
@@ -1177,6 +1193,7 @@ func TestLegacySessionTranscriptStructuredGracefullyDowngrades(t *testing.T) {
 }
 
 func TestLegacySessionStreamStructuredGracefullyDowngrades(t *testing.T) {
+	isolateProviderDiscovery(t)
 	fs := newSessionFakeState(t)
 	srv := New(fs)
 
