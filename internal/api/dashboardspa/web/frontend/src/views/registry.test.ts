@@ -16,6 +16,19 @@ describe('views/registry', () => {
     expect(activity?.nav?.label).toBe('Activity');
   });
 
+  it('formulasView is core, mounts at /formulas, and navs as Formulas at order 35', () => {
+    const formulas = ALL_VIEWS.find((v) => v.id === 'formulas');
+    expect(formulas).toBeDefined();
+    expect(formulas?.kind).toBe('core');
+    expect(formulas?.path).toBe('/formulas');
+    expect(formulas?.nav?.label).toBe('Formulas');
+    // Order 35 sits strictly between Beads (explicit nav 30) and Runs (40), so
+    // the merged masthead places Formulas between them.
+    expect(formulas?.nav?.order).toBe(35);
+    expect(formulas?.nav?.order).toBeGreaterThan(30);
+    expect(formulas?.nav?.order).toBeLessThan(40);
+  });
+
   it('has no duplicate ids', () => {
     const ids = ALL_VIEWS.map((v) => v.id);
     expect(new Set(ids).size).toBe(ids.length);
