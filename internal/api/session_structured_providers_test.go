@@ -652,8 +652,9 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 				t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 			}
 
+			body := w.Body.Bytes()
 			var resp sessionTranscriptGetResponse
-			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			if err := json.Unmarshal(body, &resp); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
 			if resp.Format != "structured" {
@@ -683,43 +684,7 @@ func TestHandleSessionTranscriptStructuredNormalizesFirstClassProviders(t *testi
 			assertStructuredInputArguments(t, toolUse.Input.Arguments, tt.inputArguments)
 			assertStructuredResult(t, toolResult.Structured, tt.resultKind, tt.resultFile, tt.resultContent, tt.resultStdout, tt.resultExit, tt.resultFiles, tt.resultItemURLs, tt.resultMode, tt.resultQuery, tt.resultCount, tt.resultURL, tt.resultStatus, tt.resultStatusText, tt.resultBytes, tt.resultDuration, tt.resultAppliedLimit, tt.resultTruncated, tt.resultQuestion, tt.resultQuestions, tt.resultAnswer, tt.resultAnswers, tt.resultPlan, tt.resultStepCount, tt.resultOldTodos, tt.resultNewTodos, tt.resultPatch, tt.resultOldString, tt.resultNewString, tt.resultOriginalFile, tt.resultReplaceAll, tt.resultUserModified, tt.resultAbsent)
 
-			wire, err := json.Marshal(resp)
-			if err != nil {
-				t.Fatalf("marshal structured response: %v", err)
-			}
-			for _, forbidden := range []string{
-				"tool_use_id",
-				"functionResponse",
-				"toolCallId",
-				"callID",
-				"toolUseResult",
-				"resultDisplay",
-				"provider_result",
-				"structuredPatch",
-				"appliedLimit",
-				"multiSelect",
-				"filePath",
-				"oldString",
-				"newString",
-				"originalFile",
-				"replaceAll",
-				"userModified",
-				"readToolCall",
-				"writeToolCall",
-				"fileText",
-				"linesCreated",
-				"fileSize",
-				"totalLines",
-				"totalChars",
-				"oldTodos",
-				"newTodos",
-				"activeForm",
-				"_renderedHtml",
-			} {
-				if strings.Contains(string(wire), forbidden) {
-					t.Fatalf("structured response leaked provider-native key %q: %s", forbidden, wire)
-				}
-			}
+			assertNoStructuredWireLeak(t, body)
 		})
 	}
 }
@@ -783,6 +748,7 @@ func TestHandleSessionTranscriptStructuredGracefullyDowngradesAllBuiltinProvider
 }
 
 func TestHandleSessionTranscriptStructuredSkipsCodexUnknownEvents(t *testing.T) {
+	isolateProviderDiscovery(t)
 	fs := newSessionFakeState(t)
 	searchBase := t.TempDir()
 	srv := New(fs)
@@ -807,8 +773,9 @@ func TestHandleSessionTranscriptStructuredSkipsCodexUnknownEvents(t *testing.T) 
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.StructuredMessages) != 1 {
@@ -818,15 +785,11 @@ func TestHandleSessionTranscriptStructuredSkipsCodexUnknownEvents(t *testing.T) 
 	if got.Role != "assistant" || len(got.Blocks) != 1 || got.Blocks[0].Text != "assistant survived unknown event" {
 		t.Fatalf("structured messages = %+v, want assistant text only", resp.StructuredMessages)
 	}
-	wire := w.Body.String()
-	for _, forbidden := range []string{"event_msg", "shutdown_complete", "provider-native event"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured codex response leaked unknown event %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body, "shutdown_complete", "provider-native event")
 }
 
 func TestHandleSessionTranscriptStructuredNormalizesCodexSystemErrors(t *testing.T) {
+	isolateProviderDiscovery(t)
 	fs := newSessionFakeState(t)
 	searchBase := t.TempDir()
 	srv := New(fs)
@@ -852,8 +815,9 @@ func TestHandleSessionTranscriptStructuredNormalizesCodexSystemErrors(t *testing
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	wants := []SessionStructuredSystemEvent{
@@ -879,12 +843,7 @@ func TestHandleSessionTranscriptStructuredNormalizesCodexSystemErrors(t *testing
 			t.Fatalf("[%d] blocks = %+v, want clean system message text %q", i, msg.Blocks, want.Message)
 		}
 	}
-	wire := w.Body.String()
-	for _, forbidden := range []string{"codex_error_info", "event_msg"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured codex error response leaked provider-native key %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body)
 }
 
 func TestHandleSessionTranscriptStructuredNormalizesGeminiSystemError(t *testing.T) {
@@ -909,8 +868,9 @@ func TestHandleSessionTranscriptStructuredNormalizesGeminiSystemError(t *testing
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.StructuredMessages) != 1 {
@@ -927,12 +887,7 @@ func TestHandleSessionTranscriptStructuredNormalizesGeminiSystemError(t *testing
 	if len(msg.Blocks) != 1 || msg.Blocks[0].Type != "text" || msg.Blocks[0].Text != want.Message {
 		t.Fatalf("blocks = %+v, want clean Gemini error text %q", msg.Blocks, want.Message)
 	}
-	wire := w.Body.String()
-	for _, forbidden := range []string{"resultDisplay", "functionResponse"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured Gemini error response leaked provider-native key %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body)
 }
 
 func TestHandleSessionTranscriptStructuredNormalizesClaudeTaskOutput(t *testing.T) {
@@ -961,8 +916,9 @@ func TestHandleSessionTranscriptStructuredNormalizesClaudeTaskOutput(t *testing.
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	toolUse, toolResult := findStructuredToolPair(resp.StructuredMessages, "call-claude-task")
@@ -989,12 +945,7 @@ func TestHandleSessionTranscriptStructuredNormalizesClaudeTaskOutput(t *testing.
 		t.Fatalf("task aggregate metrics = duration %d tokens %d tools %d, want 1234/321/4; result = %+v", got.TotalDurationMs, got.TotalTokens, got.TotalToolUseCount, got)
 	}
 
-	wire := w.Body.String()
-	for _, forbidden := range []string{"toolUseResult", "taskId", "taskType", "exitCode", "totalDurationMs", "totalToolUseCount"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured task response leaked provider-native key %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body)
 }
 
 func TestHandleSessionTranscriptStructuredNormalizesClaudeBashOutput(t *testing.T) {
@@ -1023,8 +974,9 @@ func TestHandleSessionTranscriptStructuredNormalizesClaudeBashOutput(t *testing.
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	toolUse, toolResult := findStructuredToolPair(resp.StructuredMessages, "call-claude-bash-output")
@@ -1048,12 +1000,7 @@ func TestHandleSessionTranscriptStructuredNormalizesClaudeBashOutput(t *testing.
 		t.Fatalf("bash output exit_code = %v, want 0; result = %+v", got.ExitCode, got)
 	}
 
-	wire := w.Body.String()
-	for _, forbidden := range []string{"toolUseResult", "shellId", "stdoutLines", "stderrLines", "exitCode"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured bash output response leaked provider-native key %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body)
 }
 
 func TestHandleSessionTranscriptStructuredLinksClaudeWriteStdin(t *testing.T) {
@@ -1082,8 +1029,9 @@ func TestHandleSessionTranscriptStructuredLinksClaudeWriteStdin(t *testing.T) {
 		t.Fatalf("got status %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
+	body := w.Body.Bytes()
 	var resp sessionTranscriptGetResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	bashUse, bashResult := findStructuredToolPair(resp.StructuredMessages, "call-claude-bash")
@@ -1107,12 +1055,7 @@ func TestHandleSessionTranscriptStructuredLinksClaudeWriteStdin(t *testing.T) {
 		t.Fatalf("stdin structured result = %+v, want typed stdin result", stdinResult.Structured)
 	}
 
-	wire := w.Body.String()
-	for _, forbidden := range []string{"toolUseResult", "sessionId", "shellId"} {
-		if strings.Contains(wire, forbidden) {
-			t.Fatalf("structured stdin response leaked provider-native key %q: %s", forbidden, wire)
-		}
-	}
+	assertNoStructuredWireLeak(t, body)
 }
 
 func TestHandleSessionStreamStructuredGracefullyDowngradesWithoutTranscript(t *testing.T) {
