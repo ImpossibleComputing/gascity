@@ -127,6 +127,21 @@ func beadOwnsPoolSessionName(b beads.Bead) bool {
 	return strings.HasSuffix(sn, "-"+id)
 }
 
+// infoOwnsPoolSessionName is the session.Info mirror of beadOwnsPoolSessionName.
+// It reads the RAW session_name (Info.SessionNameMetadata), not the
+// fallback-populated Info.SessionName.
+func infoOwnsPoolSessionName(i session.Info) bool {
+	id := strings.TrimSpace(i.ID)
+	sn := strings.TrimSpace(i.SessionNameMetadata)
+	if id == "" || sn == "" {
+		return false
+	}
+	if template := strings.TrimSpace(i.Template); template != "" && sn == PoolSessionName(template, id) {
+		return true
+	}
+	return strings.HasSuffix(sn, "-"+id)
+}
+
 func pendingPoolSessionName(template, instanceToken string) string {
 	base := targetBasename(template)
 	if base == "" {

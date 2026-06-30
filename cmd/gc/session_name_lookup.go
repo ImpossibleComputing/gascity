@@ -37,6 +37,17 @@ func isPoolManagedSessionBead(bead beads.Bead) bool {
 	return strings.TrimSpace(bead.Metadata["pool_slot"]) != ""
 }
 
+// isPoolManagedSessionInfo is the session.Info mirror of isPoolManagedSessionBead.
+func isPoolManagedSessionInfo(i sessionpkg.Info) bool {
+	if isEphemeralSessionInfo(i) {
+		return true
+	}
+	if i.PoolManaged {
+		return true
+	}
+	return strings.TrimSpace(i.PoolSlot) != ""
+}
+
 // isCanonicalPoolManagedSessionBeadForTemplate is the bead-shape companion to
 // config.Agent.UsesCanonicalSingletonPoolIdentity: pool-managed, no pool slot,
 // and canonical identity according to beadIdentifiesAsCanonical.
@@ -49,6 +60,19 @@ func isCanonicalPoolManagedSessionBeadForTemplate(bead beads.Bead, template stri
 		return false
 	}
 	return beadIdentifiesAsCanonical(bead, template)
+}
+
+// isCanonicalPoolManagedSessionInfoForTemplate is the session.Info mirror of
+// isCanonicalPoolManagedSessionBeadForTemplate.
+func isCanonicalPoolManagedSessionInfoForTemplate(i sessionpkg.Info, template string) bool {
+	template = strings.TrimSpace(template)
+	if template == "" || !isPoolManagedSessionInfo(i) {
+		return false
+	}
+	if strings.TrimSpace(i.PoolSlot) != "" {
+		return false
+	}
+	return infoIdentifiesAsCanonical(i, template)
 }
 
 func resolveLegacyPoolTemplate(cfg *config.City, storedTemplate string) string {
@@ -83,6 +107,15 @@ func sessionBeadStoredTemplate(bead beads.Bead) string {
 		return storedTemplate
 	}
 	return strings.TrimSpace(bead.Metadata["common_name"])
+}
+
+// sessionBeadStoredTemplateInfo is the session.Info mirror of sessionBeadStoredTemplate.
+func sessionBeadStoredTemplateInfo(i sessionpkg.Info) string {
+	storedTemplate := strings.TrimSpace(i.Template)
+	if storedTemplate != "" {
+		return storedTemplate
+	}
+	return strings.TrimSpace(i.CommonName)
 }
 
 func resolvedTemplateForIdentity(identity string, cfg *config.City) string {
@@ -126,6 +159,22 @@ func resolvedSessionTemplate(bead beads.Bead, cfg *config.City) string {
 		return normalizeAgentTemplateIdentity(cfg, template)
 	}
 	storedTemplate := sessionBeadStoredTemplate(bead)
+	if storedTemplate == "" {
+		return ""
+	}
+	if resolved := resolveLegacyPoolTemplate(cfg, storedTemplate); resolved != "" {
+		return resolved
+	}
+	return storedTemplate
+}
+
+// resolvedSessionTemplateInfo is the session.Info mirror of resolvedSessionTemplate.
+func resolvedSessionTemplateInfo(i sessionpkg.Info, cfg *config.City) string {
+	template := normalizedSessionTemplateInfo(i, cfg)
+	if template != "" && (cfg == nil || findAgentByTemplate(cfg, template) != nil) {
+		return normalizeAgentTemplateIdentity(cfg, template)
+	}
+	storedTemplate := sessionBeadStoredTemplateInfo(i)
 	if storedTemplate == "" {
 		return ""
 	}
@@ -386,6 +435,20 @@ func sessionBeadAgentName(bead beads.Bead) string {
 	return ""
 }
 
+// sessionBeadAgentNameInfo is the session.Info mirror of sessionBeadAgentName:
+// agent_name metadata (untrimmed), then the agent:<name> label fallback.
+func sessionBeadAgentNameInfo(i sessionpkg.Info) string {
+	if i.AgentName != "" {
+		return i.AgentName
+	}
+	for _, label := range i.Labels {
+		if strings.HasPrefix(label, "agent:") {
+			return strings.TrimPrefix(label, "agent:")
+		}
+	}
+	return ""
+}
+
 // sessionAgentMetricIdentity resolves the stable agent-identity label for the
 // gc.agent.* lifecycle counters from a session bead. It mirrors the start
 // path's tp.DisplayName() value space so stop and quarantine metrics join the
@@ -480,6 +543,29 @@ func normalizedSessionTemplate(bead beads.Bead, cfg *config.City) string {
 		}
 	}
 	if resolved := resolvedTemplateForIdentity(strings.TrimSpace(bead.Metadata["alias"]), cfg); resolved != "" {
+		return resolved
+	}
+	return template
+}
+
+// normalizedSessionTemplateInfo is the session.Info mirror of normalizedSessionTemplate.
+func normalizedSessionTemplateInfo(i sessionpkg.Info, cfg *config.City) string {
+	template := i.Template
+	if cfg == nil {
+		return template
+	}
+	if template != "" {
+		if agent := findAgentByTemplate(cfg, template); agent != nil {
+			return agent.QualifiedName()
+		}
+	}
+	agentName := sessionBeadAgentNameInfo(i)
+	if agentName != "" {
+		if resolved := resolvedTemplateForIdentity(agentName, cfg); resolved != "" {
+			return resolved
+		}
+	}
+	if resolved := resolvedTemplateForIdentity(strings.TrimSpace(i.Alias), cfg); resolved != "" {
 		return resolved
 	}
 	return template

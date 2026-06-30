@@ -351,3 +351,10 @@ func boolMetadata(v bool) string {
 func isManualSessionBead(bead beads.Bead) bool {
 	return strings.TrimSpace(bead.Metadata["session_origin"]) == "manual" || bead.Metadata["manual_session"] == boolMetadata(true)
 }
+
+// isManualSessionInfo is the session.Info mirror of isManualSessionBead. The
+// manual_session clause compares the RAW metadata (Info.ManualSessionMetadata)
+// without trimming, exactly as the bead form does.
+func isManualSessionInfo(i sessionpkg.Info) bool {
+	return strings.TrimSpace(i.SessionOrigin) == "manual" || i.ManualSessionMetadata == boolMetadata(true)
+}

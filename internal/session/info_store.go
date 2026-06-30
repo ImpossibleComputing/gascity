@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,21 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		SessionOrigin:           b.Metadata["session_origin"],
 		DependencyOnly:          strings.TrimSpace(b.Metadata["dependency_only"]) == "true",
 		ManualSession:           strings.TrimSpace(b.Metadata["manual_session"]) == "true",
+		ManualSessionMetadata:   b.Metadata["manual_session"],
 		Labels:                  b.Labels,
+
+		// state / bookkeeping cluster. MetadataState is the RAW state metadata,
+		// kept verbatim so the reconciler classifiers read the same value the
+		// bead carried (Info.State above is the normalized, closed-blanked form).
+		MetadataState:          b.Metadata["state"],
+		SessionNameMetadata:    b.Metadata["session_name"],
+		PendingCreateClaim:     strings.TrimSpace(b.Metadata["pending_create_claim"]) == "true",
+		PendingCreateStartedAt: b.Metadata["pending_create_started_at"],
+		QuarantinedUntil:       b.Metadata["quarantined_until"],
+		AliasHistory:           AliasHistory(b.Metadata),
+	}
+	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
+		info.WakeAttempts = n
 	}
 	if raw := strings.TrimSpace(b.Metadata[MetadataLastNudgeDeliveredAt]); raw != "" {
 		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {

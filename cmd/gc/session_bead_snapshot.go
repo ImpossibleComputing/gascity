@@ -277,3 +277,28 @@ func stampedPoolQualifiedIdentity(bead beads.Bead) string {
 	}
 	return instance
 }
+
+// stampedPoolQualifiedIdentityInfo is the session.Info mirror of
+// stampedPoolQualifiedIdentity.
+func stampedPoolQualifiedIdentityInfo(i sessionpkg.Info) string {
+	if !isPoolManagedSessionInfo(i) {
+		return ""
+	}
+	slot, err := strconv.Atoi(strings.TrimSpace(i.PoolSlot))
+	if err != nil || slot <= 0 {
+		return ""
+	}
+	template := strings.TrimSpace(i.Template)
+	if template == "" {
+		return ""
+	}
+	scope, name := config.ParseQualifiedName(template)
+	if name == "" {
+		return ""
+	}
+	instance := fmt.Sprintf("%s-%d", name, slot)
+	if scope != "" {
+		return scope + "/" + instance
+	}
+	return instance
+}

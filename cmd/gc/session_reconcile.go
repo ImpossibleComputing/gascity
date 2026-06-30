@@ -230,6 +230,21 @@ func sessionMetadataState(session beads.Bead) string {
 	}
 }
 
+// sessionMetadataStateInfo is the session.Info mirror of sessionMetadataState. It
+// reads the RAW metadata state (Info.MetadataState), not the normalized Info.State.
+func sessionMetadataStateInfo(i sessionpkg.Info) string {
+	switch state := strings.TrimSpace(i.MetadataState); state {
+	case "awake":
+		return "active"
+	case string(sessionpkg.StateStartPending):
+		return "creating"
+	case "drained":
+		return "asleep"
+	default:
+		return state
+	}
+}
+
 func computeWakeEvaluations(
 	sessions []beads.Bead,
 	cfg *config.City,
@@ -940,9 +955,27 @@ func sessionWakeAttempts(session beads.Bead) int {
 	return n
 }
 
+// sessionWakeAttemptsInfo is the session.Info mirror of sessionWakeAttempts.
+func sessionWakeAttemptsInfo(i sessionpkg.Info) int {
+	return i.WakeAttempts
+}
+
 // sessionIsQuarantined returns true if the session has an active quarantine.
 func sessionIsQuarantined(session beads.Bead, clk clock.Clock) bool {
 	q := session.Metadata["quarantined_until"]
+	if q == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, q)
+	if err != nil {
+		return false
+	}
+	return clk.Now().Before(t)
+}
+
+// sessionIsQuarantinedInfo is the session.Info mirror of sessionIsQuarantined.
+func sessionIsQuarantinedInfo(i sessionpkg.Info, clk clock.Clock) bool {
+	q := i.QuarantinedUntil
 	if q == "" {
 		return false
 	}
@@ -1293,6 +1326,12 @@ var knownSessionStates = map[string]bool{
 // to prevent panics during rollback.
 func isKnownState(session beads.Bead) bool {
 	return knownSessionStates[session.Metadata["state"]]
+}
+
+// isKnownStateInfo is the session.Info mirror of isKnownState. It keys off the
+// RAW metadata state (Info.MetadataState, untrimmed), exactly as the bead form does.
+func isKnownStateInfo(i sessionpkg.Info) bool {
+	return knownSessionStates[i.MetadataState]
 }
 
 // reverseBeads returns a reversed copy of the bead slice.

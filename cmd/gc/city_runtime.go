@@ -27,6 +27,7 @@ import (
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/supervisor"
 	"github.com/gastownhall/gascity/internal/telemetry"
 	"github.com/gastownhall/gascity/internal/workspacesvc"
@@ -2784,6 +2785,18 @@ func isStaleCreating(bead beads.Bead) bool {
 		return true
 	}
 	return !now.Before(bead.CreatedAt.Add(staleCreatingStateTimeout))
+}
+
+// isStaleCreatingInfo is the session.Info mirror of isStaleCreating.
+func isStaleCreatingInfo(i sessionpkg.Info) bool {
+	now := time.Now()
+	if started, ok := parseRFC3339Metadata(i.PendingCreateStartedAt); ok {
+		return !now.Before(started.Add(staleCreatingStateTimeout))
+	}
+	if i.CreatedAt.IsZero() {
+		return true
+	}
+	return !now.Before(i.CreatedAt.Add(staleCreatingStateTimeout))
 }
 
 // parseRFC3339Metadata parses an RFC3339 timestamp metadata value. A missing,

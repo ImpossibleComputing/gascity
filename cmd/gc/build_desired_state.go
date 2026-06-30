@@ -2214,6 +2214,11 @@ func isPendingPoolCreate(b beads.Bead) bool {
 	return isPoolManagedSessionBead(b) && strings.TrimSpace(b.Metadata["pending_create_claim"]) == boolMetadata(true)
 }
 
+// isPendingPoolCreateInfo is the session.Info mirror of isPendingPoolCreate.
+func isPendingPoolCreateInfo(i session.Info) bool {
+	return isPoolManagedSessionInfo(i) && i.PendingCreateClaim
+}
+
 func realizeDependencyFloors(
 	bp *agentBuildParams,
 	cfg *config.City,
@@ -3576,6 +3581,18 @@ func beadIdentifiesAsCanonical(bead beads.Bead, canonical string) bool {
 		containsString(bead.Labels, "agent:"+canonical)
 }
 
+// infoIdentifiesAsCanonical is the session.Info mirror of beadIdentifiesAsCanonical.
+func infoIdentifiesAsCanonical(i session.Info, canonical string) bool {
+	canonical = strings.TrimSpace(canonical)
+	if canonical == "" {
+		return false
+	}
+	return strings.TrimSpace(i.AgentName) == canonical ||
+		strings.TrimSpace(i.Alias) == canonical ||
+		strings.TrimSpace(i.Title) == canonical ||
+		containsString(i.Labels, "agent:"+canonical)
+}
+
 func normalizeNonExpandingPoolSessionBeadForSelection(
 	bp *agentBuildParams,
 	cfgAgent *config.Agent,
@@ -3707,6 +3724,13 @@ func createPoolSessionBeadWithGuardedAlias(
 
 func isFailedCreateSessionBead(bead beads.Bead) bool {
 	return strings.TrimSpace(bead.Metadata["state"]) == string(session.StateFailedCreate)
+}
+
+// isFailedCreateSessionInfo is the session.Info mirror of
+// isFailedCreateSessionBead. It reads the RAW metadata state (Info.MetadataState),
+// not the normalized/closed-blanked Info.State.
+func isFailedCreateSessionInfo(i session.Info) bool {
+	return strings.TrimSpace(i.MetadataState) == string(session.StateFailedCreate)
 }
 
 func sessionBeadHasAssignedWork(workBeads []beads.Bead, sessionBead beads.Bead) bool {

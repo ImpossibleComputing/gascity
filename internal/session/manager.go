@@ -115,16 +115,44 @@ type Info struct {
 	// Each is the raw projected value; the *semantics* (is-pool-managed,
 	// resolved origin, agent identity with the agent:<name> label fallback) are
 	// predicate methods on Info, not these fields.
-	ConfiguredNamedIdentity string   // configured_named_identity
-	ConfiguredNamedSession  bool     // configured_named_session == "true"
-	ConfiguredNamedMode     string   // configured_named_mode
-	CommonName              string   // common_name
-	PoolSlot                string   // pool_slot (raw; pool helpers parse it)
-	PoolManaged             bool     // pool_managed == "true"
-	SessionOrigin           string   // session_origin (raw; resolved origin is a method)
-	DependencyOnly          bool     // dependency_only == "true"
-	ManualSession           bool     // manual_session == "true"
-	Labels                  []string // bead labels (agent:<name> identity fallback + canonical checks)
+	ConfiguredNamedIdentity string // configured_named_identity
+	ConfiguredNamedSession  bool   // configured_named_session == "true"
+	ConfiguredNamedMode     string // configured_named_mode
+	CommonName              string // common_name
+	PoolSlot                string // pool_slot (raw; pool helpers parse it)
+	PoolManaged             bool   // pool_managed == "true"
+	SessionOrigin           string // session_origin (raw; resolved origin is a method)
+	DependencyOnly          bool   // dependency_only == "true"
+	ManualSession           bool   // manual_session (trimmed) == "true"
+	// ManualSessionMetadata is the RAW manual_session metadata, verbatim.
+	// isManualSessionBead compares it WITHOUT trimming, so the Info mirror
+	// keeps the raw value to stay byte-identical on whitespace-padded inputs.
+	ManualSessionMetadata string
+	Labels                []string // bead labels (agent:<name> identity fallback + canonical checks)
+
+	// --- state / bookkeeping cluster (controller read surface) ---
+	//
+	// These complete the codec for the classifier predicates that read raw
+	// state and create/wake/quarantine bookkeeping keys. Additive,
+	// internal-only (absent from the HTTP wire).
+	//
+	// MetadataState is the RAW persisted state metadata (untrimmed, not
+	// normalized, and NOT blanked on closed beads), distinct from the
+	// liveness-shaped Info.State. The reconciler's known-state, failed-create,
+	// drained, and metadata-state classifiers key off the raw value, so it must
+	// be carried verbatim.
+	MetadataState string // raw state metadata (verbatim; see State for the normalized form)
+	// SessionNameMetadata is the RAW session_name metadata, verbatim and
+	// WITHOUT the sessionNameFor(ID) fallback that Info.SessionName applies.
+	// Classifiers that branch on "no session_name was persisted" (pool-name
+	// ownership, ephemeral pool-slot detection, assignee identities) must read
+	// this raw value, not the always-populated Info.SessionName.
+	SessionNameMetadata    string
+	PendingCreateClaim     bool     // pending_create_claim == "true"
+	PendingCreateStartedAt string   // pending_create_started_at (raw RFC3339; stale-create sweep parses it)
+	WakeAttempts           int      // wake_attempts parsed as int (0 on missing/invalid)
+	QuarantinedUntil       string   // quarantined_until (raw RFC3339; quarantine check parses it)
+	AliasHistory           []string // prior aliases (alias_history, normalized via session.AliasHistory)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

@@ -42,6 +42,13 @@ func isNamedSessionBead(b beads.Bead) bool {
 	return session.IsNamedSessionBead(b)
 }
 
+// isNamedSessionInfo is the session.Info mirror of isNamedSessionBead:
+// session.IsNamedSessionBead reads the trimmed configured_named_session flag,
+// which Info.ConfiguredNamedSession already projects identically.
+func isNamedSessionInfo(i session.Info) bool {
+	return i.ConfiguredNamedSession
+}
+
 func namedSessionIdentity(b beads.Bead) string {
 	return session.NamedSessionIdentity(b)
 }
