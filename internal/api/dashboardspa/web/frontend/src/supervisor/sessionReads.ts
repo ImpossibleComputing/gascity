@@ -4,7 +4,11 @@ import type {
   SessionResponse,
   SessionTranscriptGetResponse,
 } from 'gas-city-dashboard-shared/gc-supervisor';
-import type { DashboardSession } from 'gas-city-dashboard-shared';
+import { isSessionStructuredEvent } from 'gas-city-dashboard-shared';
+import type {
+  DashboardSession,
+  SessionStreamStructuredMessageEvent,
+} from 'gas-city-dashboard-shared';
 import { activeCityOrThrow } from '../api/cityBase';
 import { supervisorApi } from './client';
 
@@ -24,12 +28,32 @@ export async function listSupervisorSessions(): Promise<SupervisorSessionList> {
 
 export async function fetchSupervisorSessionTranscript(
   sessionId: string,
+  format?: string,
 ): Promise<SessionTranscriptView> {
   const transcript = await supervisorApi().sessionTranscript(
     activeCityOrThrow('fetch supervisor session transcript'),
     sessionId,
+    format,
   );
   return sessionTranscriptView(transcript);
+}
+
+/**
+ * Fetch a session transcript as `format=structured`, translating at the edge:
+ * the vendored client types the response without the structured fields, so the
+ * runtime payload is validated with the dashboard-owned guard. Returns null
+ * when the server fell back to a non-structured response (the caller then
+ * renders the conversation transcript instead).
+ */
+export async function fetchStructuredTranscript(
+  sessionId: string,
+): Promise<SessionStreamStructuredMessageEvent | null> {
+  const transcript = await supervisorApi().sessionTranscript(
+    activeCityOrThrow('fetch structured session transcript'),
+    sessionId,
+    'structured',
+  );
+  return isSessionStructuredEvent(transcript) ? transcript : null;
 }
 
 export function normalizeSessions(list: ListBodySessionResponse): DashboardSession[] {
