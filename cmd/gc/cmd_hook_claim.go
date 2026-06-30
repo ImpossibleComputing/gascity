@@ -70,6 +70,8 @@ type hookClaimJSONResult struct {
 	BeadID               string   `json:"bead_id,omitempty"`
 	Assignee             string   `json:"assignee,omitempty"`
 	Route                string   `json:"route,omitempty"`
+	RootBeadID           string   `json:"root_bead_id,omitempty"`
+	ContinuationGroup    string   `json:"continuation_group,omitempty"`
 	ContinuationAssigned []string `json:"continuation_assigned,omitempty"`
 	DrainAcknowledged    bool     `json:"drain_acknowledged,omitempty"`
 }
@@ -267,6 +269,12 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 		return 1
 	}
 	result.ContinuationAssigned = assigned
+	// Surface the root/group metadata the claim already read so the worker can
+	// verify a graph-resident (gcg-) bead straight from this graph-aware claim
+	// JSON, instead of a second Dolt-fragile `bd show` that breaks when the
+	// shimbin bd resolution fails (stale session / env gap / API blip).
+	result.RootBeadID = strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
+	result.ContinuationGroup = strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
 	if opts.JSON {
 		if err := writeCLIJSONLine(stdout, result); err != nil {
 			fmt.Fprintf(stderr, "gc hook --claim: writing JSON: %v\n", err) //nolint:errcheck
