@@ -1102,7 +1102,7 @@ func (cr *CityRuntime) tick(
 	recordPhase(TraceSiteSessionSnapshot, "load_session_snapshot.initial", phaseStart, traceSessionSnapshotFields(sessionBeads))
 	if trace != nil && sessionBeads != nil {
 		trace.RecordSessionBaseline("", "", traceRecordPayload{
-			"open_count": len(sessionBeads.Open()),
+			"open_count": len(sessionBeads.OpenInfos()),
 		})
 		_ = trace.flushCurrentBatch(TraceDurabilityDurable)
 	}
@@ -2994,7 +2994,7 @@ func traceSessionSnapshotFields(sessionBeads *sessionBeadSnapshot) map[string]an
 		return nil
 	}
 	return map[string]any{
-		"open_session_count": len(sessionBeads.Open()),
+		"open_session_count": len(sessionBeads.OpenInfos()),
 	}
 }
 
