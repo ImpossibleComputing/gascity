@@ -9,6 +9,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 )
 
 func TestSessionProgressStalled(t *testing.T) {
@@ -136,9 +137,9 @@ func TestPoolGraphV2AutoAdvance_NudgeEnqueuedAtClaim(t *testing.T) {
 		},
 		ListContinuation:   func(_ context.Context, _ string, _ []string, _, _ string) ([]beads.Bead, error) { return nil, nil },
 		AssignContinuation: func(_ context.Context, _ string, _ []string, _, _ string) error { return nil },
-		EnqueuePoolRootNudge: func(_, assignee, sessionID, _ string) error {
-			if assignee != "pool-worker" {
-				t.Errorf("nudge assignee = %q, want pool-worker", assignee)
+		EnqueuePoolRootNudge: func(_ *config.City, _, sessionName, sessionID, _ string) error {
+			if sessionName != "pool-worker" {
+				t.Errorf("nudge sessionName = %q, want pool-worker", sessionName)
 			}
 			if sessionID != "sess-pool-1" {
 				t.Errorf("nudge sessionID = %q, want sess-pool-1", sessionID)
@@ -152,6 +153,7 @@ func TestPoolGraphV2AutoAdvance_NudgeEnqueuedAtClaim(t *testing.T) {
 	code := doHookClaim("query", "city-path", hookClaimOptions{
 		Assignee:     "pool-worker",
 		RouteTargets: []string{"pool-worker"},
+		Env:          []string{"GC_SESSION_ID=sess-pool-1"},
 	}, ops, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("doHookClaim() = %d, want 0; stderr=%s", code, stderr.String())

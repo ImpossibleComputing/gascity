@@ -379,6 +379,11 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 			Env:          queryEnv,
 			DrainAck:     opts.DrainAck,
 			JSON:         opts.JSON,
+			// Thread the real city root and config (not a per-store dir) so the
+			// pool-root continuation nudge reaches the city nudge store and
+			// honors daemon.nudge_dispatcher = "supervisor".
+			CityPath: cityPath,
+			Cfg:      cfg,
 		}
 		return claimHookWork(workQuery, workDir, queryEnv, stores, claimOpts, emitQueryFailure, stdout, stderr)
 	}

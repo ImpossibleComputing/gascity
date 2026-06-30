@@ -11,6 +11,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 )
 
 func TestDoHookClaimUsesSelectedStoreContextForMutationAndContinuation(t *testing.T) {
@@ -113,7 +114,7 @@ func poolGraphV2RootBead(id, routeTarget, sessionID string) beads.Bead {
 
 // minimalPoolRootOps returns a hookClaimOps that claims successfully and
 // exercises no continuation pre-assignment (no root_bead_id on the bead).
-func minimalPoolRootOps(bead beads.Bead, nudgeFn func(string, string, string, string) error) hookClaimOps {
+func minimalPoolRootOps(bead beads.Bead, nudgeFn hookEnqueuePoolRootNudgeFunc) hookClaimOps {
 	return hookClaimOps{
 		Runner: func(string, string) (string, error) {
 			out, _ := json.Marshal([]beads.Bead{bead})
@@ -132,14 +133,23 @@ func minimalPoolRootOps(bead beads.Bead, nudgeFn func(string, string, string, st
 }
 
 // TestHookClaimPoolGraphV2Root_EnqueuesNudge verifies that claiming a pool
-// graph.v2 workflow root calls EnqueuePoolRootNudge exactly once with the
-// correct assignee, sessionID, and sessionName.
+// graph.v2 workflow root calls EnqueuePoolRootNudge exactly once, threading the
+// real CityPath and Cfg and seeding the session fence from the claim env
+// (GC_SESSION_ID / GC_CONTINUATION_EPOCH) — pool roots carry no gc.session_id
+// in metadata, so the env is the authoritative fence source.
 func TestHookClaimPoolGraphV2Root_EnqueuesNudge(t *testing.T) {
-	bead := poolGraphV2RootBead("wf-root-1", "worker-1", "sess-abc")
+	bead := poolGraphV2RootBead("wf-root-1", "worker-1", "")
 
-	var calls []struct{ cityPath, assignee, sessionID, sessionName string }
-	ops := minimalPoolRootOps(bead, func(cityPath, assignee, sessionID, sessionName string) error {
-		calls = append(calls, struct{ cityPath, assignee, sessionID, sessionName string }{cityPath, assignee, sessionID, sessionName})
+	cfg := &config.City{}
+	var calls []struct {
+		cfg                                         *config.City
+		cityPath, sessionName, sessionID, contEpoch string
+	}
+	ops := minimalPoolRootOps(bead, func(c *config.City, cityPath, sessionName, sessionID, contEpoch string) error {
+		calls = append(calls, struct {
+			cfg                                         *config.City
+			cityPath, sessionName, sessionID, contEpoch string
+		}{c, cityPath, sessionName, sessionID, contEpoch})
 		return nil
 	})
 
@@ -147,6 +157,9 @@ func TestHookClaimPoolGraphV2Root_EnqueuesNudge(t *testing.T) {
 	code := doHookClaim("query", "city-dir", hookClaimOptions{
 		Assignee:     "worker-1",
 		RouteTargets: []string{"worker-1"},
+		CityPath:     "city-root",
+		Cfg:          cfg,
+		Env:          []string{"GC_SESSION_ID=sess-abc", "GC_CONTINUATION_EPOCH=epoch-7"},
 	}, ops, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("doHookClaim() = %d, want 0; stderr=%s", code, stderr.String())
@@ -154,17 +167,20 @@ func TestHookClaimPoolGraphV2Root_EnqueuesNudge(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("EnqueuePoolRootNudge called %d times, want 1", len(calls))
 	}
-	if calls[0].assignee != "worker-1" {
-		t.Fatalf("assignee = %q, want worker-1", calls[0].assignee)
+	if calls[0].cfg != cfg {
+		t.Fatalf("cfg = %p, want threaded %p", calls[0].cfg, cfg)
 	}
-	if calls[0].sessionID != "sess-abc" {
-		t.Fatalf("sessionID = %q, want sess-abc", calls[0].sessionID)
+	if calls[0].cityPath != "city-root" {
+		t.Fatalf("cityPath = %q, want city-root (threaded, not per-store dir)", calls[0].cityPath)
 	}
 	if calls[0].sessionName != "worker-1" {
 		t.Fatalf("sessionName = %q, want worker-1", calls[0].sessionName)
 	}
-	if calls[0].cityPath != "city-dir" {
-		t.Fatalf("cityPath = %q, want city-dir", calls[0].cityPath)
+	if calls[0].sessionID != "sess-abc" {
+		t.Fatalf("sessionID = %q, want sess-abc (from GC_SESSION_ID)", calls[0].sessionID)
+	}
+	if calls[0].contEpoch != "epoch-7" {
+		t.Fatalf("continuationEpoch = %q, want epoch-7 (from GC_CONTINUATION_EPOCH)", calls[0].contEpoch)
 	}
 }
 
@@ -180,7 +196,7 @@ func TestHookClaimNonGraphV2Bead_NoNudge(t *testing.T) {
 		},
 	}
 	var called int
-	ops := minimalPoolRootOps(bead, func(_, _, _, _ string) error { called++; return nil })
+	ops := minimalPoolRootOps(bead, func(_ *config.City, _, _, _, _ string) error { called++; return nil })
 
 	var stdout, stderr bytes.Buffer
 	code := doHookClaim("query", "city-dir", hookClaimOptions{
@@ -209,7 +225,7 @@ func TestHookClaimPoolStepBead_NoNudge(t *testing.T) {
 		},
 	}
 	var called int
-	ops := minimalPoolRootOps(bead, func(_, _, _, _ string) error { called++; return nil })
+	ops := minimalPoolRootOps(bead, func(_ *config.City, _, _, _, _ string) error { called++; return nil })
 
 	var stdout, stderr bytes.Buffer
 	code := doHookClaim("query", "city-dir", hookClaimOptions{
@@ -238,7 +254,7 @@ func TestHookClaimNamedSessionBead_NoNudge(t *testing.T) {
 		},
 	}
 	var called int
-	ops := minimalPoolRootOps(bead, func(_, _, _, _ string) error { called++; return nil })
+	ops := minimalPoolRootOps(bead, func(_ *config.City, _, _, _, _ string) error { called++; return nil })
 
 	var stdout, stderr bytes.Buffer
 	code := doHookClaim("query", "city-dir", hookClaimOptions{
@@ -258,7 +274,7 @@ func TestHookClaimNamedSessionBead_NoNudge(t *testing.T) {
 // on stderr.
 func TestHookClaimPoolGraphV2Root_NudgeError(t *testing.T) {
 	bead := poolGraphV2RootBead("wf-root-2", "worker-1", "sess-def")
-	ops := minimalPoolRootOps(bead, func(_, _, _, _ string) error {
+	ops := minimalPoolRootOps(bead, func(_ *config.City, _, _, _, _ string) error {
 		return errors.New("nudge queue full")
 	})
 
@@ -288,5 +304,46 @@ func TestHookClaimPoolGraphV2Root_NilNudgeSeam(t *testing.T) {
 	}, ops, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("doHookClaim() = %d with nil nudge seam, want 0; stderr=%s", code, stderr.String())
+	}
+}
+
+// TestEnqueuePoolRootContinuationNudge_HonorsSupervisorDispatcher exercises the
+// production seam (not a fake) to prove the blocker fix: with
+// daemon.nudge_dispatcher = "supervisor" the per-session sidecar poller is NOT
+// started — the supervisor dispatcher owns queued delivery and a sidecar
+// `gc nudge poll` would race it and reintroduce the bd-shellout load it exists
+// to eliminate. In legacy mode the poller IS started. The regression this
+// guards: nudgeDispatcherIsSupervisor reads target.cfg, so a hand-built target
+// with a nil cfg silently defeats the guard and always spawns the sidecar.
+func TestEnqueuePoolRootContinuationNudge_HonorsSupervisorDispatcher(t *testing.T) {
+	origPoller := startNudgePoller
+	origStore := openNudgeBeadStore
+	t.Cleanup(func() { startNudgePoller = origPoller; openNudgeBeadStore = origStore })
+	// Zero store: the seeded fence below short-circuits withNudgeTargetFence
+	// before any store read, so no session beads are needed.
+	openNudgeBeadStore = func(string) beads.NudgesStore { return beads.NudgesStore{} }
+
+	for _, tc := range []struct {
+		name       string
+		dispatcher string
+		wantPoller bool
+	}{
+		{"supervisor skips sidecar poller", "supervisor", false},
+		{"legacy starts sidecar poller", "legacy", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var started bool
+			startNudgePoller = func(_, _, _ string) error { started = true; return nil }
+			cfg := &config.City{Daemon: config.DaemonConfig{NudgeDispatcher: tc.dispatcher}}
+			// Seed both fence fields (sessionID + continuationEpoch) so
+			// withNudgeTargetFence returns without touching the store: this
+			// test isolates the poller decision, not the fence lookup.
+			if err := enqueuePoolRootContinuationNudge(cfg, t.TempDir(), "pool-worker/slot-0", "sess-1", "epoch-1"); err != nil {
+				t.Fatalf("enqueuePoolRootContinuationNudge() error = %v", err)
+			}
+			if started != tc.wantPoller {
+				t.Fatalf("startNudgePoller called = %v, want %v (dispatcher=%q)", started, tc.wantPoller, tc.dispatcher)
+			}
+		})
 	}
 }

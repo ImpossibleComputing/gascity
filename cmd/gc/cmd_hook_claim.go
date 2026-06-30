@@ -12,6 +12,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 )
 
@@ -26,6 +27,17 @@ type hookClaimOptions struct {
 	Env                []string
 	DrainAck           bool
 	JSON               bool
+	// CityPath is the city root directory, threaded to the pool-root
+	// continuation-nudge enqueue so the production seam can locate the nudge
+	// store, controller, and poller PID tree. Empty in tests that inject a fake
+	// EnqueuePoolRootNudge.
+	CityPath string
+	// Cfg is the loaded city config, threaded to the pool-root continuation
+	// nudge so maybeStartNudgePoller can honor daemon.nudge_dispatcher =
+	// "supervisor" (a nil cfg reads as legacy mode and would spawn a sidecar
+	// poller that races the supervisor dispatcher) and so the claiming agent's
+	// transport resolves for the ACP guard. Nil in tests that inject a fake.
+	Cfg *config.City
 }
 
 type hookClaimOps struct {
@@ -49,7 +61,9 @@ type hookClaimOps struct {
 	RecordSessionPointers hookRecordSessionPointersFunc
 	// EnqueuePoolRootNudge, when non-nil, is called after a pool graph.v2
 	// workflow root is successfully claimed to enqueue the initial continuation
-	// nudge. Nil skips enqueue (tests that don't exercise this path).
+	// nudge and start its poller. Nil skips enqueue (tests that don't exercise
+	// this path). Faked in unit tests so the production poller/store I/O stays
+	// out of the claim path.
 	EnqueuePoolRootNudge hookEnqueuePoolRootNudgeFunc
 	Now                  func() time.Time
 }
@@ -63,7 +77,7 @@ type (
 	hookResolveWorkBranchFunc     func(dir string) string
 	hookStampWorkBranchFunc       func(ctx context.Context, dir string, env []string, beadID, assignee, branch string) error
 	hookRecordSessionPointersFunc func(ctx context.Context, dir string, env []string, assignee, sessionBeadID, runID, stepID string) error
-	hookEnqueuePoolRootNudgeFunc  func(cityPath, assignee, sessionID, sessionName string) error
+	hookEnqueuePoolRootNudgeFunc  func(cfg *config.City, cityPath, sessionName, sessionID, continuationEpoch string) error
 )
 
 type hookClaimJSONResult struct {
@@ -325,8 +339,14 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 	}
 	result.ContinuationAssigned = assigned
 	if ops.EnqueuePoolRootNudge != nil && isPoolGraphV2WorkflowRoot(bead) {
-		sessionID := strings.TrimSpace(bead.Metadata[beadmeta.SessionIDMetadataKey])
-		if err := ops.EnqueuePoolRootNudge(dir, opts.Assignee, sessionID, opts.Assignee); err != nil {
+		// Fence to the live session generation from the claim env
+		// (GC_SESSION_ID / GC_CONTINUATION_EPOCH) — pool roots carry no
+		// gc.session_id in metadata, so the bead value would be empty. The
+		// real CityPath/Cfg (not the per-store dir) are threaded so the
+		// production seam reaches the city nudge store and honors the
+		// supervisor dispatcher.
+		if err := ops.EnqueuePoolRootNudge(opts.Cfg, opts.CityPath, opts.Assignee,
+			hookClaimSessionID(opts.Env), hookClaimContinuationEpoch(opts.Env)); err != nil {
 			fmt.Fprintf(stderr, "gc hook --claim: pool-root continuation nudge for %s: %v\n", bead.ID, err) //nolint:errcheck
 		}
 	}
@@ -518,6 +538,20 @@ func hookClaimSessionID(env []string) string {
 	return strings.TrimSpace(sessionID)
 }
 
+// hookClaimContinuationEpoch returns the continuation epoch
+// (GC_CONTINUATION_EPOCH) from the claim env. It seeds the pool-root
+// continuation nudge's session fence alongside the session id; empty when unset
+// (the session-id fence alone still binds the nudge to the current generation).
+func hookClaimContinuationEpoch(env []string) string {
+	epoch := ""
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "GC_CONTINUATION_EPOCH" {
+			epoch = v
+		}
+	}
+	return strings.TrimSpace(epoch)
+}
+
 // hookResolveWorkBranch returns the current git branch of dir, or "" when dir
 // is not a worktree or HEAD is detached (no meaningful branch to stamp).
 func hookResolveWorkBranch(dir string) string {
@@ -592,14 +626,40 @@ func isPoolGraphV2WorkflowRoot(bead beads.Bead) bool {
 }
 
 // enqueuePoolRootContinuationNudge enqueues the initial continuation nudge for
-// a self-claimed pool graph.v2 workflow root. The nudge message is a neutral
-// structural signal — it does not reference formula or step content.
-func enqueuePoolRootContinuationNudge(cityPath, _ /*assignee*/, sessionID, sessionName string) error {
-	target := nudgeTarget{
-		cityPath:    cityPath,
-		sessionID:   sessionID,
-		sessionName: sessionName,
+// a self-claimed pool graph.v2 workflow root and starts its per-session poller.
+// The nudge message is a neutral structural signal — it does not reference
+// formula or step content.
+//
+// The target is assembled the same way buildSlingNudgeTarget assembles its
+// target, which is what resolves all three hazards of a hand-built target:
+//   - cfg is threaded so maybeStartNudgePoller honors daemon.nudge_dispatcher =
+//     "supervisor". With a nil cfg, nudgeDispatcherIsSupervisor reports false
+//     and a sidecar `gc nudge poll` would spawn on every pool-root claim,
+//     racing the supervisor dispatcher.
+//   - the resolved agent gives sessionTransport() the data its ACP guard needs,
+//     so an ACP pool session does not get a sidecar poller that cannot deliver.
+//   - withNudgeTargetFence fills SessionID / ContinuationEpoch from the live
+//     session bead so a stale nudge cannot land on a recycled pool slot. The
+//     sessionID / continuationEpoch arguments seed the fence from the claim env
+//     (GC_SESSION_ID / GC_CONTINUATION_EPOCH), matching cmd_prime.go.
+func enqueuePoolRootContinuationNudge(cfg *config.City, cityPath, sessionName, sessionID, continuationEpoch string) error {
+	var agent config.Agent
+	var resolved *config.ResolvedProvider
+	if cfg != nil {
+		if a, ok := resolveAgentIdentity(cfg, sessionName, currentRigContext(cfg)); ok {
+			agent = a
+			resolved, _ = config.ResolveProvider(&agent, &cfg.Workspace, cfg.Providers, exec.LookPath)
+		}
 	}
+	target := withNudgeTargetFence(openNudgeBeadStore(cityPath).Store, nudgeTarget{
+		cityPath:          cityPath,
+		cfg:               cfg,
+		agent:             agent,
+		resolved:          resolved,
+		sessionID:         sessionID,
+		continuationEpoch: continuationEpoch,
+		sessionName:       sessionName,
+	})
 	const msg = "Pool workflow root claimed. Check your work hook for available steps."
 	if err := enqueueQueuedNudge(cityPath, newQueuedNudgeWithOptions(
 		target.agentKey(), msg, "hook-claim", time.Now(), queuedNudgeOptionsFromTarget(target),
