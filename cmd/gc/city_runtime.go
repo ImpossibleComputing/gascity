@@ -2625,14 +2625,14 @@ func poolSweepWouldDrain(sessionBeads *sessionBeadSnapshot, desiredState map[str
 	if sessionBeads == nil || cfg == nil {
 		return false
 	}
-	for _, bead := range sessionBeads.Open() {
-		if bead.Status == "closed" {
+	for _, info := range sessionBeads.OpenInfos() {
+		if info.Closed {
 			continue
 		}
-		if _, desired := desiredState[bead.Metadata["session_name"]]; desired {
+		if _, desired := desiredState[info.SessionNameMetadata]; desired {
 			continue
 		}
-		if isManualSessionBead(bead) || isNamedSessionBead(bead) {
+		if isManualSessionInfo(info) || isNamedSessionInfo(info) {
 			continue
 		}
 		return true

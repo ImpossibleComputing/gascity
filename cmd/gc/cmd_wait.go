@@ -760,8 +760,8 @@ func stampWaitLookupCapDiagnostic(sessFront *sessionpkg.InfoStore, sessionID str
 }
 
 func stampGlobalWaitLookupCapDiagnostics(sessFront *sessionpkg.InfoStore, sessionBeads *sessionBeadSnapshot, err error, now time.Time) {
-	for _, sessionBead := range sessionBeads.Open() {
-		stampWaitLookupCapDiagnostic(sessFront, sessionBead.ID, err, now, "wake-state-global")
+	for _, sessionInfo := range sessionBeads.OpenInfos() {
+		stampWaitLookupCapDiagnostic(sessFront, sessionInfo.ID, err, now, "wake-state-global")
 	}
 }
 
@@ -831,14 +831,14 @@ func loadWaitBeadsForOpenSessionsWithSeen(store beads.Store, sessionBeads *sessi
 		return nil, seen, nil
 	}
 	waits := []beads.Bead(nil)
-	for _, sessionBead := range sessionBeads.Open() {
-		sessionWaits, err := loadSessionWaitBeads(store, sessionBead.ID)
+	for _, sessionInfo := range sessionBeads.OpenInfos() {
+		sessionWaits, err := loadSessionWaitBeads(store, sessionInfo.ID)
 		if err != nil {
 			if !isWaitLookupLimitError(err) {
 				return nil, seen, err
 			}
-			stampWaitLookupCapDiagnostic(sessionFrontDoor(store), sessionBead.ID, err, time.Now().UTC(), "wake-state-session")
-			log.Printf("gc wait: session %s wait lookup capped; continuing with filtered partial waits: %v", sessionBead.ID, err)
+			stampWaitLookupCapDiagnostic(sessionFrontDoor(store), sessionInfo.ID, err, time.Now().UTC(), "wake-state-session")
+			log.Printf("gc wait: session %s wait lookup capped; continuing with filtered partial waits: %v", sessionInfo.ID, err)
 		}
 		for _, wait := range sessionWaits {
 			if seen[wait.ID] {
