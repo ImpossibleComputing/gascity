@@ -81,6 +81,20 @@ func firstMapField(t reflect.Type, seen map[reflect.Type]struct{}, path string) 
 	return ""
 }
 
+// TestStructuredSubagentLineageInliningPending is a skip-marker for a known,
+// spec'd-but-unimplemented gap, so the drift stays visible rather than silent:
+// SessionStructuredMessage reserves IsSubagent and ParentToolCallID for inline
+// subagent nesting, but the structured stream does not yet nest or reference
+// subagent messages in the primary payload (engdocs/design/structured-stream-format.md,
+// "inline subagent nesting"). Remove the skip and assert the lineage fields are
+// populated once inlining lands.
+func TestStructuredSubagentLineageInliningPending(t *testing.T) {
+	// Compile-time anchor: fail loudly if the reserved lineage carriers are
+	// renamed or removed before the feature is implemented.
+	_ = SessionStructuredMessage{IsSubagent: true, ParentToolCallID: "parent-call"}
+	t.Skip("inline subagent nesting not implemented: SessionStructuredMessage.{IsSubagent,ParentToolCallID} are reserved but never populated; see engdocs/design/structured-stream-format.md")
+}
+
 func TestStructuredLeakageGateCatchesInjectedNativeKey(t *testing.T) {
 	clean := sessionTranscriptGetResponse{
 		ID:            "s1",
