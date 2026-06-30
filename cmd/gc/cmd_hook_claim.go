@@ -17,6 +17,16 @@ import (
 
 const hookClaimCommandName = "hook"
 
+const (
+	// hookClaimContinuationNudgeSource is the source tag on the queued nudge
+	// that propels a pool graph.v2 session from root-claim into step 1.
+	hookClaimContinuationNudgeSource = "hook-claim-continuation"
+	// hookClaimContinuationNudgeMessage is the standard propulsion message
+	// delivered to the claiming session after a workflow root is claimed with
+	// continuation siblings pre-assigned.
+	hookClaimContinuationNudgeMessage = "Work slung. Check your hook."
+)
+
 var hookClaimMutationTimeout = 10 * time.Second
 
 type hookClaimOptions struct {
@@ -331,6 +341,11 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 		return 1
 	}
 	result.ContinuationAssigned = assigned
+	if result.Reason == "claimed" &&
+		len(assigned) > 0 &&
+		strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey]) == beadmeta.KindWorkflow {
+		hookClaimEnqueueContinuationNudge(opts, ops, stderr)
+	}
 	if opts.JSON {
 		if err := writeCLIJSONLine(stdout, result); err != nil {
 			fmt.Fprintf(stderr, "gc hook --claim: writing JSON: %v\n", err) //nolint:errcheck
@@ -340,6 +355,24 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 	}
 	fmt.Fprintln(stdout, result.BeadID) //nolint:errcheck
 	return 0
+}
+
+// hookClaimEnqueueContinuationNudge enqueues the per-session nudge that
+// propels a pool graph.v2 session from root-claim into step 1 without operator
+// intervention. Best-effort: enqueue failure is logged but never converts a
+// successful hook claim into a user-visible error.
+func hookClaimEnqueueContinuationNudge(opts hookClaimOptions, ops hookClaimOps, stderr io.Writer) {
+	now := time.Now
+	if ops.Now != nil {
+		now = ops.Now
+	}
+	item := newQueuedNudgeWithOptions(opts.Assignee, hookClaimContinuationNudgeMessage, hookClaimContinuationNudgeSource, now(), queuedNudgeOptions{})
+	if err := ops.EnqueueContinuationNudge(opts.CityPath, item); err != nil {
+		fmt.Fprintf(stderr, "gc hook --claim: enqueue continuation nudge: %v\n", err) //nolint:errcheck
+		return
+	}
+	maybeStartNudgePoller(nudgeTarget{cityPath: opts.CityPath, sessionName: opts.Assignee})
+	_ = pokeController(opts.CityPath)
 }
 
 // writeHookClaimNoWork writes the single drain result for a hook that claimed
