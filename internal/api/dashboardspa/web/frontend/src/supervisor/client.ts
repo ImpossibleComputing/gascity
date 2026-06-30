@@ -142,7 +142,7 @@ export interface SupervisorApi {
     query?: NonNullable<ReplyMailData['query']>,
   ): Promise<Message>;
   cityEventStreamUrl(cityName: string, afterSeq?: string): string;
-  sessionStreamUrl(cityName: string, sessionId: string, after?: string): string;
+  sessionStreamUrl(cityName: string, sessionId: string, after?: string, format?: string): string;
   listSessions(cityName: string): Promise<ListBodySessionResponse>;
   sessionPending(cityName: string, sessionId: string): Promise<SessionPendingResponse>;
   respondSession(
@@ -150,7 +150,11 @@ export interface SupervisorApi {
     sessionId: string,
     body: SessionRespondInputBody,
   ): Promise<RespondSessionResponse>;
-  sessionTranscript(cityName: string, sessionId: string): Promise<SessionTranscriptGetResponse>;
+  sessionTranscript(
+    cityName: string,
+    sessionId: string,
+    format?: string,
+  ): Promise<SessionTranscriptGetResponse>;
   workflowRun(
     cityName: string,
     workflowId: string,
@@ -449,11 +453,14 @@ export function createSupervisorApi(options: CreateSupervisorApiOptions = {}): S
         afterSeq === undefined ? undefined : { after_seq: afterSeq },
       );
     },
-    sessionStreamUrl(cityName, sessionId, after) {
+    sessionStreamUrl(cityName, sessionId, after, format) {
+      const query: Record<string, string> = {};
+      if (after !== undefined) query.after = after;
+      if (format !== undefined) query.format = format;
       return supervisorUrl(
         baseUrl,
         `/v0/city/${encodeURIComponent(cityName)}/session/${encodeURIComponent(sessionId)}/stream`,
-        after === undefined ? undefined : { after },
+        Object.keys(query).length > 0 ? query : undefined,
       );
     },
     listSessions(cityName) {
@@ -485,12 +492,12 @@ export function createSupervisorApi(options: CreateSupervisorApiOptions = {}): S
         'gc supervisor session respond response was empty',
       );
     },
-    sessionTranscript(cityName, sessionId) {
+    sessionTranscript(cityName, sessionId, format) {
       return unwrapSupervisorResult<SessionTranscriptGetResponse>(
         getV0CityByCityNameSessionByIdTranscript({
           client,
           path: { cityName, id: sessionId },
-          query: { format: 'conversation' },
+          query: { format: format ?? 'conversation' },
         }) as Promise<SupervisorResult<SessionTranscriptGetResponse>>,
         'gc supervisor transcript response was empty',
       );
