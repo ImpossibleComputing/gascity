@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/gastownhall/gascity/internal/beadmeta"
+	"github.com/gastownhall/gascity/internal/beads"
 )
 
 func TestSessionProgressStalled(t *testing.T) {
@@ -97,5 +103,60 @@ func TestProgressStall_DemandWorkerLostClaim_IsRecycled(t *testing.T) {
 					tc.min, tc.open, floorExempt, recycled, tc.wantRecycle)
 			}
 		})
+	}
+}
+
+// TestPoolGraphV2AutoAdvance_NudgeEnqueuedAtClaim verifies the full
+// doHookClaim path for a pool-routed graph.v2 workflow root: claiming the root
+// automatically enqueues a continuation nudge so the pool session advances
+// through its formula steps without requiring a manual nudge. This is the
+// mechanism that enables pool graph.v2 auto-advance.
+func TestPoolGraphV2AutoAdvance_NudgeEnqueuedAtClaim(t *testing.T) {
+	root := beads.Bead{
+		ID:     "wf-auto-1",
+		Status: "open",
+		Metadata: map[string]string{
+			beadmeta.KindMetadataKey:              beadmeta.KindWorkflow,
+			beadmeta.FormulaContractMetadataKey:   beadmeta.FormulaContractGraphV2,
+			beadmeta.ContinuationGroupMetadataKey: beadmeta.PoolWorkflowContinuationGroup,
+			beadmeta.RunTargetMetadataKey:         "pool-worker",
+			beadmeta.SessionIDMetadataKey:         "sess-pool-1",
+		},
+	}
+	out, _ := json.Marshal([]beads.Bead{root})
+
+	var nudgeEnqueued bool
+	ops := hookClaimOps{
+		Runner: func(string, string) (string, error) { return string(out), nil },
+		Claim: func(_ context.Context, _ string, _ []string, _, assignee string) (beads.Bead, bool, error) {
+			b := root
+			b.Assignee = assignee
+			b.Status = "in_progress"
+			return b, true, nil
+		},
+		ListContinuation:   func(_ context.Context, _ string, _ []string, _, _ string) ([]beads.Bead, error) { return nil, nil },
+		AssignContinuation: func(_ context.Context, _ string, _ []string, _, _ string) error { return nil },
+		EnqueuePoolRootNudge: func(_, assignee, sessionID, _ string) error {
+			if assignee != "pool-worker" {
+				t.Errorf("nudge assignee = %q, want pool-worker", assignee)
+			}
+			if sessionID != "sess-pool-1" {
+				t.Errorf("nudge sessionID = %q, want sess-pool-1", sessionID)
+			}
+			nudgeEnqueued = true
+			return nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doHookClaim("query", "city-path", hookClaimOptions{
+		Assignee:     "pool-worker",
+		RouteTargets: []string{"pool-worker"},
+	}, ops, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doHookClaim() = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if !nudgeEnqueued {
+		t.Fatal("continuation nudge was not enqueued after claiming pool graph.v2 root; pool session will not auto-advance")
 	}
 }
