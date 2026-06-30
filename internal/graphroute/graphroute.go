@@ -25,10 +25,10 @@ const (
 	GraphExecutionRigContextMetaKey = beadmeta.ExecutionRigContextMetadataKey
 )
 
-// poolWorkflowContinuationGroup is the continuation group value stamped on
-// pool-routed graph.v2 steps so preassignHookContinuationGroup keeps all steps
-// of a molecule on the same pool slot (fixes #2978).
-const poolWorkflowContinuationGroup = "pool-workflow"
+// poolWorkflowContinuationGroup aliases beadmeta.PoolWorkflowContinuationGroup
+// for local use. Exported via beadmeta so cmd/gc can reference it without a
+// graphroute import.
+const poolWorkflowContinuationGroup = beadmeta.PoolWorkflowContinuationGroup
 
 // AgentResolver resolves an agent name to a config.Agent.
 type AgentResolver interface {

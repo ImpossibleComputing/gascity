@@ -47,7 +47,11 @@ type hookClaimOps struct {
 	// AND gc.active_work_bead (the claimed work bead's gc.step_id) — in ONE update, so
 	// the (run, step) tuple stays atomically consistent. Best-effort.
 	RecordSessionPointers hookRecordSessionPointersFunc
-	Now                   func() time.Time
+	// EnqueuePoolRootNudge, when non-nil, is called after a pool graph.v2
+	// workflow root is successfully claimed to enqueue the initial continuation
+	// nudge. Nil skips enqueue (tests that don't exercise this path).
+	EnqueuePoolRootNudge hookEnqueuePoolRootNudgeFunc
+	Now                  func() time.Time
 }
 
 type (
@@ -59,6 +63,7 @@ type (
 	hookResolveWorkBranchFunc     func(dir string) string
 	hookStampWorkBranchFunc       func(ctx context.Context, dir string, env []string, beadID, assignee, branch string) error
 	hookRecordSessionPointersFunc func(ctx context.Context, dir string, env []string, assignee, sessionBeadID, runID, stepID string) error
+	hookEnqueuePoolRootNudgeFunc  func(cityPath, assignee, sessionID, sessionName string) error
 )
 
 type hookClaimJSONResult struct {
@@ -173,6 +178,9 @@ func (ops *hookClaimOps) applyDefaults() {
 	}
 	if ops.RecordSessionPointers == nil {
 		ops.RecordSessionPointers = hookRecordSessionPointersWithBdStore
+	}
+	if ops.EnqueuePoolRootNudge == nil {
+		ops.EnqueuePoolRootNudge = enqueuePoolRootContinuationNudge
 	}
 }
 
@@ -289,6 +297,12 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 		return 1
 	}
 	result.ContinuationAssigned = assigned
+	if ops.EnqueuePoolRootNudge != nil && isPoolGraphV2WorkflowRoot(bead) {
+		sessionID := strings.TrimSpace(bead.Metadata[beadmeta.SessionIDMetadataKey])
+		if err := ops.EnqueuePoolRootNudge(dir, opts.Assignee, sessionID, opts.Assignee); err != nil {
+			fmt.Fprintf(stderr, "gc hook --claim: pool-root continuation nudge for %s: %v\n", bead.ID, err) //nolint:errcheck
+		}
+	}
 	if opts.JSON {
 		if err := writeCLIJSONLine(stdout, result); err != nil {
 			fmt.Fprintf(stderr, "gc hook --claim: writing JSON: %v\n", err) //nolint:errcheck
@@ -529,6 +543,34 @@ func hookRuntimeDrainAck(stderr io.Writer) error {
 	if code := cmdRuntimeDrainAck(nil, false, io.Discard, stderr); code != 0 {
 		return errors.New("runtime drain-ack returned non-zero")
 	}
+	return nil
+}
+
+// isPoolGraphV2WorkflowRoot reports whether bead is a pool-routed graph.v2
+// workflow root that needs an initial continuation nudge at claim time.
+// All three conditions must hold to avoid false positives.
+func isPoolGraphV2WorkflowRoot(bead beads.Bead) bool {
+	return strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey]) == beadmeta.KindWorkflow &&
+		strings.TrimSpace(bead.Metadata[beadmeta.FormulaContractMetadataKey]) == beadmeta.FormulaContractGraphV2 &&
+		strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey]) == beadmeta.PoolWorkflowContinuationGroup
+}
+
+// enqueuePoolRootContinuationNudge enqueues the initial continuation nudge for
+// a self-claimed pool graph.v2 workflow root. The nudge message is a neutral
+// structural signal — it does not reference formula or step content.
+func enqueuePoolRootContinuationNudge(cityPath, _ /*assignee*/, sessionID, sessionName string) error {
+	target := nudgeTarget{
+		cityPath:    cityPath,
+		sessionID:   sessionID,
+		sessionName: sessionName,
+	}
+	const msg = "Pool workflow root claimed. Check your work hook for available steps."
+	if err := enqueueQueuedNudge(cityPath, newQueuedNudgeWithOptions(
+		target.agentKey(), msg, "hook-claim", time.Now(), queuedNudgeOptionsFromTarget(target),
+	)); err != nil {
+		return err
+	}
+	maybeStartNudgePoller(target)
 	return nil
 }
 
