@@ -1,27 +1,29 @@
 package main
 
-// Tests for the hook-claim-continuation nudge enqueue seam (ga-7n7vth.1).
+// Tests for the hook-claim-continuation nudge enqueue seam.
 //
-// These tests define the expected behavior for ga-7n7vth.2:
+// Invariant: gc hook --claim enqueues the hook-claim-continuation nudge exactly
+// when a newly claimed pool graph.v2 workflow root pre-assigns at least one
+// continuation sibling, and never otherwise:
 //
-//   - A newly claimed pool graph.v2 workflow root that pre-assigns at least one
-//     continuation sibling must enqueue exactly one queued nudge with source
-//     "hook-claim-continuation", targeting the claiming session by name, using
-//     the canonical propulsion message.
-//   - Non-workflow step-bead claims must not enqueue the nudge.
-//   - Re-found existing assignments must not enqueue the nudge (idempotence).
-//   - Workflow root claims with zero continuation siblings must not enqueue.
-//
-// All tests that assert the nudge IS enqueued (TestHookClaimWorkflowRootEnqueuesContinuationNudge)
-// fail against the current codebase until ga-7n7vth.2 adds the call site in
-// writeHookClaimWorkResultForBead. Tests that assert the nudge is NOT enqueued
-// pass now and serve as guardrails against over-enqueueing after the fix lands.
+//   - A newly claimed workflow root that pre-assigns at least one continuation
+//     sibling enqueues exactly one queued nudge with source
+//     "hook-claim-continuation", targeting the claiming session by name, fenced
+//     to the session generation (SessionID/ContinuationEpoch from the claim
+//     env), using the canonical propulsion message.
+//   - Non-workflow step-bead claims do not enqueue the nudge.
+//   - Re-found existing assignments do not enqueue the nudge (idempotence): the
+//     session is already active, so a second nudge would only force a redundant
+//     hook re-entry.
+//   - Workflow root claims with zero continuation siblings do not enqueue: there
+//     is nothing to propel into.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
@@ -114,10 +116,14 @@ func TestHookClaimWorkflowRootEnqueuesContinuationNudge(t *testing.T) {
 	ops := captureNudgeOps(t, &calls, root, sibling)
 
 	var stdout, stderr bytes.Buffer
+	// The claim env carries the concrete session generation; the enqueued nudge
+	// must be fenced to it (SessionID/ContinuationEpoch) so a recycled slot that
+	// reuses the runtime session name cannot pick up a stale continuation nudge.
 	code := doHookClaim("query", "", hookClaimOptions{
 		Assignee:           "pool-worker/slot-0",
 		IdentityCandidates: []string{"pool-worker/slot-0"},
 		RouteTargets:       []string{"pool-worker"},
+		Env:                []string{"GC_SESSION_ID=sess-123", "GC_CONTINUATION_EPOCH=2"},
 		JSON:               true,
 	}, ops, &stdout, &stderr)
 	if code != 0 {
@@ -136,6 +142,12 @@ func TestHookClaimWorkflowRootEnqueuesContinuationNudge(t *testing.T) {
 	}
 	if got.Message != hookClaimContinuationNudgeMessage {
 		t.Errorf("nudge.Message = %q, want %q", got.Message, hookClaimContinuationNudgeMessage)
+	}
+	if got.SessionID != "sess-123" {
+		t.Errorf("nudge.SessionID = %q, want %q (session-generation fence)", got.SessionID, "sess-123")
+	}
+	if got.ContinuationEpoch != "2" {
+		t.Errorf("nudge.ContinuationEpoch = %q, want %q (session-generation fence)", got.ContinuationEpoch, "2")
 	}
 }
 
@@ -278,5 +290,100 @@ func TestHookClaimZeroContinuationDoesNotEnqueueContinuationNudge(t *testing.T) 
 
 	if len(calls) != 0 {
 		t.Errorf("EnqueueContinuationNudge called %d times for zero-continuation claim, want 0", len(calls))
+	}
+}
+
+// concreteSlotNudgeTarget builds the nudgeTarget a running pool slot resolves to
+// (mirroring resolveNudgeTargetFromSessionBead): its identity is the pool
+// template name and its sessionName is the concrete slot, so queueKeys() carries
+// BOTH the template and the concrete name.
+func concreteSlotNudgeTarget(sessionID, epoch string) nudgeTarget {
+	return nudgeTarget{
+		cityPath:          "/city",
+		identity:          "pool-worker",        // template name (agent_name/template on the session bead)
+		sessionID:         sessionID,            // concrete generation
+		continuationEpoch: epoch,                //
+		sessionName:       "pool-worker/slot-0", // concrete runtime session
+	}
+}
+
+// TestConcreteSessionMatchesTemplateSlingNudge documents that the pre-existing
+// sling-time nudge — enqueued under the pool TEMPLATE name before the concrete
+// slot existed — is NOT "pruned as undeliverable" for the concrete session.
+// Because a pool slot's queueKeys() includes the template identity, the slot's
+// poller claims the template-named sling nudge just as it claims the
+// concrete-named, fenced continuation nudge. This is the mechanism behind the
+// reviewer's double-nudge concern on PR #3833.
+func TestConcreteSessionMatchesTemplateSlingNudge(t *testing.T) {
+	target := concreteSlotNudgeTarget("sess-123", "2")
+
+	// The sling nudge predates the concrete slot, so it carries the template
+	// agent name and no session fence.
+	slingNudge := queuedNudge{Agent: "pool-worker", Source: "sling", Message: hookClaimContinuationNudgeMessage}
+	// The continuation nudge targets the concrete slot and is fenced to it.
+	continuationNudge := queuedNudge{
+		Agent:             "pool-worker/slot-0",
+		Source:            hookClaimContinuationNudgeSource,
+		Message:           hookClaimContinuationNudgeMessage,
+		SessionID:         "sess-123",
+		ContinuationEpoch: "2",
+	}
+
+	// Claimable: the concrete slot matches BOTH (so the sling nudge is not pruned).
+	if !queuedNudgeClaimableForTarget(target, slingNudge) {
+		t.Errorf("concrete slot does NOT claim the template-named sling nudge; it would if 'pruned as undeliverable' were accurate")
+	}
+	if !queuedNudgeClaimableForTarget(target, continuationNudge) {
+		t.Errorf("concrete slot does not claim its own fenced continuation nudge")
+	}
+	// Delivery fence: both pass for this generation (the unfenced sling nudge is
+	// exempt; the continuation nudge matches sess-123/epoch 2).
+	if !queuedNudgeMatchesTargetFence(target, slingNudge) {
+		t.Errorf("unfenced sling nudge unexpectedly rejected by the generation fence")
+	}
+	if !queuedNudgeMatchesTargetFence(target, continuationNudge) {
+		t.Errorf("fenced continuation nudge rejected by its own generation fence")
+	}
+
+	// The two nudges differ in Source and neither carries a Reference, so the
+	// (agent, source, reference) supersession at enqueue cannot collapse them.
+	if slingNudge.Source == continuationNudge.Source {
+		t.Errorf("test premise broken: sources should differ (%q vs %q)", slingNudge.Source, continuationNudge.Source)
+	}
+	if continuationNudge.Reference != nil {
+		t.Errorf("continuation nudge has a Reference %v; it must be nil so the test reflects production", continuationNudge.Reference)
+	}
+
+	// A recycled slot (new session id) must NOT pick up the fenced continuation nudge.
+	recycled := concreteSlotNudgeTarget("sess-999", "1")
+	if queuedNudgeClaimableForTarget(recycled, continuationNudge) {
+		t.Errorf("recycled slot (sess-999) wrongly claims a continuation nudge fenced to sess-123")
+	}
+}
+
+// TestSlingAndContinuationNudgesCoalesceForConcreteSession documents the
+// mitigating reality behind the double-nudge concern: when the poller claims
+// both the template sling nudge and the concrete continuation nudge in one tick,
+// tryDeliverQueuedNudgesByPoller renders them through formatNudgeInjectOutput
+// into a SINGLE delivered message (one hook re-entry), not two separate wakes.
+// The two identical "Work slung" lines are cosmetic, not a double propulsion.
+func TestSlingAndContinuationNudgesCoalesceForConcreteSession(t *testing.T) {
+	items := []queuedNudge{
+		{Agent: "pool-worker", Source: "sling", Message: hookClaimContinuationNudgeMessage},
+		{Agent: "pool-worker/slot-0", Source: hookClaimContinuationNudgeSource, Message: hookClaimContinuationNudgeMessage, SessionID: "sess-123"},
+	}
+	out := formatNudgeInjectOutput(items)
+
+	if got := strings.Count(out, "</system-reminder>"); got != 1 {
+		t.Errorf("formatNudgeInjectOutput emitted %d reminder blocks, want 1 (single coalesced delivery):\n%s", got, out)
+	}
+	if !strings.Contains(out, "[sling]") {
+		t.Errorf("coalesced message missing the sling source tag:\n%s", out)
+	}
+	if !strings.Contains(out, "["+hookClaimContinuationNudgeSource+"]") {
+		t.Errorf("coalesced message missing the continuation source tag:\n%s", out)
+	}
+	if got := strings.Count(out, hookClaimContinuationNudgeMessage); got != 2 {
+		t.Errorf("coalesced message contains the propulsion line %d times, want 2 (both nudges, one delivery):\n%s", got, out)
 	}
 }
