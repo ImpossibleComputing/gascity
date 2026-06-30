@@ -53,16 +53,7 @@ func TestHandleExtMsgInboundDefaultRouteBindsAndColdWakes(t *testing.T) {
 	}
 
 	// The notify fan-out cold-wakes the routed agent's named session.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if id, err := session.ResolveSessionID(fs.cityBeadStore, "myrig/worker"); err == nil && id != "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for default-routed inbound to cold-wake myrig/worker")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	awaitColdWakeMaterialized(t, fs, "myrig/worker")
 }
 
 func TestHandleExtMsgInboundDefaultRouteMatchesMixedCaseProvider(t *testing.T) {
@@ -107,6 +98,12 @@ func TestHandleExtMsgInboundDefaultRouteMatchesMixedCaseProvider(t *testing.T) {
 	if binding == nil || binding.AgentName != "myrig/worker" {
 		t.Fatalf("binding = %#v, want sticky agent binding myrig/worker", binding)
 	}
+
+	// A successfully routed inbound message cold-wakes the agent's named
+	// session in a detached goroutine. Wait for that to finish before the test
+	// returns; otherwise t.TempDir() cleanup races the session-name-lock write
+	// (see awaitColdWakeMaterialized).
+	awaitColdWakeMaterialized(t, fs, "myrig/worker")
 }
 
 func TestHandleExtMsgInboundDefaultRouteUnknownAgentStaysUnbound(t *testing.T) {
@@ -142,5 +139,29 @@ func TestHandleExtMsgInboundDefaultRouteUnknownAgentStaysUnbound(t *testing.T) {
 	}
 	if binding != nil {
 		t.Fatalf("binding = %#v, want none for unresolvable route agent", binding)
+	}
+}
+
+// awaitColdWakeMaterialized blocks until the detached inbound cold-wake
+// goroutine (dispatched as `go s.extmsgNotifyInboundMembers` in
+// huma_handlers_extmsg.go) has materialized agentName's named session. That
+// goroutine reserves session-name locks under <city>/.gc/session-name-locks
+// while creating the session bead. A test that posts a default-routed inbound
+// message and returns without waiting lets t.TempDir()'s RemoveAll race that
+// lock-file creation, failing cleanup with "directory not empty". Resolving the
+// session confirms the reservation has completed, so the lock dir is stable
+// before teardown. This is the same barrier TestHandleExtMsgInboundDefaultRoute
+// BindsAndColdWakes already relies on.
+func awaitColdWakeMaterialized(t *testing.T, fs *fakeState, agentName string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if id, err := session.ResolveSessionID(fs.cityBeadStore, agentName); err == nil && id != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for default-routed inbound to cold-wake %s", agentName)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
