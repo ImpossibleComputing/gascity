@@ -12,6 +12,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
 )
 
@@ -40,6 +41,12 @@ type hookClaimOptions struct {
 	// enqueue seam so the production implementation can locate the nudge store.
 	// Empty in tests that inject a fake EnqueueContinuationNudge.
 	CityPath string
+	// Cfg is the loaded city config, threaded to the continuation-nudge poller
+	// so maybeStartNudgePoller can honor daemon.nudge_dispatcher = "supervisor"
+	// (a nil cfg reads as legacy mode and would start a sidecar poller that
+	// races the supervisor dispatcher). Nil in tests that short-circuit on an
+	// empty CityPath before the poller is reached.
+	Cfg *config.City
 }
 
 type hookClaimOps struct {
@@ -63,10 +70,10 @@ type hookClaimOps struct {
 	RecordSessionPointers hookRecordSessionPointersFunc
 	// EnqueueContinuationNudge enqueues the hook-claim-continuation nudge that
 	// propels a pool graph.v2 session from root-claim into step 1 without
-	// operator intervention. Called when a new workflow root is claimed and at
-	// least one continuation sibling was pre-assigned. Best-effort; enqueue
-	// failure is logged but never blocks the claim. See ga-7n7vth.2 for the
-	// call site that activates this seam in production.
+	// operator intervention. Called from writeHookClaimWorkResultForBead when a
+	// new workflow root is claimed and at least one continuation sibling was
+	// pre-assigned. Best-effort; enqueue failure is logged but never blocks the
+	// claim.
 	EnqueueContinuationNudge hookEnqueueContinuationNudgeFunc
 	Now                      func() time.Time
 }
@@ -366,18 +373,64 @@ func hookClaimEnqueueContinuationNudge(opts hookClaimOptions, ops hookClaimOps, 
 	if ops.Now != nil {
 		now = ops.Now
 	}
-	item := newQueuedNudgeWithOptions(opts.Assignee, hookClaimContinuationNudgeMessage, hookClaimContinuationNudgeSource, now(), queuedNudgeOptions{})
+	// Fence the nudge to this concrete session generation, reading the session
+	// id and continuation epoch from the claim env the same way the rest of the
+	// claim path reads GC_SESSION_ID. Every other newQueuedNudgeWithOptions
+	// caller passes this fence; without it a continuation nudge enqueued for
+	// pool-worker/slot-0 stays claimable by a later generation that reuses the
+	// same runtime session name after a recycle.
+	sessionID := hookClaimSessionID(opts.Env)
+	continuationEpoch := hookClaimContinuationEpoch(opts.Env)
+	item := newQueuedNudgeWithOptions(opts.Assignee, hookClaimContinuationNudgeMessage, hookClaimContinuationNudgeSource, now(), queuedNudgeOptions{
+		SessionID:         sessionID,
+		ContinuationEpoch: continuationEpoch,
+	})
 	if err := ops.EnqueueContinuationNudge(opts.CityPath, item); err != nil {
 		fmt.Fprintf(stderr, "gc hook --claim: enqueue continuation nudge: %v\n", err) //nolint:errcheck
 		return
 	}
+	// With no city path there is no nudge poller PID tree, controller socket, or
+	// supervisor to reach: the enqueue seam above is faked in tests and the
+	// production caller always threads a real city path. Returning here keeps
+	// the unit path free of process spawning and controller/supervisor I/O,
+	// matching the cityPath guard in rollbackQueuedNudge/existingPollerPID.
+	if opts.CityPath == "" {
+		return
+	}
+	// cfg is threaded so the supervisor-dispatcher guard inside
+	// maybeStartNudgePoller fires: in supervisor mode the dispatcher owns queued
+	// delivery and a sidecar poller would race it (nudgeDispatcherIsSupervisor
+	// reads target.cfg, so a nil cfg silently defeats the guard). sessionID and
+	// continuationEpoch give the poller the concrete-generation key, matching
+	// the canonical launch in cmd_prime.go.
+	//
 	// ACP note: maybeStartNudgePoller returns early without transport context
 	// when the target session uses the ACP runtime. In that case the queued
 	// nudge is delivered only at the next hook-drain, not by a sidecar poller.
 	// Configure daemon.nudge_dispatcher = "supervisor" for reliable queued
 	// delivery to ACP sessions.
-	maybeStartNudgePoller(nudgeTarget{cityPath: opts.CityPath, sessionName: opts.Assignee})
+	maybeStartNudgePoller(nudgeTarget{
+		cityPath:          opts.CityPath,
+		cfg:               opts.Cfg,
+		sessionID:         sessionID,
+		continuationEpoch: continuationEpoch,
+		sessionName:       opts.Assignee,
+	})
 	_ = pokeController(opts.CityPath)
+}
+
+// hookClaimContinuationEpoch returns the continuation epoch
+// (GC_CONTINUATION_EPOCH) from the claim env, used alongside the session id to
+// fence the continuation nudge to this session generation. Empty when unset —
+// the session-id fence alone still binds the nudge to the current generation.
+func hookClaimContinuationEpoch(env []string) string {
+	epoch := ""
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "GC_CONTINUATION_EPOCH" {
+			epoch = v
+		}
+	}
+	return strings.TrimSpace(epoch)
 }
 
 // writeHookClaimNoWork writes the single drain result for a hook that claimed
