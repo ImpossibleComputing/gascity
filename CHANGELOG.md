@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pool graph.v2 sessions no longer idle after claiming a workflow root.**
+  `gc hook --claim` now enqueues a queued nudge to the concrete claiming session
+  (e.g. `pool-worker/slot-0`) when it newly claims a workflow root and
+  pre-assigns at least one continuation sibling. Previously the sling-time nudge
+  targeted the pool template name, which is pruned as undeliverable once the
+  concrete session exists, leaving the session idle until manual operator
+  intervention via `gc session nudge`.
+
+  **ACP operator note:** in default (non-supervisor) dispatcher mode, the
+  hook-claim nudge is delivered by a sidecar poller for tmux/subprocess sessions.
+  ACP sessions do not support a sidecar poller; the nudge will be consumed at
+  the next hook-drain instead. For reliable ACP queued delivery, configure:
+
+  ```toml
+  [daemon]
+  nudge_dispatcher = "supervisor"
+  ```
+
+  **In-flight sizing:** with `nudge_dispatcher = "supervisor"`, plan capacity
+  for `max_concurrent_formulas × (1 + max_parallel_steps)` in-flight sessions.
+  A typical graph.v2 run holds one workflow root plus one active step; a formula
+  with two parallel steps holds one root plus two active steps at peak.
+
 - **Pin the `beads` dependency to the stable v1.0.4.** v1.3.0 built against
   `beads v1.0.5`, which was subsequently withdrawn (demoted to a pre-release;
   `v1.0.4` is the current stable release). v1.3.1 repins the `beads` Go module

@@ -371,6 +371,11 @@ func hookClaimEnqueueContinuationNudge(opts hookClaimOptions, ops hookClaimOps, 
 		fmt.Fprintf(stderr, "gc hook --claim: enqueue continuation nudge: %v\n", err) //nolint:errcheck
 		return
 	}
+	// ACP note: maybeStartNudgePoller returns early without transport context
+	// when the target session uses the ACP runtime. In that case the queued
+	// nudge is delivered only at the next hook-drain, not by a sidecar poller.
+	// Configure daemon.nudge_dispatcher = "supervisor" for reliable queued
+	// delivery to ACP sessions.
 	maybeStartNudgePoller(nudgeTarget{cityPath: opts.CityPath, sessionName: opts.Assignee})
 	_ = pokeController(opts.CityPath)
 }
