@@ -327,6 +327,12 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 		return 1
 	}
 	result.ContinuationAssigned = assigned
+	// KindWorkflow is sufficient: internal/formula/compile.go is the sole
+	// writer of gc.kind=workflow (line 352) and only does so for graph.v2
+	// formula roots, so KindWorkflow implies graph.v2. gc.continuation_group
+	// is set exclusively on the pool-routing path (internal/graphroute), so
+	// any KindWorkflow root with pre-assigned continuation steps is a
+	// pool-workflow root — the exact case that needs the nudge.
 	if len(assigned) > 0 && bead.Metadata[beadmeta.KindMetadataKey] == beadmeta.KindWorkflow {
 		ops.EnqueueContinuationNudge(opts.Assignee)
 	}
