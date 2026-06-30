@@ -27,11 +27,6 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
-const (
-	hookClaimContinuationNudgeSource  = "hook-claim-continuation"
-	hookClaimContinuationNudgeMessage = "Work slung. Check your hook."
-)
-
 // makeWorkflowRootBead returns a bead shaped like a pool graph.v2 workflow root
 // ready to be claimed: gc.kind=workflow, gc.run_target pointing at the pool
 // template, and gc.root_bead_id / gc.continuation_group so pre-assignment runs.
@@ -107,24 +102,13 @@ func captureNudgeOps(t *testing.T, calls *[]queuedNudge, bead beads.Bead, siblin
 // new pool graph.v2 workflow root with at least one pre-assigned continuation
 // sibling enqueues exactly one queued nudge with the canonical propulsion
 // semantics (source, message, agent equal to the claiming session name).
-//
-// This test is skipped until ga-7n7vth.2 removes the t.Skip call below and
-// adds the production call site in writeHookClaimWorkResultForBead. After the
-// Skip is removed this test will fail (RED) until the call site is added, then
-// pass (GREEN). That is the intended TDD sequence.
 func TestHookClaimWorkflowRootEnqueuesContinuationNudge(t *testing.T) {
-	t.Skip("ga-7n7vth.2: remove this Skip and add the EnqueueContinuationNudge call site in writeHookClaimWorkResultForBead")
 	root := makeWorkflowRootBead("root-1", "pool-worker", "root-1", "group-a")
-	sibling := beads.Bead{
-		ID:     "step-1",
-		Status: "open",
-		Metadata: map[string]string{
-			"gc.kind":               "step",
-			"gc.run_target":         "pool-worker",
-			"gc.root_bead_id":       "root-1",
-			"gc.continuation_group": "group-a",
-		},
-	}
+	// Continuation siblings in a graph.v2 formula use gc.kind=workflow and gc.run_target
+	// for pre-assignment routing — the same shape as the root, just a different bead ID.
+	// preassignHookContinuationGroup uses hookClaimMatchesRoute to filter, which only
+	// matches unrouted beads via run_target when gc.kind=workflow.
+	sibling := makeWorkflowRootBead("step-1", "pool-worker", "root-1", "group-a")
 
 	var calls []queuedNudge
 	ops := captureNudgeOps(t, &calls, root, sibling)
