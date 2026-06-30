@@ -2151,7 +2151,7 @@ func reapRuntimesBoundToClosedBeads(
 
 		// A runtime whose bead is still open is healthy (or is mid-wake and
 		// will be); the snapshot holds only open beads, so a hit means leave it.
-		if _, ok := sessionBeads.FindByID(liveID); ok {
+		if _, ok := sessionBeads.FindInfoByID(liveID); ok {
 			continue
 		}
 
