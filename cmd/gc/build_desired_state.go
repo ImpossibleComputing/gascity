@@ -1326,8 +1326,8 @@ func expandSkipAssigneesWithSessionIdentities(skip map[string]struct{}, sessionB
 	if len(skip) == 0 || sessionBeads == nil {
 		return
 	}
-	for _, session := range sessionBeads.Open() {
-		ids := sessionBeadAssigneeIdentities(session)
+	for _, info := range sessionBeads.OpenInfos() {
+		ids := sessionBeadAssigneeIdentitiesInfo(info)
 		matched := false
 		for _, id := range ids {
 			if _, ok := skip[id]; ok {
@@ -1362,11 +1362,11 @@ func readyAssignedWorkAssignees(cfg *config.City, sessionBeads *sessionBeadSnaps
 		result = append(result, value)
 	}
 	if sessionBeads != nil {
-		for _, session := range sessionBeads.Open() {
-			if session.Status == "closed" {
+		for _, info := range sessionBeads.OpenInfos() {
+			if info.Closed {
 				continue
 			}
-			for _, id := range sessionBeadAssigneeIdentities(session) {
+			for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
 				add(id)
 			}
 		}
@@ -1733,13 +1733,13 @@ func retainScaleCheckPartialPoolDesired(cfg *config.City, counts map[string]int,
 		return counts
 	}
 	retained := make(map[string]int)
-	for _, b := range sessionBeads.Open() {
+	for _, info := range sessionBeads.OpenInfos() {
 		// Adopted session beads can persist a legacy bound template identity;
 		// normalize to the current canonical name before the membership check,
 		// because partialTemplates is keyed canonically. Without this a transient
 		// scale_check partial failure would drop legacy-bound pool sessions.
-		template := normalizeAgentTemplateIdentity(cfg, strings.TrimSpace(b.Metadata["template"]))
-		if !partialTemplates[template] || !isPoolManagedSessionBead(b) || !scaleCheckPartialSessionRetainable(b) {
+		template := normalizeAgentTemplateIdentity(cfg, strings.TrimSpace(info.Template))
+		if !partialTemplates[template] || !isPoolManagedSessionInfo(info) || !scaleCheckPartialSessionRetainableInfo(info) {
 			continue
 		}
 		retained[template]++
@@ -1780,6 +1780,19 @@ func scaleCheckPartialSessionRetainable(b beads.Bead) bool {
 		// lease counts as retained capacity. Stale creates (lease expired/cleared)
 		// return false so they stop inflating the desired count.
 		return isPendingPoolCreate(b)
+	}
+}
+
+// scaleCheckPartialSessionRetainableInfo is the session.Info mirror of
+// scaleCheckPartialSessionRetainable: it reads the raw state metadata
+// (Info.MetadataState) and delegates the in-flight-create case to
+// isPendingPoolCreateInfo.
+func scaleCheckPartialSessionRetainableInfo(i session.Info) bool {
+	switch strings.TrimSpace(i.MetadataState) {
+	case "active", "awake":
+		return true
+	default:
+		return isPendingPoolCreateInfo(i)
 	}
 }
 

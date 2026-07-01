@@ -430,19 +430,20 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		bead func(beads.Bead) bool
 		info func(session.Info) bool
 	}{
-		"isPoolManagedSessionBead":        {isPoolManagedSessionBead, isPoolManagedSessionInfo},
-		"isEphemeralSessionBead":          {isEphemeralSessionBead, isEphemeralSessionInfo},
-		"isManualSessionBead":             {isManualSessionBead, isManualSessionInfo},
-		"isNamedSessionBead":              {isNamedSessionBead, isNamedSessionInfo},
-		"isDrainedSessionBead":            {isDrainedSessionBead, isDrainedSessionInfo},
-		"isFailedCreateSessionBead":       {isFailedCreateSessionBead, isFailedCreateSessionInfo},
-		"isPendingPoolCreate":             {isPendingPoolCreate, isPendingPoolCreateInfo},
-		"isStaleCreating":                 {isStaleCreating, isStaleCreatingInfo},
-		"isKnownState":                    {isKnownState, isKnownStateInfo},
-		"isPoolSessionSlotFreeable":       {isPoolSessionSlotFreeable, isPoolSessionSlotFreeableInfo},
-		"beadOwnsPoolSessionName":         {beadOwnsPoolSessionName, infoOwnsPoolSessionName},
-		"sessionHasProviderTerminalError": {sessionHasProviderTerminalError, sessionHasProviderTerminalErrorInfo},
-		"poolSessionConsumesNewDemand":    {poolSessionConsumesNewDemand, poolSessionConsumesNewDemandInfo},
+		"isPoolManagedSessionBead":           {isPoolManagedSessionBead, isPoolManagedSessionInfo},
+		"isEphemeralSessionBead":             {isEphemeralSessionBead, isEphemeralSessionInfo},
+		"isManualSessionBead":                {isManualSessionBead, isManualSessionInfo},
+		"isNamedSessionBead":                 {isNamedSessionBead, isNamedSessionInfo},
+		"isDrainedSessionBead":               {isDrainedSessionBead, isDrainedSessionInfo},
+		"isFailedCreateSessionBead":          {isFailedCreateSessionBead, isFailedCreateSessionInfo},
+		"isPendingPoolCreate":                {isPendingPoolCreate, isPendingPoolCreateInfo},
+		"isStaleCreating":                    {isStaleCreating, isStaleCreatingInfo},
+		"isKnownState":                       {isKnownState, isKnownStateInfo},
+		"isPoolSessionSlotFreeable":          {isPoolSessionSlotFreeable, isPoolSessionSlotFreeableInfo},
+		"beadOwnsPoolSessionName":            {beadOwnsPoolSessionName, infoOwnsPoolSessionName},
+		"sessionHasProviderTerminalError":    {sessionHasProviderTerminalError, sessionHasProviderTerminalErrorInfo},
+		"poolSessionConsumesNewDemand":       {poolSessionConsumesNewDemand, poolSessionConsumesNewDemandInfo},
+		"scaleCheckPartialSessionRetainable": {scaleCheckPartialSessionRetainable, scaleCheckPartialSessionRetainableInfo},
 	}
 
 	// Agent-dependent classifiers. A bare pool agent (no instance-expansion, no
