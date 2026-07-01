@@ -463,20 +463,21 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		bead func(beads.Bead) bool
 		info func(session.Info) bool
 	}{
-		"isPoolManagedSessionBead":           {isPoolManagedSessionBead, isPoolManagedSessionInfo},
-		"isEphemeralSessionBead":             {isEphemeralSessionBead, isEphemeralSessionInfo},
-		"isManualSessionBead":                {isManualSessionBead, isManualSessionInfo},
-		"isNamedSessionBead":                 {isNamedSessionBead, isNamedSessionInfo},
-		"isDrainedSessionBead":               {isDrainedSessionBead, isDrainedSessionInfo},
-		"isFailedCreateSessionBead":          {isFailedCreateSessionBead, isFailedCreateSessionInfo},
-		"isPendingPoolCreate":                {isPendingPoolCreate, isPendingPoolCreateInfo},
-		"isStaleCreating":                    {isStaleCreating, isStaleCreatingInfo},
-		"isKnownState":                       {isKnownState, isKnownStateInfo},
-		"isPoolSessionSlotFreeable":          {isPoolSessionSlotFreeable, isPoolSessionSlotFreeableInfo},
-		"beadOwnsPoolSessionName":            {beadOwnsPoolSessionName, infoOwnsPoolSessionName},
-		"sessionHasProviderTerminalError":    {sessionHasProviderTerminalError, sessionHasProviderTerminalErrorInfo},
-		"poolSessionConsumesNewDemand":       {poolSessionConsumesNewDemand, poolSessionConsumesNewDemandInfo},
-		"scaleCheckPartialSessionRetainable": {scaleCheckPartialSessionRetainable, scaleCheckPartialSessionRetainableInfo},
+		"isPoolManagedSessionBead":            {isPoolManagedSessionBead, isPoolManagedSessionInfo},
+		"isEphemeralSessionBead":              {isEphemeralSessionBead, isEphemeralSessionInfo},
+		"isManualSessionBead":                 {isManualSessionBead, isManualSessionInfo},
+		"isNamedSessionBead":                  {isNamedSessionBead, isNamedSessionInfo},
+		"isDrainedSessionBead":                {isDrainedSessionBead, isDrainedSessionInfo},
+		"isFailedCreateSessionBead":           {isFailedCreateSessionBead, isFailedCreateSessionInfo},
+		"isPendingPoolCreate":                 {isPendingPoolCreate, isPendingPoolCreateInfo},
+		"isStaleCreating":                     {isStaleCreating, isStaleCreatingInfo},
+		"isKnownState":                        {isKnownState, isKnownStateInfo},
+		"isPoolSessionSlotFreeable":           {isPoolSessionSlotFreeable, isPoolSessionSlotFreeableInfo},
+		"beadOwnsPoolSessionName":             {beadOwnsPoolSessionName, infoOwnsPoolSessionName},
+		"sessionHasProviderTerminalError":     {sessionHasProviderTerminalError, sessionHasProviderTerminalErrorInfo},
+		"poolSessionConsumesNewDemand":        {poolSessionConsumesNewDemand, poolSessionConsumesNewDemandInfo},
+		"scaleCheckPartialSessionRetainable":  {scaleCheckPartialSessionRetainable, scaleCheckPartialSessionRetainableInfo},
+		"scaleCheckPartialSessionPreservable": {scaleCheckPartialSessionPreservable, scaleCheckPartialSessionPreservableInfo},
 	}
 
 	// Agent-dependent classifiers. A bare pool agent (no instance-expansion, no
@@ -498,6 +499,29 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"isManualSessionBeadForAgent": {
 			func(b beads.Bead) bool { return isManualSessionBeadForAgent(b, agentFixture) },
 			func(i session.Info) bool { return isManualSessionInfoForAgent(i, agentFixture) },
+		},
+		// A non-canonical-singleton agent exercises the identical
+		// UsesCanonicalSingletonPoolIdentity() short-circuit (both forms → false)
+		// on every shape.
+		"staleNonExpandingPoolSessionBead": {
+			func(b beads.Bead) bool { return staleNonExpandingPoolSessionBead(agentFixture, b) },
+			func(i session.Info) bool { return staleNonExpandingPoolSessionBeadInfo(agentFixture, i) },
+		},
+	}
+
+	// singletonAgent is a canonical-singleton pool agent (max=1, no namepool);
+	// UsesCanonicalSingletonPoolIdentity() returns true for it, so it drives the
+	// non-short-circuit branches of staleNonExpandingPoolSessionBead: the
+	// agent_name/label/alias/title identity-slot matches, the pool_slot fallback,
+	// and the manual-session exclusion.
+	singletonAgent := &config.Agent{Name: "worker", MaxActiveSessions: intPtr(1)}
+	singletonAgentBoolChecks := map[string]struct {
+		bead func(beads.Bead) bool
+		info func(session.Info) bool
+	}{
+		"staleNonExpandingPoolSessionBead[singleton]": {
+			func(b beads.Bead) bool { return staleNonExpandingPoolSessionBead(singletonAgent, b) },
+			func(i session.Info) bool { return staleNonExpandingPoolSessionBeadInfo(singletonAgent, i) },
 		},
 	}
 	agentIntChecks := map[string]struct {
@@ -611,6 +635,11 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				}
 			}
 			for name, c := range agentBoolChecks {
+				if got, want := c.info(info), c.bead(b); got != want {
+					t.Errorf("%s: info=%v bead=%v", name, got, want)
+				}
+			}
+			for name, c := range singletonAgentBoolChecks {
 				if got, want := c.info(info), c.bead(b); got != want {
 					t.Errorf("%s: info=%v bead=%v", name, got, want)
 				}
