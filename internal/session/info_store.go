@@ -86,17 +86,19 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		// state / bookkeeping cluster. MetadataState is the RAW state metadata,
 		// kept verbatim so the reconciler classifiers read the same value the
 		// bead carried (Info.State above is the normalized, closed-blanked form).
-		MetadataState:          b.Metadata["state"],
-		SessionNameMetadata:    b.Metadata["session_name"],
-		PendingCreateClaim:     strings.TrimSpace(b.Metadata["pending_create_claim"]) == "true",
-		PendingCreateStartedAt: b.Metadata["pending_create_started_at"],
-		QuarantinedUntil:       b.Metadata["quarantined_until"],
-		AliasHistory:           AliasHistory(b.Metadata),
-		ContinuityEligible:     b.Metadata["continuity_eligible"],
-		TransportMetadata:      b.Metadata["transport"],
-		LastWokeAt:             b.Metadata["last_woke_at"],
-		StateReason:            b.Metadata["state_reason"],
-		CreationCompleteAt:     b.Metadata["creation_complete_at"],
+		MetadataState:            b.Metadata["state"],
+		SessionNameMetadata:      b.Metadata["session_name"],
+		PendingCreateClaim:       strings.TrimSpace(b.Metadata["pending_create_claim"]) == "true",
+		PendingCreateStartedAt:   b.Metadata["pending_create_started_at"],
+		QuarantinedUntil:         b.Metadata["quarantined_until"],
+		AliasHistory:             AliasHistory(b.Metadata),
+		ContinuityEligible:       b.Metadata["continuity_eligible"],
+		TransportMetadata:        b.Metadata["transport"],
+		LastWokeAt:               b.Metadata["last_woke_at"],
+		StateReason:              b.Metadata["state_reason"],
+		CreationCompleteAt:       b.Metadata["creation_complete_at"],
+		ContinuationResetPending: b.Metadata["continuation_reset_pending"],
+		ResetCommittedAt:         b.Metadata[ResetCommittedAtKey],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n

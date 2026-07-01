@@ -212,6 +212,14 @@ type Info struct {
 	// empty). The pool sweep parses it to age out the post-create protection
 	// window; a missing/zero value is treated as stale (sweepable).
 	CreationCompleteAt string // creation_complete_at (raw)
+	// ContinuationResetPending is the RAW continuation_reset_pending metadata.
+	// The reconciler's restart-handoff path branches on it (trimmed) == "true"
+	// via resetPendingCommittedAt; the Info mirror keeps the raw value.
+	ContinuationResetPending string // continuation_reset_pending (raw)
+	// ResetCommittedAt is the RAW reset_committed_at metadata (RFC3339 or empty),
+	// the durable marker for when a restart handoff committed. resetPendingCommittedAt
+	// parses it; the Info mirror keeps the raw value.
+	ResetCommittedAt string // reset_committed_at (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

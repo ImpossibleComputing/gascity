@@ -115,6 +115,25 @@ func resetPendingCommittedAt(session beads.Bead) (string, time.Time, bool) {
 	return raw, committedAt, true
 }
 
+// resetPendingCommittedAtInfo is the session.Info mirror of
+// resetPendingCommittedAt: it reads the raw continuation_reset_pending and
+// reset_committed_at markers (Info.ContinuationResetPending / Info.ResetCommittedAt)
+// with the same trim + RFC3339 parse rules.
+func resetPendingCommittedAtInfo(info sessionpkg.Info) (string, time.Time, bool) {
+	if strings.TrimSpace(info.ContinuationResetPending) != "true" {
+		return "", time.Time{}, false
+	}
+	raw := strings.TrimSpace(info.ResetCommittedAt)
+	if raw == "" {
+		return "", time.Time{}, false
+	}
+	committedAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return raw, committedAt, true
+}
+
 func recordResetStallIfDue(
 	session beads.Bead,
 	template string,

@@ -455,6 +455,53 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				beadmeta.BrainParentSIDMetadataKey:      "brain-1",
 			},
 		},
+		"reset-pending-committed": {
+			// continuation_reset_pending=true + a valid reset_committed_at:
+			// resetPendingCommittedAt returns the raw ts + parsed time + true.
+			ID:     "ga-resetpending",
+			Type:   session.BeadType,
+			Title:  "resetpending",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                   "worker",
+				"continuation_reset_pending": "true",
+				session.ResetCommittedAtKey:  pastRFC3339,
+			},
+		},
+		"reset-pending-no-committed": {
+			// pending but no reset_committed_at → not pending (empty-raw branch).
+			ID:     "ga-resetnocommit",
+			Type:   session.BeadType,
+			Title:  "resetnocommit",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                   "worker",
+				"continuation_reset_pending": "true",
+			},
+		},
+		"reset-pending-invalid-committed": {
+			// pending but reset_committed_at is not RFC3339 → parse-error branch.
+			ID:     "ga-resetbad",
+			Type:   session.BeadType,
+			Title:  "resetbad",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                   "worker",
+				"continuation_reset_pending": "true",
+				session.ResetCommittedAtKey:  "not-a-timestamp",
+			},
+		},
+		"reset-not-pending": {
+			// reset_committed_at set but pending!=true → short-circuit false.
+			ID:     "ga-resetnotpending",
+			Type:   session.BeadType,
+			Title:  "resetnotpending",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                  "worker",
+				session.ResetCommittedAtKey: pastRFC3339,
+			},
+		},
 	}
 
 	const tmpl = "worker"
@@ -678,6 +725,13 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				if got, want := c.info(info), c.bead(b); !reflect.DeepEqual(got, want) {
 					t.Errorf("%s: info=%v bead=%v", name, got, want)
 				}
+			}
+			// resetPendingCommittedAt returns a (raw, parsed-time, pending) tuple,
+			// so it can't ride the scalar check maps — compare all three fields.
+			rawS, rawT, rawOK := resetPendingCommittedAt(b)
+			infoS, infoT, infoOK := resetPendingCommittedAtInfo(info)
+			if rawS != infoS || !rawT.Equal(infoT) || rawOK != infoOK {
+				t.Errorf("resetPendingCommittedAt: info=(%q,%v,%v) bead=(%q,%v,%v)", infoS, infoT, infoOK, rawS, rawT, rawOK)
 			}
 		})
 	}
