@@ -6,7 +6,7 @@ Paste the block below into a fresh session.
 
 Continue the non-work-bead field-door cleanup on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
-`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `f3ef21be4`).
+`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `f38938195`).
 
 **Read first, in order:** `engdocs/plans/infra-store-decouple/P4-CASCADE-HANDOFF.md`
 (the execution guide — the landed "Cascade session" block, the updated Suggested
@@ -23,31 +23,36 @@ raw. This is the precondition for a per-class backend swap.
 
 **What's DONE (this stack):** foundation P1–P3 (Info codec + `*Info` classifier
 siblings + typed snapshot accessors, equivalence-proven), the P4 LOCALIZED slice,
-the P6 read-guard, and — most recently — **the pool-demand cascade** (biggest
-unlock): providers ACP slice, assigned-work scope filters, the health/trigger
-Info-field foundation, and the `ComputePoolDesiredStates*` /
-`canonicalSingletonAliasHeldTemplates` / `poolInFlightNewRequests` engine flip to
-`[]session.Info` (commits `688d3b79f`, `6742a463b`, `d789dc2a2`, `8609a5198`).
-Raw-accessor surface is down to **28** non-test sites.
+the P6 read-guard, **the pool-demand cascade** (`688d3b79f`, `6742a463b`,
+`d789dc2a2`, `8609a5198`), and — most recently — **four more small cascades**
+(`9a3380e0e` nudge dispatcher [+`Info.TransportMetadata`], `29a152836`
+named-session snapshot lookups [+`Info.Type`/`Info.ContinuityEligible`,
+`IsSessionBeadOrRepairableInfo`, the named-session Info classifier family,
+`FindCanonicalNamedSessionInfo`/`FindNamedSessionConflictInfo`], `2f61a7bf0` the
+3 pure build_desired_state loops [+`scaleCheckPartialSessionRetainableInfo`],
+`f38938195` the wait config-drift loop [+`lookupSessionBeadByIDInfo`]).
+`nudge_dispatcher.go` + `named_sessions.go` are guard-pinned. Raw-accessor
+surface is down to **20** non-test sites.
 
 **What REMAINS (in order — each is ONE atomic, carefully-reviewed change; do NOT
 fan parallel agents at a single connected component):**
-1. **build_desired_state (9) + city_runtime residual `Open()` loops.** Smallest
-   first: `nudge_dispatcher.go:158` (needs `resolveNudgeTargetFromSessionBead`
-   Info form), `named_sessions.go:80/101` (need Info-returning
-   `FindCanonicalNamedSession`/`FindNamedSessionConflict`), `soft_reload.go:103`
-   (needs `started_config_hash` field + `sessionCoreConfigForHash` Info form),
-   `cmd_wait.go` two `FindByID`→`FindInfoByID` (wait-nudge cascade), then the
-   `build_desired_state.go`/`city_runtime.go` loops — convert the pure
-   field-read loops, LEAVE any that thread the bead to a store op or a still-raw
-   `[]beads.Bead` helper (contract rule 3). Add each newly-accessor-free file to
-   `snapshotInfoOnlyFiles`.
-2. **reconciler `*beads.Bead session` Info-threading** (`session_reconciler.go`/
-   `session_reconcile.go` — `healState`/`checkStability`/`checkChurn`/
-   `markProviderTerminalError`/…). Second cascade.
-3. **P5 `closeBead` cross-class split** (LANDMINE — isolated, last; recording-fake
+1. **reconciler `*beads.Bead session` Info-threading — NOW the primary unlock.**
+   `session_reconciler.go`/`session_reconcile.go` thread a raw `*session` through
+   `healState`/`checkStability`/`checkChurn`/`markProviderTerminalError`/… and the
+   *ForAgent classifier family (`isManualSessionBeadForAgent`/
+   `isEphemeralSessionBeadForAgent`/`isLegacyManualSessionBeadForAgent`). Converting
+   these (carry the `Info` alongside/instead of the bead) is what unblocks the 20
+   remaining sites: the rest of `build_desired_state.go` (2079/3341/3570/3816/4165),
+   `city_runtime.go` (2658/3056), `session_beads.go` (2033), `soft_reload.go:103`
+   (also needs a `template_overrides`/raw-metadata accessor on `Info` for
+   `sessionCoreConfigForHash`→`applyTemplateOverridesToConfig`), and `cmd_wait.go`
+   1164 (the wait-nudge helper family: `cachedSessionCanReceiveWaitNudge`/
+   `waitNudgeAgent`/`sessionProviderFamily`/`waitNudgePollerKey`). See the
+   handoff's "State (Post-cascade session)" block for each site's blocking reason.
+   Add each newly-accessor-free file to `snapshotInfoOnlyFiles`.
+2. **P5 `closeBead` cross-class split** (LANDMINE — isolated, last; recording-fake
    oracle; close-THEN-release; preserve skip-if-already-closed idempotence).
-4. **P6** delete dead bead classifiers/`Open()`/`FindSessionBeadBy*` (codec edge
+3. **P6** delete dead bead classifiers/`Open()`/`FindSessionBeadBy*` (codec edge
    `session_bead_snapshot.go` is EXEMPT) + widen the guard to forbid
    `.Store().Store` in converted files.
 

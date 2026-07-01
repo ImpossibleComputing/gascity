@@ -2,10 +2,65 @@
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`,
-**HEAD `f3ef21be4`** (pushed; the pool-demand cascade LANDED — see the "Cascade
-session" block below). Goal: make direct field reads of session/nudge/mail/order/
-graph beads impossible in consumers, then mark #3839 ready + label
-`status/needs-review-auto`.
+**HEAD `f38938195`** (pushed; the pool-demand cascade + four more small cascades
+LANDED — see the "Cascade session" and "Post-cascade session" blocks below).
+Goal: make direct field reads of session/nudge/mail/order/graph beads impossible
+in consumers, then mark #3839 ready + label `status/needs-review-auto`.
+
+## State (Post-cascade session, `29a152836..f38938195`, 4 commits)
+
+Raw-accessor surface is down to **20** non-test sites (was 28). Landed, each an
+atomic byte-identical change with an oracle:
+
+1. `9a3380e0e` **nudge dispatcher** — `nudge_dispatcher.go` reads `OpenInfos()`
+   + new `resolveNudgeTargetFromSessionInfo` (shared `buildNudgeTarget` tail).
+   Foundation: `Info.TransportMetadata` (RAW transport — the resolver's
+   found.Session fallback needs the raw, un-normalized value).
+   `TestNudgeTargetInfoEquivalence` oracle. `nudge_dispatcher.go` guard-pinned.
+2. `29a152836` **named-session snapshot lookups** — `findCanonicalNamedSessionInfo`
+   / `findNamedSessionConflictInfo` read `OpenInfos()`; all 7 callers read
+   `Info.SessionNameMetadata`. Foundation: `Info.Type` + `Info.ContinuityEligible`;
+   `IsSessionBeadOrRepairableInfo` + the named-session Info classifier family +
+   `FindCanonicalNamedSessionInfo`/`FindNamedSessionConflictInfo` (session pkg).
+   `TestNamedSessionInfoEquivalence` oracle. `named_sessions.go` guard-pinned.
+3. `2f61a7bf0` **build_desired_state pure loops** — the 3 pure-field-read loops
+   (readyAssignedWorkAssignees skip-set, on_demand assignee collection,
+   scale-check retained-count). Foundation: `scaleCheckPartialSessionRetainableInfo`
+   (pinned in the classifier-equivalence test). File NOT guard-pinned (5 Open()
+   loops remain — all thread the bead into the *ForAgent family / candidate slices).
+4. `f38938195` **wait config-drift loop** — `cmd_wait.go` ~1009 reads
+   `FindInfoByID` + new projecting `lookupSessionBeadByIDInfo`. File NOT
+   guard-pinned (the ready-wait-nudge loop ~1164 threads the bead into the
+   wait-nudge helper family — no Info form yet).
+
+**Blocked-by-a-bigger-cascade (the 20 remaining sites):** almost all remaining
+sites are blocked on the **reconciler `*beads.Bead session` threading** (step 4
+below) or a store-op / raw-`[]beads.Bead` boundary (contract rule 3):
+- `build_desired_state.go` 2079/3341/3570/3816/4165, `session_beads.go` 2033,
+  `city_runtime.go` 2658 — thread the bead into the *ForAgent classifier family,
+  `lookupSessionBeadByID`-style FindByID helpers, or candidate `[]beads.Bead`
+  slices sorted/passed onward.
+- `city_runtime.go` 3056 (`filterSessionBeadsByName`) — its remaining caller
+  (2896) feeds `newSessionBeadSnapshot(open)` + the raw-bead reconciler; legit
+  raw until the reconciler takes Info.
+- `soft_reload.go` 103 — threads the bead into `sessionCoreConfigForHash`
+  (→ `applyTemplateOverridesToConfig` reads RAW `template_overrides` via
+  `ParseTemplateOverrides(session.Metadata)`) + the drain helpers
+  (`clearSoftReloadConfigDriftDrainAck`/`cancelSoftReloadConfigDriftDrain` →
+  `cancelSessionConfigDriftDrain`); entangled with the reconciler cascade.
+- `cmd_start.go` 904/918, `city_runtime.go` 1159/2246/2158 — thread the raw
+  `open []beads.Bead` into store/reconciler ops.
+- `session_beads.go` 57 — returns `sessionBeads.Open()` as `[]beads.Bead` to
+  raw-bead callers.
+- `session_lifecycle_parallel.go` 809 — passes `snapshot.Open()` into
+  `resolvePreservedConfiguredNamedSessionTemplate` (raw-bead helper).
+- `cmd_wait.go` 1164 — the wait-nudge cascade (see commit 4).
+
+**RAW-BY-DESIGN (confirmed, do NOT convert):** `city_status_snapshot.go` 411
+(`countCitySessionsFromSnapshot`), `city_runtime.go` 2153 (`emitDueComputeFacts`,
+usage bookkeeping), `city_runtime.go` 3217 (`sessionBeadSnapshotFingerprint` —
+hashes ID/Status/Assignee/ALL raw metadata; a whole-bead change fingerprint, not
+a session-attribute read).
 
 Read alongside this: `NONWORK-BEAD-FIELDDOOR-PLAN.md` (architecture, 4 layers),
 `P4-CONVERSION-CONTRACT.md` (the per-site swap rules + sibling table + RAW
@@ -167,23 +222,15 @@ the exact op sequence with a recording-fake store. Also tidy
 2. ~~**pool-demand cascade** (`[]beads.Bead`→`[]session.Info`)~~ — DONE
    (`6742a463b` assigned-work scope + `d789dc2a2` foundation + `8609a5198`
    pool desired-state engine). This was the biggest unlock.
-3. **the build_desired_state (9) + city_runtime residual `Open()` loops** — the
-   next surface. Each is its own small cascade or foundation-gap (NOT free
-   swaps). Concrete sub-targets, smallest-first:
-   - `nudge_dispatcher.go:158` — threads the raw bead into
-     `resolveNudgeTargetFromSessionBead`; needs that resolver's Info form first.
-   - `named_sessions.go:80/101` — need Info-returning session-pkg
-     `FindCanonicalNamedSession` / `FindNamedSessionConflict` (they take
-     `[]beads.Bead` today).
-   - `soft_reload.go:103` — needs the `started_config_hash` Info field +
-     `sessionCoreConfigForHash` Info form (foundation gap).
-   - `cmd_wait.go:1009/1152` — two `FindByID` → `FindInfoByID`, but the wait-diag
-     path threads into the wait-nudge helpers (a small cascade).
-   - `build_desired_state.go` loops (1329/1365/1736/2066/3328/3557/3803/4152) +
-     `city_runtime.go` loops (2658/3056/3217) — read each; convert the pure
-     field-read loops, leave any that thread the bead to a store op or a
-     still-raw `[]beads.Bead` helper (contract rule 3).
-4. **reconciler `*beads.Bead session` Info-threading** — `session_reconciler.go`/
+3. ~~**the tractable build_desired_state + city_runtime + cmd_wait loops**~~ —
+   the cleanly-convertible ones are DONE (post-cascade session commits 1–4:
+   nudge dispatcher, named-session lookups, the 3 pure build_desired_state loops,
+   the wait config-drift loop). Every REMAINING loop threads the bead into a
+   store op / the *ForAgent family / a raw `[]beads.Bead` helper, so they are
+   NOT free swaps — they unblock only after step 4. See the "State
+   (Post-cascade session)" block above for the per-site blocking reason.
+4. **reconciler `*beads.Bead session` Info-threading (NOW the primary unlock)** —
+   `session_reconciler.go`/
    `session_reconcile.go` thread a raw `*session` through `healState`/
    `checkStability`/`checkChurn`/`markProviderTerminalError`/… Convert
    `isNamedSessionBead(*session)`→`isNamedSessionInfo(info)` by carrying the Info
