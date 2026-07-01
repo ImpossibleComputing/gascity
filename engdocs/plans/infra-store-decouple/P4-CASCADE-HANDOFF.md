@@ -2,8 +2,9 @@
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`,
-**HEAD `4acc591da`** (pushed). Goal: make direct field reads of session/nudge/
-mail/order/graph beads impossible in consumers, then mark #3839 ready + label
+**HEAD `f3ef21be4`** (pushed; the pool-demand cascade LANDED — see the "Cascade
+session" block below). Goal: make direct field reads of session/nudge/mail/order/
+graph beads impossible in consumers, then mark #3839 ready + label
 `status/needs-review-auto`.
 
 Read alongside this: `NONWORK-BEAD-FIELDDOOR-PLAN.md` (architecture, 4 layers),
@@ -162,15 +163,46 @@ the exact op sequence with a recording-fake store. Also tidy
 
 ## Suggested order (each is one atomic, reviewed change)
 
-1. **providers MCP-key vertical slice** — smallest complete example of the full
-   add-field → sibling → equivalence-case → convert pattern; makes `providers.go`
-   accessor-free → add it to the guard.
-2. **pool-demand cascade** (`[]beads.Bead`→`[]session.Info`) — biggest unlock;
-   frees `assigned_work_scope`, `pool_desired_state`, and chunks of
-   `build_desired_state` / `city_runtime` / `cmd_start`.
-3. **reconciler `*session` Info-threading.**
-4. **P5 closeBead split.**
-5. **P6** deletion + widen guard, then finish.
+1. ~~**providers MCP-key vertical slice**~~ — DONE `688d3b79f`.
+2. ~~**pool-demand cascade** (`[]beads.Bead`→`[]session.Info`)~~ — DONE
+   (`6742a463b` assigned-work scope + `d789dc2a2` foundation + `8609a5198`
+   pool desired-state engine). This was the biggest unlock.
+3. **the build_desired_state (9) + city_runtime residual `Open()` loops** — the
+   next surface. Each is its own small cascade or foundation-gap (NOT free
+   swaps). Concrete sub-targets, smallest-first:
+   - `nudge_dispatcher.go:158` — threads the raw bead into
+     `resolveNudgeTargetFromSessionBead`; needs that resolver's Info form first.
+   - `named_sessions.go:80/101` — need Info-returning session-pkg
+     `FindCanonicalNamedSession` / `FindNamedSessionConflict` (they take
+     `[]beads.Bead` today).
+   - `soft_reload.go:103` — needs the `started_config_hash` Info field +
+     `sessionCoreConfigForHash` Info form (foundation gap).
+   - `cmd_wait.go:1009/1152` — two `FindByID` → `FindInfoByID`, but the wait-diag
+     path threads into the wait-nudge helpers (a small cascade).
+   - `build_desired_state.go` loops (1329/1365/1736/2066/3328/3557/3803/4152) +
+     `city_runtime.go` loops (2658/3056/3217) — read each; convert the pure
+     field-read loops, leave any that thread the bead to a store op or a
+     still-raw `[]beads.Bead` helper (contract rule 3).
+4. **reconciler `*beads.Bead session` Info-threading** — `session_reconciler.go`/
+   `session_reconcile.go` thread a raw `*session` through `healState`/
+   `checkStability`/`checkChurn`/`markProviderTerminalError`/… Convert
+   `isNamedSessionBead(*session)`→`isNamedSessionInfo(info)` by carrying the Info
+   alongside (or instead of) the bead. Second cascade; do after step 3.
+5. **P5 closeBead split** (landmine — isolated, last; see the P5 section above).
+6. **P6** deletion + widen guard, then finish.
+
+**RAW-BY-DESIGN — do NOT convert these (they are not leaks):**
+- `usage_compute.go` `emitDueComputeFacts` / `emitComputeFactForBead` — reads
+  usage-bookkeeping metadata (`awake_started_at`, `slept_at`,
+  `usage_compute_emitted_at`) that are not session-identity attributes; adding
+  them to `Info` would over-broaden it.
+- `city_status_snapshot.go` `countCitySessionsFromSnapshot` — needs an
+  `IsSessionBeadOrRepairableInfo`, but that reads `Type`/labels which the Info
+  projection drops; the Info form would be a trivial `true` whose fidelity
+  depends on the snapshot-only-holds-session-beads invariant. Prove that
+  invariant before touching it.
+- `session_bead_snapshot.go` — the codec edge (`newSessionBeadSnapshot` +
+  `FindSessionBeadByNamedIdentity` inside it). Always EXEMPT.
 
 ## Finish (only when CI is verified GREEN — do not mark ready before)
 
