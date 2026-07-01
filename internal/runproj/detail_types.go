@@ -68,7 +68,7 @@ type RunFormulaDetailState struct {
 	Kind    string // "available" | "unavailable"
 	Name    string
 	Target  string
-	Reason  string // "missing_formula_metadata" | "missing_run_target" | "fetch_failed"
+	Reason  string // "missing_formula_metadata" | "missing_run_target" | "not_projected" | "fetch_failed"
 	Failure string // RunFormulaDetailFetchFailure (fetch_failed arm only)
 }
 

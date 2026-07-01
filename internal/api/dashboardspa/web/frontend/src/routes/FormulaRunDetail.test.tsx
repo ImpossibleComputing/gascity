@@ -216,6 +216,30 @@ describe('FormulaRunDetailPage', () => {
     expect(screen.queryByText(/partial run data/i)).toBeNull();
   });
 
+  it('renders a benign not_projected formula detail without an error word', async () => {
+    // Source-attributed runs never project the compiled step diagram (it lives
+    // in the rig store, not the fold). This must read as calm/unavailable, NOT
+    // as "upstream_error for rig:gascity" (a broken-looking page).
+    currentDetail = {
+      ...detail,
+      formulaDetail: {
+        kind: 'unavailable',
+        reason: 'not_projected',
+        name: 'mol-adopt-pr-v2',
+        target: 'rig:gascity',
+      },
+    };
+
+    renderPage();
+    await screen.findByRole('heading', { name: /adopt pr #42/i });
+
+    expect(screen.getByText(/step diagram not available for this run/i)).toBeTruthy();
+    // The old failure text must NOT appear anywhere on the page.
+    expect(screen.queryByText(/upstream_error/i)).toBeNull();
+    expect(screen.queryByText(/fetch_failed/i)).toBeNull();
+    expect(screen.queryByText(/error/i)).toBeNull();
+  });
+
   it('renders the dashboard-derived phase ladder from the run detail stages', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /adopt pr #42/i });

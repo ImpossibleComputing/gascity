@@ -209,6 +209,11 @@ export type RunFormulaDetailState =
   | { kind: 'available'; name: string; target: string }
   | { kind: 'unavailable'; reason: 'missing_formula_metadata' }
   | { kind: 'unavailable'; reason: 'missing_run_target'; name: string }
+  // Benign: the run's compiled formula def lives in the rig store, not the event
+  // fold, so a bead-derived / source-attributed run never projects the compiled
+  // step diagram. This is NOT a failure — the diagram is simply unavailable for
+  // this run, and the UI renders it quietly rather than as an error.
+  | { kind: 'unavailable'; reason: 'not_projected'; name: string; target: string }
   | {
       kind: 'unavailable';
       reason: 'fetch_failed';

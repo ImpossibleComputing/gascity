@@ -13,10 +13,9 @@
   },
   "formulaDetail": {
     "kind": "unavailable",
-    "reason": "fetch_failed",
+    "reason": "not_projected",
     "name": "mol-adopt-pr-v2",
-    "target": "rig:gascity-packs",
-    "failure": "upstream_error"
+    "target": "rig:gascity-packs"
   },
   "executionPath": {
     "kind": "unavailable",

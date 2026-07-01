@@ -339,6 +339,10 @@ function formulaDetailLabel(formulaDetail: FormulaRunDetailData['formulaDetail']
   if (formulaDetail.reason === 'missing_formula_metadata') return null;
   if (formulaDetail.reason === 'missing_run_target')
     return `missing run target for ${formulaDetail.name}`;
+  // Benign: a source-attributed run's compiled step diagram is not projected
+  // (it lives in the rig store, not the fold). Render calm, not an error.
+  if (formulaDetail.reason === 'not_projected')
+    return `step diagram not available for this run`;
   return `${formulaDetail.failure} for ${formulaDetail.target}`;
 }
 

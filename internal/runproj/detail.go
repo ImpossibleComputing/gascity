@@ -507,9 +507,14 @@ func runFormulaState(root *runSnapshotBead, hasFormulaDetail bool) RunFormula {
 	return RunFormula{Kind: "unavailable", Reason: "missing_formula_metadata"}
 }
 
-// runFormulaDetailState resolves the compiled-formula-detail union. Port of TS
-// runFormulaDetailState (the bead-derived path has no compiled detail, so it
-// resolves to fetch_failed/upstream_error once a name+target are known).
+// runFormulaDetailState resolves the compiled-formula-detail union. The
+// bead-derived path never fetches a compiled formula def (the gcg-* run's
+// compiled formula lives in the rig store, not the event fold), so once a
+// name+target are known it reports the benign "not_projected" state — NOT a
+// fetch failure. There was no upstream fetch to fail; the diagram simply isn't
+// projected for this run, so the UI shows a calm "step diagram unavailable"
+// rather than an error banner. A genuine fetch path (hasFormulaDetail=true)
+// still resolves to the available arm.
 func runFormulaDetailState(root *runSnapshotBead, hasFormulaDetail bool) RunFormulaDetailState {
 	name, _, target, hasName := resolveRunFormulaIdentityDetailState(root, "", hasFormulaDetail)
 	if !hasName {
@@ -522,11 +527,10 @@ func runFormulaDetailState(root *runSnapshotBead, hasFormulaDetail bool) RunForm
 		return RunFormulaDetailState{Kind: "available", Name: name, Target: target}
 	}
 	return RunFormulaDetailState{
-		Kind:    "unavailable",
-		Reason:  "fetch_failed",
-		Name:    name,
-		Target:  target,
-		Failure: "upstream_error",
+		Kind:   "unavailable",
+		Reason: "not_projected",
+		Name:   name,
+		Target: target,
 	}
 }
 

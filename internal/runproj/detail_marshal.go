@@ -57,6 +57,13 @@ func (s RunFormulaDetailState) MarshalJSON() ([]byte, error) {
 		return marshalObject([]kv{{"kind", "unavailable"}, {"reason", s.Reason}})
 	case s.Kind == "unavailable" && s.Reason == "missing_run_target":
 		return marshalObject([]kv{{"kind", "unavailable"}, {"reason", s.Reason}, {"name", s.Name}})
+	case s.Kind == "unavailable" && s.Reason == "not_projected":
+		return marshalObject([]kv{
+			{"kind", "unavailable"},
+			{"reason", s.Reason},
+			{"name", s.Name},
+			{"target", s.Target},
+		})
 	case s.Kind == "unavailable" && s.Reason == "fetch_failed":
 		return marshalObject([]kv{
 			{"kind", "unavailable"},
