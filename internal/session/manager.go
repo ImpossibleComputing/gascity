@@ -182,6 +182,14 @@ type Info struct {
 	WakeAttempts           int      // wake_attempts parsed as int (0 on missing/invalid)
 	QuarantinedUntil       string   // quarantined_until (raw RFC3339; quarantine check parses it)
 	AliasHistory           []string // prior aliases (alias_history, normalized via session.AliasHistory)
+	// TransportMetadata is the RAW transport metadata, verbatim and WITHOUT the
+	// normalizeTransport(provider, …) derivation that Info.Transport applies.
+	// The nudge-target resolver reads the raw value (it falls back to the agent's
+	// configured transport when the metadata is empty), so a consumer replacing
+	// that raw read must use this field, not the normalized Info.Transport (which
+	// would be non-empty even when no transport was persisted). Additive,
+	// internal-only (absent from the HTTP wire).
+	TransportMetadata string // transport (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

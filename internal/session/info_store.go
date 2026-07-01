@@ -91,6 +91,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		PendingCreateStartedAt: b.Metadata["pending_create_started_at"],
 		QuarantinedUntil:       b.Metadata["quarantined_until"],
 		AliasHistory:           AliasHistory(b.Metadata),
+		TransportMetadata:      b.Metadata["transport"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n

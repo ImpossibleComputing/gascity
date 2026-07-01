@@ -155,8 +155,8 @@ func dispatchAllQueuedNudges(cityPath string, cfg *config.City, store beads.Stor
 
 	delivered := 0
 	var firstErr error
-	for _, b := range sessionBeads.Open() {
-		target := resolveNudgeTargetFromSessionBead(cityPath, cfg, b)
+	for _, info := range sessionBeads.OpenInfos() {
+		target := resolveNudgeTargetFromSessionInfo(cityPath, cfg, info)
 		if target.sessionName == "" {
 			continue
 		}

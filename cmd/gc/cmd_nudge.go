@@ -1101,37 +1101,83 @@ func resolveNudgeTarget(identifier string, warningWriter ...io.Writer) (nudgeTar
 	return nudgeTarget{}, fmt.Errorf("%w: %q", session.ErrSessionNotFound, identifier)
 }
 
+// nudgeTargetFields carries the pre-extracted session attributes buildNudgeTarget
+// needs. Both resolvers (raw bead and typed session.Info) populate it from their
+// own source, so the identity-resolution tail lives in exactly one place.
+type nudgeTargetFields struct {
+	sessionID         string
+	sessionName       string
+	alias             string
+	agentName         string
+	template          string
+	commonName        string
+	aliasHistory      []string
+	transport         string
+	provider          string
+	continuationEpoch string
+}
+
 func resolveNudgeTargetFromSessionBead(cityPath string, cfg *config.City, b beads.Bead) nudgeTarget {
-	cityName := loadedCityName(cfg, cityPath)
 	sessionName := strings.TrimSpace(b.Metadata["session_name"])
 	if sessionName == "" {
 		sessionName = sessionNameFromBeadID(b.ID)
 	}
-	alias := strings.TrimSpace(b.Metadata["alias"])
-	identity := firstNonEmpty(
-		strings.TrimSpace(b.Metadata["agent_name"]),
-		strings.TrimSpace(b.Metadata["template"]),
-		strings.TrimSpace(b.Metadata["common_name"]),
-	)
+	return buildNudgeTarget(cityPath, cfg, nudgeTargetFields{
+		sessionID:         b.ID,
+		sessionName:       sessionName,
+		alias:             strings.TrimSpace(b.Metadata["alias"]),
+		agentName:         strings.TrimSpace(b.Metadata["agent_name"]),
+		template:          strings.TrimSpace(b.Metadata["template"]),
+		commonName:        strings.TrimSpace(b.Metadata["common_name"]),
+		aliasHistory:      session.AliasHistory(b.Metadata),
+		transport:         strings.TrimSpace(b.Metadata["transport"]),
+		provider:          strings.TrimSpace(b.Metadata["provider"]),
+		continuationEpoch: strings.TrimSpace(b.Metadata["continuation_epoch"]),
+	})
+}
+
+// resolveNudgeTargetFromSessionInfo is the typed front-door sibling of
+// resolveNudgeTargetFromSessionBead: it reads the same session attributes from a
+// session.Info projection instead of the raw bead. Note the transport source is
+// i.TransportMetadata (the RAW value), not i.Transport (which normalizeTransport
+// would make non-empty), so the found.Session fallback below fires identically.
+func resolveNudgeTargetFromSessionInfo(cityPath string, cfg *config.City, i session.Info) nudgeTarget {
+	sessionName := strings.TrimSpace(i.SessionNameMetadata)
+	if sessionName == "" {
+		sessionName = sessionNameFromBeadID(i.ID)
+	}
+	return buildNudgeTarget(cityPath, cfg, nudgeTargetFields{
+		sessionID:         i.ID,
+		sessionName:       sessionName,
+		alias:             strings.TrimSpace(i.Alias),
+		agentName:         strings.TrimSpace(i.AgentName),
+		template:          strings.TrimSpace(i.Template),
+		commonName:        strings.TrimSpace(i.CommonName),
+		aliasHistory:      i.AliasHistory,
+		transport:         strings.TrimSpace(i.TransportMetadata),
+		provider:          strings.TrimSpace(i.Provider),
+		continuationEpoch: strings.TrimSpace(i.ContinuationEpoch),
+	})
+}
+
+func buildNudgeTarget(cityPath string, cfg *config.City, f nudgeTargetFields) nudgeTarget {
+	cityName := loadedCityName(cfg, cityPath)
+	identity := firstNonEmpty(f.agentName, f.template, f.commonName)
 	target := nudgeTarget{
 		cityPath:          cityPath,
 		cityName:          cityName,
 		cfg:               cfg,
 		identity:          identity,
-		alias:             alias,
-		aliasHistory:      session.AliasHistory(b.Metadata),
-		transport:         strings.TrimSpace(b.Metadata["transport"]),
-		resolved:          &config.ResolvedProvider{Name: strings.TrimSpace(b.Metadata["provider"])},
-		sessionID:         b.ID,
-		continuationEpoch: strings.TrimSpace(b.Metadata["continuation_epoch"]),
-		sessionName:       sessionName,
+		alias:             f.alias,
+		aliasHistory:      f.aliasHistory,
+		transport:         f.transport,
+		resolved:          &config.ResolvedProvider{Name: f.provider},
+		sessionID:         f.sessionID,
+		continuationEpoch: f.continuationEpoch,
+		sessionName:       f.sessionName,
 	}
 	target.agent = parseNudgeAgentIdentity(identity)
-	for _, candidate := range []string{
-		strings.TrimSpace(b.Metadata["agent_name"]),
-		strings.TrimSpace(b.Metadata["template"]),
-		strings.TrimSpace(b.Metadata["common_name"]),
-	} {
+	for _, candidate := range []string{f.agentName, f.template, f.commonName} {
 		if candidate == "" {
 			continue
 		}
@@ -1159,7 +1205,7 @@ func resolveNudgeTargetFromSessionBead(cityPath string, cfg *config.City, b bead
 		target.identity = target.agent.QualifiedName()
 	}
 	if target.identity == "" {
-		target.identity = sessionName
+		target.identity = f.sessionName
 	}
 	return target
 }

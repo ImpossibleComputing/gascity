@@ -86,6 +86,7 @@ var snapshotInfoOnlyFiles = []string{
 	"cmd_citystatus.go",
 	"session_reconciler_trace_cycle.go",
 	"providers.go",
+	"nudge_dispatcher.go",
 }
 
 // forbiddenRawSnapshotAccessors are the *sessionBeadSnapshot methods that return
