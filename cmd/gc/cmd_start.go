@@ -924,7 +924,7 @@ func doStartStandalone(args []string, controllerMode bool, stdout, stderr io.Wri
 	poolDesired := retainScaleCheckPartialPoolDesired(
 		cfg,
 		PoolDesiredCounts(ComputePoolDesiredStates(
-			cfg, poolWorkBeads, open, dsResult.ScaleCheckCounts)),
+			cfg, poolWorkBeads, openInfos, dsResult.ScaleCheckCounts)),
 		sessionBeads,
 		dsResult.PoolScaleCheckPartialTemplates,
 	)

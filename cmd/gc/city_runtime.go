@@ -2189,7 +2189,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 		poolDesired = retainScaleCheckPartialPoolDesired(
 			cr.cfg,
 			PoolDesiredCounts(ComputePoolDesiredStatesTraced(
-				cr.cfg, poolWorkBeads, sessionBeads.Open(), result.ScaleCheckCounts, trace)),
+				cr.cfg, poolWorkBeads, sessionBeads.OpenInfos(), result.ScaleCheckCounts, trace)),
 			sessionBeads,
 			result.PoolScaleCheckPartialTemplates,
 		)
@@ -2899,7 +2899,7 @@ func (cr *CityRuntime) controlDispatcherTick(ctx context.Context) {
 	poolDesired := retainScaleCheckPartialPoolDesired(
 		filteredCfg,
 		PoolDesiredCounts(ComputePoolDesiredStates(
-			filteredCfg, poolWorkBeads, open, wfcResult.ScaleCheckCounts)),
+			filteredCfg, poolWorkBeads, openInfos, wfcResult.ScaleCheckCounts)),
 		newSessionBeadSnapshot(open),
 		wfcResult.PoolScaleCheckPartialTemplates,
 	)
@@ -3101,17 +3101,15 @@ func (cr *CityRuntime) loadDemandSnapshot(
 	sessionFingerprint := sessionBeadSnapshotFingerprint(sessionBeads)
 	if cr.shouldRefreshDemandSnapshot(trigger, configChanged, sessionFingerprint) {
 		result := cr.buildDesiredState(sessionBeads, trace)
-		var openSessionBeads []beads.Bead
 		var openSessionInfos []sessionpkg.Info
 		if sessionBeads != nil {
-			openSessionBeads = sessionBeads.Open()
 			openSessionInfos = sessionBeads.OpenInfos()
 		}
 		poolWorkBeads := filterAssignedWorkBeadsForPoolDemand(cr.cfg, cr.cityPath, openSessionInfos, result.AssignedWorkBeads, result.AssignedWorkStoreRefs)
 		result.PoolDesiredCounts = retainScaleCheckPartialPoolDesired(
 			cr.cfg,
 			PoolDesiredCounts(ComputePoolDesiredStatesTraced(
-				cr.cfg, poolWorkBeads, openSessionBeads, result.ScaleCheckCounts, trace)),
+				cr.cfg, poolWorkBeads, openSessionInfos, result.ScaleCheckCounts, trace)),
 			sessionBeads,
 			result.PoolScaleCheckPartialTemplates,
 		)
