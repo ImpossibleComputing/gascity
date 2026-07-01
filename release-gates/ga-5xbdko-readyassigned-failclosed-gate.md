@@ -31,7 +31,7 @@ open PR, so the release action is held even though the gate criteria pass.
 | 3 | Tests pass | PASS | Focused `cmd/gc` regression suite passed, `go vet ./cmd/gc/...` passed, `go vet ./...` passed, and `make test-fast-parallel` passed all 8 fast jobs. |
 | 4 | No high-severity review findings open | PASS | Review notes record no OWASP-relevant surface and no blocking findings. The only referenced finding was the non-blocking style hardening that this bead fixes. |
 | 5 | Final branch is clean | PASS | `git status --short --branch` was clean on `deploy/ga-5xbdko-readyassigned-failclosed` before adding this gate file. |
-| 6 | Branch diverges cleanly from main | PASS | `git merge-tree --write-tree origin/main HEAD` completed without conflicts and produced tree `d2a1cd41bb694979e49c7ca08a8fd9117acbb386`. |
+| 6 | Branch diverges cleanly from main | PASS | `git merge-tree --write-tree origin/main HEAD` completed without conflicts against `origin/main` at `c02b3be84` and produced tree `ca1d39e6e25f55612cab5fd74483711c0e2f139d`. |
 | 7 | Single feature theme | PASS | The bead delta touches one `cmd/gc` pool-readiness subsystem. The full branch contains the parent pool-readiness PR plus this defensive follow-up; there are no independent feature themes. |
 
 ## Local Test Details
