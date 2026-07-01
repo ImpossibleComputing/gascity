@@ -730,6 +730,20 @@ func pendingCreateNeverStartedExpired(session beads.Bead, clk clock.Clock) bool 
 	return pendingCreateNeverStartedLeaseExpired(session, clk)
 }
 
+// pendingCreateNeverStartedExpiredInfo is the session.Info sibling of
+// pendingCreateNeverStartedExpired. Info.MetadataState is the RAW state metadata
+// (verbatim, untrimmed), matching the raw session.Metadata["state"] handed to
+// pendingCreateRollbackState (which trims internally). Equivalence-proven.
+func pendingCreateNeverStartedExpiredInfo(i sessionpkg.Info, clk clock.Clock) bool {
+	if !i.PendingCreateClaim {
+		return false
+	}
+	if !pendingCreateRollbackState(i.MetadataState) {
+		return false
+	}
+	return pendingCreateNeverStartedLeaseExpiredInfo(i, clk)
+}
+
 func pendingCreateNeverStartedLeaseExpired(session beads.Bead, clk clock.Clock) bool {
 	if strings.TrimSpace(session.Metadata["pending_create_claim"]) != "true" {
 		return false
@@ -795,6 +809,34 @@ func pendingCreateLeaseExpiredForRollback(session beads.Bead, clk clock.Clock, s
 		return pendingCreateNeverStartedExpired(session, clk)
 	}
 	return pendingCreateAttemptStale(session, clk)
+}
+
+// pendingCreateLeaseExpiredForRollbackInfo is the session.Info sibling of
+// pendingCreateLeaseExpiredForRollback. Each sub-leaf it composes
+// (pendingCreateStartInFlightInfo, pendingCreateNeverStartedExpiredInfo,
+// pendingCreateAttemptStaleInfo) is already equivalence-proven; the state read
+// uses the RAW Info.MetadataState to match the untrimmed-then-trimmed original.
+func pendingCreateLeaseExpiredForRollbackInfo(i sessionpkg.Info, clk clock.Clock, startupTimeout time.Duration) bool {
+	if !i.PendingCreateClaim {
+		return false
+	}
+	state := sessionpkg.State(strings.TrimSpace(i.MetadataState))
+	if !pendingCreateRollbackState(string(state)) {
+		return false
+	}
+	if state == sessionpkg.StateAsleep {
+		if strings.TrimSpace(i.LastWokeAt) == "" {
+			return pendingCreateNeverStartedExpiredInfo(i, clk)
+		}
+		return pendingCreateAttemptStaleInfo(i, clk)
+	}
+	if pendingCreateStartInFlightInfo(i, clk, startupTimeout) {
+		return false
+	}
+	if strings.TrimSpace(i.LastWokeAt) == "" {
+		return pendingCreateNeverStartedExpiredInfo(i, clk)
+	}
+	return pendingCreateAttemptStaleInfo(i, clk)
 }
 
 func pendingCreateQueuedOrCreatingState(state string) bool {
@@ -1293,22 +1335,31 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// Run this before configured named-session preservation. A stale
 			// state=creating bead with an expired pending-create lease would
 			// otherwise stay open and keep holding its alias forever.
-			if !storeQueryPartial && !providerAlive && shouldRollbackPendingCreate(session) {
+			//
+			// The pure decision reads in this block route through the top-of-loop
+			// `info`: this is the pre-heal region, and the only mutations reachable
+			// here (checkRateLimitStability on its hit/err path, and
+			// attemptRollbackPendingCreate) each `continue`, so control only falls
+			// through to the next read on the unmutated bead — `info` stays
+			// byte-identical. workerSessionTargetRunningWithConfig above reads by ID,
+			// not the bead pointer, so it does not mutate either. The two mutations
+			// keep the raw *session pointer they write through.
+			if !storeQueryPartial && !providerAlive && shouldRollbackPendingCreateInfo(info) {
 				var startupTimeout time.Duration
 				if cfg != nil {
 					startupTimeout = cfg.Session.StartupTimeoutDuration()
 				}
-				if pendingCreateLeaseExpiredForRollback(*session, clk, startupTimeout) {
-					template := normalizedSessionTemplate(*session, cfg)
+				if pendingCreateLeaseExpiredForRollbackInfo(info, clk, startupTimeout) {
+					template := normalizedSessionTemplateInfo(info, cfg)
 					if template == "" {
-						template = session.Metadata["template"]
+						template = info.Template
 					}
 					peek := cachedSessionPeek(cityPath, store, sp, cfg, session.ID, nil)
 					rateLimitHit, rateLimitErr := checkRateLimitStability(session, cfg, providerAlive, dt, sessFront, clk, peek)
 					if rateLimitHit || rateLimitErr != nil {
 						continue
 					}
-					clearClaim := configuredNamedSessionBeadHasSpec(*session, cfg, cityName)
+					clearClaim := configuredNamedSessionBeadHasSpecInfo(info, cfg, cityName)
 					attemptRollbackPendingCreate(session, template, name, "pending_create_lease_expired", "lease expired and no live runtime", clearClaim)
 					continue
 				}

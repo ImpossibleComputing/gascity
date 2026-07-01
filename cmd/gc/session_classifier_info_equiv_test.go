@@ -530,6 +530,7 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"isNamedSessionBead":                  {isNamedSessionBead, isNamedSessionInfo},
 		"isDrainedSessionBead":                {isDrainedSessionBead, isDrainedSessionInfo},
 		"isFailedCreateSessionBead":           {isFailedCreateSessionBead, isFailedCreateSessionInfo},
+		"shouldRollbackPendingCreate":         {func(b beads.Bead) bool { return shouldRollbackPendingCreate(&b) }, shouldRollbackPendingCreateInfo},
 		"isPendingPoolCreate":                 {isPendingPoolCreate, isPendingPoolCreateInfo},
 		"isStaleCreating":                     {isStaleCreating, isStaleCreatingInfo},
 		"isKnownState":                        {isKnownState, isKnownStateInfo},
@@ -603,6 +604,7 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"sessionMetadataState":         {sessionMetadataState, sessionMetadataStateInfo},
 		"sessionBeadStoredTemplate":    {sessionBeadStoredTemplate, sessionBeadStoredTemplateInfo},
 		"sessionBeadAgentName":         {sessionBeadAgentName, sessionBeadAgentNameInfo},
+		"namedSessionIdentity":         {namedSessionIdentity, namedSessionIdentityInfo},
 		"stampedPoolQualifiedIdentity": {stampedPoolQualifiedIdentity, stampedPoolQualifiedIdentityInfo},
 		// generation has no named classifier — it is read inline via Atoi/TrimSpace
 		// in the drain/wake path — so this pins the raw codec mirror directly.
@@ -626,7 +628,20 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"sessionBeadAssigneeIdentities": {sessionBeadAssigneeIdentities, sessionBeadAssigneeIdentitiesInfo},
 	}
 
-	// classifiers that take cfg (nil here) and/or a template argument.
+	// namedSpecCfg declares a singleton named session "mayor" backed by an agent
+	// "mayor", so findNamedSessionSpec(cfg, "", "mayor") resolves — exercising the
+	// configuredNamedSessionBeadHasSpec true branch on the "named" fixture rather
+	// than a trivial both-false pass under nil cfg. The guard below fails loudly if
+	// the fixture or cfg ever stops hitting that branch.
+	namedSpecCfg := &config.City{
+		Agents:        []config.Agent{{Name: "mayor"}},
+		NamedSessions: []config.NamedSession{{Template: "mayor"}},
+	}
+	if !configuredNamedSessionBeadHasSpec(beadsByShape["named"], namedSpecCfg, "") {
+		t.Fatal("configuredNamedSessionBeadHasSpec(named, namedSpecCfg) = false; fixture/cfg no longer exercise the has-spec true branch")
+	}
+
+	// classifiers that take a cfg and/or a template argument.
 	cfgBoolChecks := map[string]struct {
 		bead func(beads.Bead) bool
 		info func(session.Info) bool
@@ -640,6 +655,10 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"beadUsesACPTransport": {
 			func(b beads.Bead) bool { return beadUsesACPTransport(b, nil) },
 			func(i session.Info) bool { return infoUsesACPTransport(i, nil) },
+		},
+		"configuredNamedSessionBeadHasSpec": {
+			func(b beads.Bead) bool { return configuredNamedSessionBeadHasSpec(b, namedSpecCfg, "") },
+			func(i session.Info) bool { return configuredNamedSessionBeadHasSpecInfo(i, namedSpecCfg, "") },
 		},
 	}
 
@@ -689,6 +708,16 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"pendingCreateClaimStillLeasedForSweep": {
 			func(b beads.Bead) bool { return pendingCreateClaimStillLeasedForSweep(b, leaseStartupTimeout) },
 			func(i session.Info) bool { return pendingCreateClaimStillLeasedForSweepInfo(i, leaseStartupTimeout) },
+		},
+		"pendingCreateNeverStartedExpired": {
+			func(b beads.Bead) bool { return pendingCreateNeverStartedExpired(b, clk) },
+			func(i session.Info) bool { return pendingCreateNeverStartedExpiredInfo(i, clk) },
+		},
+		"pendingCreateLeaseExpiredForRollback": {
+			func(b beads.Bead) bool { return pendingCreateLeaseExpiredForRollback(b, clk, leaseStartupTimeout) },
+			func(i session.Info) bool {
+				return pendingCreateLeaseExpiredForRollbackInfo(i, clk, leaseStartupTimeout)
+			},
 		},
 	}
 

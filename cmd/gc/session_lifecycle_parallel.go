@@ -2151,6 +2151,14 @@ func shouldRollbackPendingCreate(session *beads.Bead) bool {
 	return strings.TrimSpace(session.Metadata["pending_create_claim"]) == "true"
 }
 
+// shouldRollbackPendingCreateInfo is the session.Info sibling of
+// shouldRollbackPendingCreate. Info.PendingCreateClaim already projects the
+// trimmed pending_create_claim == "true" flag, so the nil-bead guard (which only
+// mattered for a nil pointer) collapses to reading the field. Equivalence-proven.
+func shouldRollbackPendingCreateInfo(i sessionpkg.Info) bool {
+	return i.PendingCreateClaim
+}
+
 func runningSessionMatchesPendingCreate(session *beads.Bead, sessionName string, sp runtime.Provider) bool {
 	if session == nil || sp == nil {
 		return false
