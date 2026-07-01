@@ -72,7 +72,13 @@ const MetadataLastNudgeDeliveredAt = "last_nudge_delivered_at"
 
 // Info holds the user-facing details of a chat session.
 type Info struct {
-	ID            string
+	ID string
+	// Type is the raw bead type (BeadType for a proper session bead, or empty
+	// for a crash/migration-damaged bead that still carries the gc:session
+	// label). IsSessionBeadOrRepairableInfo reads it to classify repairable
+	// beads without touching the raw bead. Additive, internal-only (absent from
+	// the HTTP wire).
+	Type          string
 	Template      string
 	State         State
 	Closed        bool
@@ -182,6 +188,10 @@ type Info struct {
 	WakeAttempts           int      // wake_attempts parsed as int (0 on missing/invalid)
 	QuarantinedUntil       string   // quarantined_until (raw RFC3339; quarantine check parses it)
 	AliasHistory           []string // prior aliases (alias_history, normalized via session.AliasHistory)
+	// ContinuityEligible is the RAW continuity_eligible metadata, verbatim.
+	// NamedSessionContinuityEligibleInfo compares it (trimmed) against "false"/
+	// "true", so the Info mirror keeps the raw value. Additive, internal-only.
+	ContinuityEligible string // continuity_eligible (raw)
 	// TransportMetadata is the RAW transport metadata, verbatim and WITHOUT the
 	// normalizeTransport(provider, …) derivation that Info.Transport applies.
 	// The nudge-target resolver reads the raw value (it falls back to the agent's

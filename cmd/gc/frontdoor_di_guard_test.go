@@ -87,6 +87,7 @@ var snapshotInfoOnlyFiles = []string{
 	"session_reconciler_trace_cycle.go",
 	"providers.go",
 	"nudge_dispatcher.go",
+	"named_sessions.go",
 }
 
 // forbiddenRawSnapshotAccessors are the *sessionBeadSnapshot methods that return

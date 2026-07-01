@@ -904,9 +904,9 @@ func buildDesiredStateWithSessionBeads(
 		fmt.Fprintf(stderr, "namedWorkReady: %d assigned beads, %d named specs, ready=%v\n", len(assignedWorkBeads), len(namedSpecs), namedWorkReady) //nolint:errcheck
 	}
 	for identity, spec := range namedSpecs {
-		canonicalBead, hasCanonical := findCanonicalNamedSessionBead(bp.sessionBeads, spec)
+		canonicalInfo, hasCanonical := findCanonicalNamedSessionInfo(bp.sessionBeads, spec)
 		if !hasCanonical {
-			if _, conflict := findNamedSessionConflict(bp.sessionBeads, spec); conflict {
+			if _, conflict := findNamedSessionConflictInfo(bp.sessionBeads, spec); conflict {
 				continue
 			}
 		}
@@ -938,7 +938,7 @@ func buildDesiredStateWithSessionBeads(
 		// key, sending the canonical bead through the CREATE path where
 		// the alias check fails against itself.
 		if hasCanonical {
-			if sn := strings.TrimSpace(canonicalBead.Metadata["session_name"]); sn != "" {
+			if sn := strings.TrimSpace(canonicalInfo.SessionNameMetadata); sn != "" {
 				tp.SessionName = sn
 			}
 		}

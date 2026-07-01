@@ -1801,8 +1801,8 @@ func configuredSessionNamesWithSnapshot(cfg *config.City, cityName string, sessi
 		runtimeName := config.NamedSessionRuntimeName(cityName, cfg.Workspace, identity)
 		if sessionBeads != nil {
 			if spec, ok := findNamedSessionSpec(cfg, cityName, identity); ok {
-				if b, ok := findCanonicalNamedSessionBead(sessionBeads, spec); ok {
-					if sn := strings.TrimSpace(b.Metadata["session_name"]); sn != "" {
+				if info, ok := findCanonicalNamedSessionInfo(sessionBeads, spec); ok {
+					if sn := strings.TrimSpace(info.SessionNameMetadata); sn != "" {
 						names[sn] = true
 					}
 				}

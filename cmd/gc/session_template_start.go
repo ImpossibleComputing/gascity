@@ -96,8 +96,8 @@ func materializeSessionForTemplateWithOptions(
 
 	if hasNamed {
 		if snapshot, err := loadSessionBeadSnapshot(store); err == nil {
-			if bead, ok := findCanonicalNamedSessionBead(snapshot, spec); ok {
-				if sn := bead.Metadata["session_name"]; sn != "" {
+			if info, ok := findCanonicalNamedSessionInfo(snapshot, spec); ok {
+				if sn := info.SessionNameMetadata; sn != "" {
 					return sn, nil
 				}
 			}
@@ -200,8 +200,8 @@ func materializeSessionForTemplateWithOptions(
 					return info.SessionName, nil
 				}
 				if snapshot, err := loadSessionBeadSnapshot(store); err == nil {
-					if bead, ok := findCanonicalNamedSessionBead(snapshot, spec); ok {
-						if sn := bead.Metadata["session_name"]; sn != "" {
+					if info, ok := findCanonicalNamedSessionInfo(snapshot, spec); ok {
+						if sn := info.SessionNameMetadata; sn != "" {
 							return sn, nil
 						}
 					}
@@ -228,8 +228,8 @@ func materializeSessionForTemplateWithOptions(
 			return info.SessionName, nil
 		}
 		if snapshot, snapErr := loadSessionBeadSnapshot(store); snapErr == nil {
-			if bead, ok := findCanonicalNamedSessionBead(snapshot, spec); ok {
-				if sn := bead.Metadata["session_name"]; sn != "" {
+			if info, ok := findCanonicalNamedSessionInfo(snapshot, spec); ok {
+				if sn := info.SessionNameMetadata; sn != "" {
 					return sn, nil
 				}
 			}

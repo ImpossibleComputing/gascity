@@ -34,6 +34,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 
 	info := Info{
 		ID:            b.ID,
+		Type:          b.Type,
 		Template:      b.Metadata["template"],
 		State:         state,
 		Closed:        closed,
@@ -91,6 +92,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		PendingCreateStartedAt: b.Metadata["pending_create_started_at"],
 		QuarantinedUntil:       b.Metadata["quarantined_until"],
 		AliasHistory:           AliasHistory(b.Metadata),
+		ContinuityEligible:     b.Metadata["continuity_eligible"],
 		TransportMetadata:      b.Metadata["transport"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {

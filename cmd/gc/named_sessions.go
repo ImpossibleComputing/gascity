@@ -73,11 +73,11 @@ func namedSessionContinuityEligible(b beads.Bead) bool {
 	return session.NamedSessionContinuityEligible(b)
 }
 
-func findCanonicalNamedSessionBead(sessionBeads *sessionBeadSnapshot, spec namedSessionSpec) (beads.Bead, bool) {
+func findCanonicalNamedSessionInfo(sessionBeads *sessionBeadSnapshot, spec namedSessionSpec) (session.Info, bool) {
 	if sessionBeads == nil {
-		return beads.Bead{}, false
+		return session.Info{}, false
 	}
-	return session.FindCanonicalNamedSessionBead(sessionBeads.Open(), spec)
+	return session.FindCanonicalNamedSessionInfo(sessionBeads.OpenInfos(), spec)
 }
 
 // findClosedNamedSessionBead searches for a closed bead that was previously
@@ -94,11 +94,11 @@ func findClosedNamedSessionBeadForSessionName(store beads.Store, identity, sessi
 	return bead, ok
 }
 
-func findNamedSessionConflict(sessionBeads *sessionBeadSnapshot, spec namedSessionSpec) (beads.Bead, bool) {
+func findNamedSessionConflictInfo(sessionBeads *sessionBeadSnapshot, spec namedSessionSpec) (session.Info, bool) {
 	if sessionBeads == nil {
-		return beads.Bead{}, false
+		return session.Info{}, false
 	}
-	return session.FindNamedSessionConflict(sessionBeads.Open(), spec)
+	return session.FindNamedSessionConflictInfo(sessionBeads.OpenInfos(), spec)
 }
 
 func findConflictingNamedSessionSpecForBead(cfg *config.City, cityName string, b beads.Bead) (namedSessionSpec, bool, error) {
