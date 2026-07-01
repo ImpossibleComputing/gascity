@@ -91,7 +91,60 @@ five small cascades, and (this session, commits `d8c606fd8`, `79c375147`,
 
 ---
 
-## The reconciler spine flip (THE primary unlock — do this first, one atomic commit)
+## The reconciler spine flip (THE primary unlock)
+
+> **SESSION UPDATE 2026-07-01 (CONT-5) — DESIGN DECIDED + SCOPE VERIFIED + Tier-0 reset fields landed (`69ccc13c6`).**
+> The owner chose **Fork B (working-copy wrapper)** over the full-typed Fork A
+> below, and chose to drive it in-session. Deep reconnaissance at HEAD then
+> established the true scope, which materially reshapes the plan:
+>
+> - **The flip is NOT a mechanical field-swap and NOT a single atomic commit.**
+>   The spine has **two whole-metadata-map consumers** that read the raw
+>   `map[string]string`, not typed fields: `healStatePatchWithRollback` →
+>   `sessionpkg.ProjectLifecycle(LifecycleInput{Metadata: …})`
+>   (`session_reconcile.go:1058`), and the circuit breaker
+>   `restoreFromMetadata`/`observeResetGenerationFromMetadata`
+>   (`session_circuit_breaker.go:320/508`), fed `ordered[i].Metadata` at
+>   `session_reconciler.go:1146/1155`. `session.Info` has no `Metadata` map, so
+>   these **cannot** be fed from `Info` without a fragile field→map
+>   reconstruction.
+> - **Fork B keeps ProjectLifecycle + circuit breaker + write-back lockstep on
+>   the raw bead** (accepted). The raw bead therefore stays the single source of
+>   truth and the Phase-1↔Phase-2 aliasing/lockstep is **untouched** — so there
+>   is **no atomic-flip requirement and no state-split risk**. The "working-copy
+>   wrapper" is realized as a per-iteration `info := sessionpkg.InfoFromPersistedBead(*session)`
+>   derived alongside the raw working copy; the tick's **classifier DECISION
+>   reads** go through `info`, and `info` is re-derived after a mutation. Each
+>   decision-read cluster converts **independently and incrementally** (verify
+>   each against the reconcile/pool E2E suites — the byte-identical oracle).
+> - **Consequence:** the reconciler files will NOT become accessor-free (the
+>   ProjectLifecycle/CB/write-back raw reads remain, by design), so they are NOT
+>   added to `snapshotInfoOnlyFiles`, and the 7 "reconciler-spine-blocked"
+>   sites that thread raw `[]beads.Bead` into the reconcile entry are
+>   **reclassified as rule-3-sanctioned** (the entry legitimately needs raw beads
+>   for ProjectLifecycle/CB), not converted.
+> - **Verified scope:** 194 raw `.Metadata[` reads (reconciler 123 / reconcile
+>   50 / wake 21) + 6 `.Status`. Most are inside the raw machinery that stays.
+> - **Field-gaps (decision-reads only — machinery-only keys stay raw):**
+>   `reset_committed_at` + `continuation_reset_pending` → **DONE** (`Info.ResetCommittedAt`
+>   / `Info.ContinuationResetPending` + `resetPendingCommittedAtInfo`, `69ccc13c6`).
+>   `generation` → needs **`Info.Generation string`** (RAW mirror, NOT int — fidelity
+>   trap: read both as `strconv.Atoi` AND `strings.TrimSpace`, `session_wake.go:41/173/283/331/350/461`).
+>   `started_config_hash` → has BOTH decision reads (drift detection, `session_reconciler.go:2026/2278/3571/3733`)
+>   and write-back; classify per site, add `Info.StartedConfigHash` (raw) for the
+>   decision reads. `held_until`/`pin_awake`/`wake_request` → ProjectLifecycle/machinery
+>   (stay raw) except `pin_awake` at `session_reconciler.go:2501` (a decision — needs a mirror).
+>   `churn_count`/`core_hash_breakdown` → write-back/drift-logging machinery (stay raw).
+> - **Recommended incremental order (each its own verified commit):** (1) add
+>   `Info.Generation` + convert Phase 2 `advanceSessionDrainsWithSessionsTraced`
+>   decision reads (bounded, self-contained, 428–668); (2) the Phase-1 driver
+>   decision-read clusters, cluster by cluster, deriving `info` per iteration;
+>   (3) leave the apply/write-back cluster + ProjectLifecycle + CB on raw.
+>   This is genuinely a **3–5 session effort**; do not rush it.
+>
+> The Fork-A material below (full-typed Info, re-projection primitive, Tier-2
+> classifier siblings, atomic flip of the maps + Phase 2) is **superseded** by
+> Fork B and retained only as background.
 
 ### What it actually is (verified)
 

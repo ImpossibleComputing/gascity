@@ -6,7 +6,7 @@ Paste the block below into a fresh session.
 
 Finish the non-work-bead field-door cleanup on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
-`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `1dbf692e7`).
+`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `69ccc13c6`).
 
 **Read first, in order:** `engdocs/plans/infra-store-decouple/RECONCILER-CASCADE-HANDOFF.md`
 (the authoritative "finish it out" guide — the verified 21-site census, the
@@ -51,37 +51,38 @@ the remaining loops.
 **What REMAINS (in recommended order — each is ONE atomic, carefully-reviewed
 change; do NOT fan parallel agents at the reconciler connected component):**
 
-1. **The reconciler spine flip — THE primary unlock, do this first.** The tick holds
-   `session := &ordered[i]` (`session_reconciler.go:1227`) as a mutable working
-   copy; `beadByID`/`circuitSessionByIdentity` alias the same array, and Phase 2
-   `advanceSessionDrainsWithSessionsTraced` (`session_wake.go:428`) consumes it —
-   so the flip MUST migrate Phase 2 + both maps in the same commit. The single
-   hardest blocker: `session.Info` has NO `Metadata` map and no in-memory re-
-   projection primitive, so the lockstep `session.Metadata[k]=v` has no Info
-   analog yet. Land the foundation FIRST, each its own additive commit:
-   - **Tier 0:** `Info.ResetCommittedAt` + `Info.ContinuationResetPending` (+
-     `ChurnCount`/`SessionKey`/`StartedConfigHash`/`CoreHashBreakdown` if the
-     flipped helpers read them) — struct + codec + equivalence.
-   - **Tier 1:** the re-projection primitive (`Info.applyMetadataPatch` or re-
-     project via `InfoFromPersistedBead`), proven by a recording test: apply
-     batch to a bead + re-project == apply batch to Info directly, byte-equal for
-     every spine-written key.
-   - **Tier 2:** the missing pure-classifier Info siblings (`healStatePatchInfo`,
-     `sessionExitFactsInfo`, `productiveLongEnoughInfo`, `stableLongEnoughInfo`,
-     `sessionStartRequestedInfo`, `resetPendingCommittedAtInfo`,
-     `pendingCreateLeaseExpiredForRollbackInfo`, `pendingCreateSessionStillLeasedInfo`,
-     `shouldRollbackPendingCreateInfo`, `resolveSessionSleepPolicyInfo`,
-     `isPoolExcessInfo`, `sessionWithinDesiredConfigInfo`) — each byte-identical +
-     equivalence-cased.
-   - **Then the flip:** the cluster (`healState`/`healStateWithRollback`/
-     `checkStability`/`checkRateLimitStability`/`checkChurn`/
-     `markProviderTerminalError`/`record*`/`clear*`/`healExpiredTimers`/
-     `markDrainAckStopPending`/`recoverPendingIdleSleep`/`reconcileDetachedAt`/
-     `persistSessionCircuitBreakerMetadata` + the inline writes at
-     `session_reconciler.go:1350`/`:1574`/`:1858`/`:1908–1920`) + re-typing
-     `beadByID`/`circuitSessionByIdentity` to `*session.Info` + migrating Phase 2
-     — all in one reviewed commit. Byte-identity oracle = the reconciler/pool E2E
-     suite + the recording fake.
+1. **The reconciler spine flip — THE primary unlock (DESIGN = Fork B; Tier-0 reset
+   fields DONE `69ccc13c6`; genuinely a 3–5 session effort — do NOT rush).** Read
+   the "SESSION UPDATE 2026-07-01 (CONT-5)" banner atop the spine section of
+   `RECONCILER-CASCADE-HANDOFF.md` — it supersedes the old Fork-A plan. Key facts:
+   the spine has **two whole-metadata-map consumers** (`healStatePatchWithRollback`
+   → `ProjectLifecycle`, and the circuit breaker) that read the raw `map[string]string`,
+   which `session.Info` (no `Metadata` map) cannot feed without fragile
+   reconstruction. **Fork B keeps ProjectLifecycle + CB + write-back lockstep on
+   the raw bead** (accepted), so the raw bead stays the source of truth, the
+   Phase-1↔Phase-2 aliasing is UNTOUCHED, and there is **no atomic-flip and no
+   state-split risk**. The wrapper = a per-iteration
+   `info := sessionpkg.InfoFromPersistedBead(*session)` derived alongside the raw
+   working copy; the tick's classifier **DECISION reads** go through `info`
+   (re-derive after a mutation). Each decision-read cluster converts INDEPENDENTLY
+   and incrementally; the reconcile/pool E2E suites are the byte-identical oracle.
+   Consequence: the reconciler files do NOT become accessor-free (they are NOT
+   added to `snapshotInfoOnlyFiles`), and the 7 raw-`[]beads.Bead` entry-threading
+   sites are rule-3-sanctioned (the entry needs raw beads), not converted.
+   - **DONE (`69ccc13c6`):** `Info.ResetCommittedAt` + `Info.ContinuationResetPending`
+     + `resetPendingCommittedAtInfo` + 4 equivalence fixtures (the byte-identical
+     oracle for the `resetPendingCommittedAt` decision read at `session_reconciler.go:~1247`).
+   - **Field-gaps still needed (decision-reads only):** `Info.Generation string`
+     (RAW mirror — fidelity trap: `generation` is read both `strconv.Atoi` AND
+     `strings.TrimSpace`, `session_wake.go:41/173/283/331/350/461`);
+     `Info.StartedConfigHash` (raw; drift-detection decision reads at
+     `session_reconciler.go:2026/2278/3571/3733`); a `pin_awake` mirror
+     (`session_reconciler.go:2501`). `held_until`/`wake_request`/`churn_count`/
+     `core_hash_breakdown` are ProjectLifecycle/CB/write-back machinery → stay raw.
+   - **Incremental order (each its own verified commit):** (a) add `Info.Generation`
+     + convert Phase 2 `advanceSessionDrainsWithSessionsTraced` (`session_wake.go:428–668`)
+     decision reads — bounded, self-contained; (b) the Phase-1 driver decision-read
+     clusters, cluster by cluster; (c) leave apply/write-back + ProjectLifecycle + CB raw.
 
 2. **The remaining spine-blocked + other-blocked sites** as their ops take Info:
    `filterSessionBeadsByName` (`city_runtime.go:3085`), `cmd_wait.go:1164` (wait-
