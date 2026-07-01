@@ -6,7 +6,7 @@ Paste the block below into a fresh session.
 
 Finish the non-work-bead field-door cleanup on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
-`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `7a4014955`).
+`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `1dbf692e7`).
 
 **Read first, in order:** `engdocs/plans/infra-store-decouple/RECONCILER-CASCADE-HANDOFF.md`
 (the authoritative "finish it out" guide — the verified 21-site census, the
@@ -29,30 +29,29 @@ object (session/nudge/mail/order/graph) is illegal — only generic WORK beads r
 raw. This is the precondition for a per-class backend swap.
 
 **Verified state (workflow `wf_7f806124-bcd`, adversarially cross-checked):** raw-
-accessor surface is **21** non-test sites. The Info codec is RICH (already
-projects state/sleep_reason/pool_slot/named/manual/health/lease clusters). ~30
-`*Info` siblings exist, incl. the whole pending-create lease family and the
-`*ForAgent` family (both DONE this migration). The pool sweep loop is DONE. Do NOT
-re-trust any agent that says "the `*Info` siblings don't exist" — that was a stale
-out-of-tree checkout; pin `git rev-parse HEAD` if you re-run a mapping agent.
+accessor surface is **20** non-test sites (was 21; the recovery loop was converted
+— see below). The Info codec is RICH (already projects
+state/sleep_reason/pool_slot/named/manual/health/lease clusters). ~30 `*Info`
+siblings exist, incl. the whole pending-create lease family and the `*ForAgent`
+family (both DONE this migration). The pool sweep loop AND the pool recovery loop
+are DONE. Do NOT re-trust any agent that says "the `*Info` siblings don't exist" —
+that was a stale out-of-tree checkout; pin `git rev-parse HEAD` if you re-run a
+mapping agent.
+
+**DONE (commit `1dbf692e7`): the recovery-loop slice.**
+`discoverSessionBeadsWithRoots` (`build_desired_state.go:2079`) now iterates
+`OpenInfos()` and recovers the raw bead via `FindByID(info.ID)` only for the
+identity chain (`sessionBeadQualifiedName`, `canonicalSessionIdentityWithConfig`,
+`resolveTemplateForSessionBead` — rule 3). Its two foundation siblings
+(`scaleCheckPartialSessionPreservableInfo`, `staleNonExpandingPoolSessionBeadInfo`,
+the latter equivalence-cased with a canonical-singleton agent fixture) landed and
+were adversarially cross-verified byte-identical. This is the reference shape for
+the remaining loops.
 
 **What REMAINS (in recommended order — each is ONE atomic, carefully-reviewed
 change; do NOT fan parallel agents at the reconciler connected component):**
 
-1. **The recovery-loop slice — independent, convertible NOW, do this first.**
-   `discoverSessionBeadsWithRoots` (`build_desired_state.go:2079`) reads only
-   classifiers that already have Info forms EXCEPT two:
-   `scaleCheckPartialSessionPreservableInfo` (raw at
-   `build_desired_state.go:1765`) and `staleNonExpandingPoolSessionBeadInfo` (raw
-   at `:2941`, reads `Title`/`Labels`/`alias`/`pool_slot` — all already on
-   `Info`). Add those two siblings + equivalence cases, then flip the loop to
-   iterate `OpenInfos()` for every field read and recover the raw bead `b` via
-   `FindByID(info.ID)` for the identity chain (`sessionBeadQualifiedName`,
-   `canonicalSessionIdentityWithConfig`, `resolveTemplateForSessionBead`,
-   `buildFingerprintExtra`, `installAgentSideEffects` — these STAY raw, rule 3 —
-   exactly the pattern the sweep loop already uses). Read `Info.Alias` (present).
-
-2. **The reconciler spine flip — THE primary unlock.** The tick holds
+1. **The reconciler spine flip — THE primary unlock, do this first.** The tick holds
    `session := &ordered[i]` (`session_reconciler.go:1227`) as a mutable working
    copy; `beadByID`/`circuitSessionByIdentity` alias the same array, and Phase 2
    `advanceSessionDrainsWithSessionsTraced` (`session_wake.go:428`) consumes it —
@@ -84,7 +83,7 @@ change; do NOT fan parallel agents at the reconciler connected component):**
      — all in one reviewed commit. Byte-identity oracle = the reconciler/pool E2E
      suite + the recording fake.
 
-3. **The remaining spine-blocked + other-blocked sites** as their ops take Info:
+2. **The remaining spine-blocked + other-blocked sites** as their ops take Info:
    `filterSessionBeadsByName` (`city_runtime.go:3085`), `cmd_wait.go:1164` (wait-
    nudge helper family), `soft_reload.go:103` (needs a `template_overrides`/raw-
    metadata accessor on `Info`), and the `open []beads.Bead` threads at
@@ -92,12 +91,15 @@ change; do NOT fan parallel agents at the reconciler connected component):**
    `session_lifecycle_parallel.go:809`. Add each newly accessor-free file to
    `snapshotInfoOnlyFiles`.
 
-4. **P5 `closeBead` cross-class split** (LANDMINE — isolated, last; recording-fake
+3. **P5 `closeBead` cross-class split** (LANDMINE — isolated, last; recording-fake
    oracle; close-THEN-release; preserve skip-if-already-closed idempotence).
 
-5. **P6** delete dead bead classifiers/`Open()`/`FindSessionBeadBy*` (codec edge
+4. **P6** delete dead bead classifiers/`Open()`/`FindSessionBeadBy*` (codec edge
    `session_bead_snapshot.go:301` is EXEMPT) + widen the guard to forbid
-   `.Store().Store` in converted files.
+   `.Store().Store` in converted files. When the pool sweep + recovery loops'
+   raw siblings lose their last caller (`poolSessionBeadRuntimeRunning`,
+   `scaleCheckPartialSessionPreservable`, `staleNonExpandingPoolSessionBead`),
+   delete them here too.
 
 **DO NOT convert (RAW-BY-DESIGN, not leaks):** `city_status_snapshot.go:411`
 (`countCitySessionsFromSnapshot` — prove the snapshot invariant first),

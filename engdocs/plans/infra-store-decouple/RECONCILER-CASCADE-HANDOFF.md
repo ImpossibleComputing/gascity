@@ -2,7 +2,9 @@
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`,
-**HEAD `7a4014955`** (pushed). This is the authoritative "finish it out" guide.
+**HEAD `1dbf692e7`** (pushed; the recovery-loop slice + a pre-existing unparam
+fix landed on top of `7a4014955`). This is the authoritative "finish it out"
+guide.
 For the completed history read `P4-CASCADE-HANDOFF.md`; the architecture is in
 `NONWORK-BEAD-FIELDDOOR-PLAN.md`; the per-site swap rules are in
 `P4-CONVERSION-CONTRACT.md`.
@@ -32,8 +34,8 @@ git checkout go.sum   # churns spuriously on go test
 
 ## Where the migration stands (verified at HEAD `7a4014955`)
 
-Raw-accessor surface is **21** non-test sites (the prior handoff prose said 20 —
-an undercount; the 21st is `city_runtime.go:2246`). The Info codec
+Raw-accessor surface is **20** non-test sites (was 21; the recovery loop at
+`build_desired_state.go:2079` was converted this session — see below). The Info codec
 (`internal/session/info_store.go:InfoFromPersistedBead`, lines 23–109) is RICH:
 it already projects `state`→`MetadataState`, `sleep_reason`, `pool_slot`,
 `pool_managed`, `session_origin`, `dependency_only`, `manual_session`, `Labels`,
@@ -66,17 +68,26 @@ five small cascades, and (this session, commits `d8c606fd8`, `79c375147`,
   fully flipped to `OpenInfos()`, candidates recovered via `FindByID(info.ID)`
   (`city_runtime.go:2752`); all 20 `TestSweepUndesiredPoolSessionBeads_*` branch
   tests pass unchanged.
+- **The pool recovery loop** (`discoverSessionBeadsWithRoots`,
+  `build_desired_state.go:2079`) fully flipped to `OpenInfos()` (commit
+  `1dbf692e7`); raw bead recovered via `FindByID(info.ID)` only for the identity
+  chain. Added the two siblings it needed — `scaleCheckPartialSessionPreservableInfo`
+  and `staleNonExpandingPoolSessionBeadInfo` (the latter equivalence-cased with a
+  canonical-singleton agent fixture to hit its true branches). Adversarially
+  cross-verified byte-identical. `build_desired_state.go` is NOT accessor-free
+  (rule-3 store ops + the identity chain remain), so it is NOT in
+  `snapshotInfoOnlyFiles`.
 
-**The 21 sites, categorized (this is the work map):**
+**The 20 remaining sites, categorized (this is the work map):**
 
 | Category | Sites | Disposition |
 | --- | --- | --- |
 | **reconciler-spine-blocked** (7) | `city_runtime.go:1159`, `:2158`, `:2246`, `:3085`; `cmd_start.go:904`, `:918`; `session_lifecycle_parallel.go:809` | Unblock only after the spine flip / once the reconcile entry + drain/orphan-release ops take Info. |
-| **recovery-loop-slice** (1) | `build_desired_state.go:2079` | Convertible NOW (see below) once 2 siblings land. |
 | **rule3-store-op — stay raw** (7) | `build_desired_state.go:3341`, `:3570`, `:3816`, `:4165`; `city_runtime.go:2752` (SANCTIONED sweep recovery); `session_beads.go:57`, `:2033` | Thread the bead into a store/close op or a raw `[]beads.Bead` helper. Leave raw (contract rule 3). |
 | **other-blocked** (2) | `cmd_wait.go:1164` (wait-nudge helper family); `soft_reload.go:103` (needs a `template_overrides`/raw-metadata accessor on Info) | Own small foundation each. |
 | **raw-by-design — do NOT convert** (3) | `city_status_snapshot.go:411`, `city_runtime.go:2153`, `city_runtime.go:3246` | See "RAW-BY-DESIGN" below. |
 | **codec-edge — EXEMPT** (1) | `session_bead_snapshot.go:301` | The one codec edge; always exempt. |
+| **DONE this session** (1) | `build_desired_state.go:2079` (recovery loop) | Flipped to `OpenInfos()` in `1dbf692e7`. |
 
 ---
 
@@ -208,24 +219,18 @@ the whole pending-create lease family, the `*ForAgent` family.)
 
 ---
 
-## The rest of the 21 sites (after / independent of the spine flip)
+## The rest of the sites (after / independent of the spine flip)
 
 Convert as their blocking helper gains an Info form; add each newly accessor-free
 file to `snapshotInfoOnlyFiles`.
 
 - **`build_desired_state.go:2079` (recovery loop, `discoverSessionBeadsWithRoots`)
-  — convertible NOW, independent of the spine.** The classifiers it reads all
-  have Info forms EXCEPT two, which are the only foundation gap:
-  `scaleCheckPartialSessionPreservableInfo` (raw at `build_desired_state.go:1765`)
-  and `staleNonExpandingPoolSessionBeadInfo` (raw at `:2941` — reads
-  `Title`+`Labels`+`alias`+`pool_slot`, all already on `Info`). The loop threads
-  the raw bead `b` into an identity-resolution chain (`sessionBeadQualifiedName`,
-  `canonicalSessionIdentityWithConfig`, `resolveTemplateForSessionBead`,
-  `buildFingerprintExtra`, `installAgentSideEffects`) — those STAY raw (rule 3;
-  `sessionBeadConfigAgent` is config-only, takes no bead). **Slice shape (same as
-  the sweep):** add the 2 siblings + equivalence cases, iterate `OpenInfos()` for
-  every field read, recover `b` via `FindByID(info.ID)` for the identity chain.
-  Needs an `Info.Alias` read (already on `Info` as `Alias`).
+  — DONE in `1dbf692e7`.** Flipped to `OpenInfos()`; the two foundation siblings
+  (`scaleCheckPartialSessionPreservableInfo`, `staleNonExpandingPoolSessionBeadInfo`)
+  landed + equivalence-cased; raw `b` recovered via `FindByID(info.ID)` only for
+  the identity chain (`sessionBeadQualifiedName`, `canonicalSessionIdentityWithConfig`,
+  `resolveTemplateForSessionBead` — rule 3). Left as the reference shape for the
+  remaining loops.
 - `city_runtime.go:3085` (`filterSessionBeadsByName`) — its caller feeds
   `newSessionBeadSnapshot(open)` + the raw-bead reconciler; converts only once
   `reconcileSessionBeadsAtPathWithNamedDemand` takes Info (part of the spine).
