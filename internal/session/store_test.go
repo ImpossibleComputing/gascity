@@ -58,13 +58,15 @@ func TestApplyPatchEmptyIsNoOp(t *testing.T) {
 	}
 }
 
-// TestGetReflectsApplyPatch proves the refresh-on-write guarantee the session
-// reconciler relies on (front-door Step 3): after a mutation persisted through
-// ApplyPatch, a re-Get returns an Info reflecting that mutation. This is what
-// makes refreshSessionInfo(id) — re-Get into the coherent snapshot after a heal
-// — byte-identical to the retired InfoFromPersistedBead(*session) post-heal
-// re-derive, and it is the guarantee that must survive the Step 6 lockstep
-// removal (when the raw working copy is gone and Get is the sole source).
+// TestGetReflectsApplyPatch proves the store-authoritative refresh guarantee the
+// session reconciler cuts over to in front-door Step 6: after a mutation
+// persisted through ApplyPatch, a re-Get returns an Info reflecting that
+// mutation. During the lockstep-coexistence phase (Steps 3-5) refreshSessionInfo
+// refreshes the snapshot from the raw working copy instead (byte-identical by
+// construction, and preserving the reconciler's deliberate intra-tick raw/store
+// divergences like the reset_committed_at hiding); Step 6 removes the raw working
+// set and makes Get the sole source. This test pins that Get sees a persisted
+// write — the guarantee that Step-6 cutover depends on.
 func TestGetReflectsApplyPatch(t *testing.T) {
 	// A creating, still-claimed pending-create session — the shape whose lease
 	// fields (state / pending_create_claim / last_woke_at) a heal-with-rollback

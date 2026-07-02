@@ -1330,20 +1330,21 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	for i := range ordered {
 		infoByID[ordered[i].ID] = sessionpkg.InfoFromPersistedBead(ordered[i])
 	}
-	// refreshSessionInfo re-reads a session's Info from the store into the
-	// coherent snapshot after a mutation persisted through sessFront, so a
-	// post-mutation decision read routes through infoByID instead of a fresh
-	// InfoFromPersistedBead(*session) re-derive (front-door migration Step 3).
-	// Get is the store-authoritative path; the raw-bead fallback keeps the refresh
-	// byte-identical to the retired re-derive if Get hits a transient store error
-	// (the lockstep keeps the raw working copy coherent during migration). The
-	// fallback — and the raw beadByID it reads — are removed in Step 6 once the
-	// lockstep and the raw working set go away and Get becomes the sole source.
+	// refreshSessionInfo re-projects a session's Info into the coherent snapshot
+	// after a mutation, so a post-mutation decision read routes through infoByID
+	// instead of a fresh InfoFromPersistedBead(*session) re-derive (front-door
+	// migration Step 3). During the lockstep-coexistence phase (Steps 3-5) it
+	// refreshes from the raw working copy: byte-identical BY CONSTRUCTION to the
+	// retired re-derive, since healState/markProviderTerminalError/… mirror every
+	// persisted write onto session.Metadata in lockstep. Refreshing from the raw
+	// bead (rather than a store-authoritative sessFront.Get) deliberately preserves
+	// the reconciler's intra-tick raw/store divergences — e.g. reset_committed_at
+	// is persisted but kept OFF the in-memory bead this tick (#2345, force-wake
+	// prevention), and the RunLive re-apply persists started_live_hash without a
+	// lockstep — which a Get would wrongly pull into the snapshot. Step 6 removes
+	// the raw working set and cuts refresh over to Get, handling those hidden keys
+	// with explicit intra-tick suppression.
 	refreshSessionInfo := func(id string) {
-		if inf, err := sessFront.Get(id); err == nil {
-			infoByID[id] = inf
-			return
-		}
 		if b := beadByID[id]; b != nil {
 			infoByID[id] = sessionpkg.InfoFromPersistedBead(*b)
 		}
@@ -1573,8 +1574,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// Post-heal refresh: healStateWithRollback (above) persists through
 			// sessFront and mirrors the batch onto session.Metadata in lockstep, so
 			// the top-of-loop `info` (from the snapshot at loop entry) is now stale
-			// for this switch. Refresh this session's snapshot entry from the store
-			// and read the post-heal Info off it. The trace call above takes the
+			// for this switch. Refresh this session's snapshot entry from the
+			// lockstep-updated bead and read the post-heal Info off it. The trace call above takes the
 			// bead by value (cannot mutate), and Go switch cases do not fall through,
 			// so both the preserveNamed body and the pendingCreateSessionStillLeased
 			// guard/body below read the same unmutated post-heal snapshot —
@@ -1822,16 +1823,20 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				}
 			}
 		}
-		// Re-derive after the zombie-capture block: the alive-gated read just below
-		// can never see a markProviderTerminalError mutation (that runs only under
-		// `running && !alive`, mutually exclusive with `alive`), but the !alive
-		// rollback reads (the block below) run on the post-capture bead — so project
-		// once here and reuse for the whole rollback fast-path. Between the three
-		// reads the only mutations sit on `continue` paths
-		// (attemptRollbackPendingCreate; checkRateLimitStability on hit) and
-		// runningSessionMatchesPendingCreate is read-only, so infoPostZombie stays
-		// byte-identical throughout.
-		infoPostZombie := sessionpkg.InfoFromPersistedBead(*session)
+		// Refresh the snapshot after the zombie-capture block: the alive-gated read
+		// just below can never see a markProviderTerminalError mutation (that runs
+		// only under `running && !alive`, mutually exclusive with `alive`), but the
+		// !alive rollback reads (the block below) run on the post-capture bead —
+		// markProviderTerminalError persists through sessFront and mirrors the batch
+		// onto session.Metadata in lockstep, so one refresh here captures it (the
+		// only bead mutation reachable since loop entry: recordResetStallIfDue above
+		// writes only to the drain tracker / recorder, never session.Metadata) and
+		// the whole rollback fast-path reuses it. Between the three reads the only
+		// further mutations sit on `continue` paths (attemptRollbackPendingCreate;
+		// checkRateLimitStability on hit) and runningSessionMatchesPendingCreate is
+		// read-only, so infoPostZombie stays byte-identical throughout.
+		refreshSessionInfo(session.ID)
+		infoPostZombie := infoByID[session.ID]
 		if alive && shouldRollbackPendingCreateInfo(infoPostZombie) && !runningSessionMatchesPendingCreate(session, name, sp) {
 			attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)
 			continue
@@ -2489,13 +2494,18 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// hash until the new process commits. Without the durable guard,
 		// a deferred start's next reconcile tick would clear the preserved
 		// hash and rotate session_key before --resume can be prepared.
-		// Re-derive: the top-of-loop info is stale here — the desired-path
-		// blocks above (drain-ack, restart-request, alive config-drift) may have
-		// mutated session.Metadata in lockstep — so project the current bead for
-		// the drift-repair skip decision. The Info sibling is only evaluated when
-		// driftRestartedInPlace is false (short-circuit ||); the fresh projection
-		// reflects the bead exactly, byte-identical to the raw read it replaces.
-		infoAsleepDrift := sessionpkg.InfoFromPersistedBead(*session)
+		// Refresh the snapshot: the top-of-loop info is stale here — the
+		// desired-path blocks above (drain-ack, restart-request, alive config-drift)
+		// may have mutated session.Metadata in lockstep — so re-project the current
+		// bead for the drift-repair skip decision. The Info sibling is only
+		// evaluated when driftRestartedInPlace is false (short-circuit ||); the
+		// refresh reflects the lockstep-updated bead exactly, byte-identical to the
+		// raw read it replaces. (The restart-handoff block above persists
+		// reset_committed_at without a lockstep by design — refreshing from the raw
+		// bead, not Get, correctly keeps that key off this tick's snapshot; see
+		// refreshSessionInfo.)
+		refreshSessionInfo(session.ID)
+		infoAsleepDrift := infoByID[session.ID]
 		skipAsleepDriftRepair := driftRestartedInPlace ||
 			pendingResumePreservingNamedRestartInfo(infoAsleepDrift, clk, startupTimeout)
 		if !alive && isNamedSessionBead(*session) && !skipAsleepDriftRepair {
