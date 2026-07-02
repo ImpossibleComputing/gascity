@@ -1,18 +1,18 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `17f138775`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `6843e8607`**.
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status (as of `17f138775`):** Steps 0–3 DONE, Step 4 in progress (4A + 4B done).
-Next actionable = **Step 4C** (cmd/gc callers → `LifecycleInputFromInfo` off the
-snapshot + direct `b.Metadata[...]` reads → `Info`). Session commits
-`cece437df`..`17f138775` (10). `RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is
-paste-ready for 4C.
+**Status (as of `6843e8607`):** Steps 0–3 DONE, Step 4 in progress (4A + 4B + 4C
+done). Next actionable = **Step 4D** (pass the `infoByID` snapshot into
+`buildAwakeInputFromReconciler` so it stops re-deriving Info + convert the 3 simpler
+scans). Session commits `cece437df`..`6843e8607` (12).
+`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready for 4D.
 
 **Read first:** `RECONCILER-FRONT-DOOR-SPEC.md` (the design, review-hardened v2) and
 `OBJECT-MODEL-FRONT-DOOR-DESIGN.md` (the parent design; §3.1 session, §7 Phases 4–5).
@@ -147,20 +147,23 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
         mechanical, behavior-identical compile-fix that dropping the struct field
         forces for `go build ./...`.** So 4C is now purely the SEMANTIC conversion
         (below), not the mechanical routing.
-      - [ ] **4C** — cmd/gc callers: `compute_awake_bridge.go`
-        `buildAwakeInputFromReconciler` → `LifecycleInputFromInfo(info)` off the
-        snapshot + convert its DIRECT `b.Metadata[...]` reads (`sleep_reason`,
-        `template`, `dependency_only`, `wait_hold`, `restart_requested`,
-        `continuation_reset_pending`+`reset_committed_at`, `currently_processing_bead_id`,
-        `detached_at`) → `Info`. **NOTE `restart_requested`**: the direct read @129
-        + the ProjectLifecycle-adjacent one — it is the §5.2 intra-tick marker set
-        in-memory @2084; during raw-refresh coexistence a raw `Info.RestartRequested`
-        mirror reflects it (add it), Step 6 handles the Get-cutover intra-tick
-        carrier. (The `session_reconcile.go`/`session_sleep.go`/`cmd_session.go`
-        `FromMetadata` routing already landed in 4B as the compile-fix; the remaining
-        4C work is the `compute_awake_bridge` `FromInfo`-off-snapshot conversion, its
-        direct `b.Metadata[...]` reads → `Info`, and the `Info.RestartRequested`
-        mirror.)
+      - [x] **4C** — `compute_awake_bridge.go` `buildAwakeInputFromReconciler` off
+        `Info` (`6843e8607`). Added `Info.RestartRequested` (struct + codec + a
+        `TestSessionClassifierInfoEquivalence` `sessionRestartRequested` case, with
+        `restart_requested` on the wake-mode-and-intents fixture). The session-beads
+        loop now derives `info := InfoFromPersistedBead(*b)` and reads every fact from
+        it — `Closed`, `SessionNameMetadata`, `Template`, `SleepReason`, `WaitHold`,
+        `RestartRequested`, `ContinuationResetPending`+`ResetCommittedAt`,
+        `CurrentlyProcessingBeadID`, `DetachedAt`, `CreatedAt`, and the manual/named
+        classifiers (`isManualSessionInfo`/`isNamedSessionInfo`, bead siblings
+        oracle-proven equivalent); the lifecycle view is fed by
+        `LifecycleInputFromInfo(info)`. **One deliberate normalization:**
+        `DependencyOnly` moved from the ad-hoc untrimmed `== "true"` to the trimmed
+        `info.DependencyOnly` (the codec-canonical projection; invisible — no padded
+        fixture). 4C re-derives `Info` LOCALLY (self-contained diff); **4D** swaps the
+        source to the passed-in `infoByID` snapshot. The
+        `shouldProbeAttachmentForAwakeInput`/`wakeTargets` reads (`target.session`, a
+        different data source) stay raw — out of scope.
       - [ ] **4D** — the 3 simpler scans: min-floor (`ordered[j].Status != "closed"`
         → `!Info.Closed`; every close site must set Closed on the refreshed snapshot),
         `computeNamedSessionProgressSignatures`, `advanceSessionDrains`; and pass the
