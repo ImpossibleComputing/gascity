@@ -308,6 +308,47 @@ func preserveConfiguredNamedSessionBead(b beads.Bead, cfg *config.City, cityName
 	return true
 }
 
+// preserveConfiguredNamedSessionBeadInfo is the session.Info sibling of
+// preserveConfiguredNamedSessionBead. Equivalence-proven. It reads the RAW
+// metadata mirrors (Info.SessionNameMetadata, Info.MetadataState, Info.SleepReason,
+// Info.LastWokeAt) so the identity match and terminal-state gate are byte-identical
+// to the raw form; isNamedSessionInfo / namedSessionIdentityInfo are the proven
+// leaf siblings and findNamedSessionSpec keys off the same projected identity.
+func preserveConfiguredNamedSessionBeadInfo(i session.Info, cfg *config.City, cityName string) bool {
+	if cfg == nil || !isNamedSessionInfo(i) {
+		return false
+	}
+	identity := namedSessionIdentityInfo(i)
+	if identity == "" {
+		return false
+	}
+	spec, ok := findNamedSessionSpec(cfg, cityName, identity)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(i.SessionNameMetadata) != spec.SessionName {
+		return false
+	}
+	// Identity match. Gate on terminal-ish state so a dead bead releases its
+	// alias instead of holding it forever (ga-ue1r / gm-0fl34g5 incident).
+	state := strings.TrimSpace(i.MetadataState)
+	switch state {
+	case "stopped":
+		if strings.TrimSpace(i.SleepReason) != "" {
+			return true
+		}
+		if lastWoke, ok := parseRFC3339Metadata(i.LastWokeAt); ok {
+			if time.Since(lastWoke) < staleCreatingStateTimeout {
+				return true
+			}
+		}
+		return false
+	case string(session.StateFailedCreate):
+		return false
+	}
+	return true
+}
+
 func reopenClosedConfiguredNamedSessionBead(
 	cityPath string,
 	store beads.Store,

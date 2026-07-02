@@ -640,6 +640,13 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 	if !configuredNamedSessionBeadHasSpec(beadsByShape["named"], namedSpecCfg, "") {
 		t.Fatal("configuredNamedSessionBeadHasSpec(named, namedSpecCfg) = false; fixture/cfg no longer exercise the has-spec true branch")
 	}
+	// The "named" fixture (session_name "mayor", no terminal state) must resolve
+	// its spec AND hit the keep-alias true branch under namedSpecCfg, so the
+	// preserveConfiguredNamedSessionBead equivalence case below is a real
+	// true-branch comparison, not a trivial both-false pass.
+	if !preserveConfiguredNamedSessionBead(beadsByShape["named"], namedSpecCfg, "") {
+		t.Fatal("preserveConfiguredNamedSessionBead(named, namedSpecCfg) = false; fixture/cfg no longer exercise the keep-alias true branch")
+	}
 
 	// classifiers that take a cfg and/or a template argument.
 	cfgBoolChecks := map[string]struct {
@@ -659,6 +666,10 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"configuredNamedSessionBeadHasSpec": {
 			func(b beads.Bead) bool { return configuredNamedSessionBeadHasSpec(b, namedSpecCfg, "") },
 			func(i session.Info) bool { return configuredNamedSessionBeadHasSpecInfo(i, namedSpecCfg, "") },
+		},
+		"preserveConfiguredNamedSessionBead": {
+			func(b beads.Bead) bool { return preserveConfiguredNamedSessionBead(b, namedSpecCfg, "") },
+			func(i session.Info) bool { return preserveConfiguredNamedSessionBeadInfo(i, namedSpecCfg, "") },
 		},
 	}
 
@@ -681,10 +692,27 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 	}
 
 	const leaseStartupTimeout = 90 * time.Second
+	// leaseCfg resolves template "worker" to a live (non-suspended) agent so
+	// pendingCreateSessionStillLeased's agent-resolved tail (`return !agent.Suspended`)
+	// is exercised on the worker-template fixtures rather than only the nil-agent
+	// fallthrough. Both forms take the same cfg, so byte-identity is preserved.
+	leaseCfg := &config.City{Agents: []config.Agent{{Name: "worker"}}}
 	clkBoolChecks := map[string]struct {
 		bead func(beads.Bead) bool
 		info func(session.Info) bool
 	}{
+		"staleCreatingState": {
+			func(b beads.Bead) bool { return staleCreatingState(b, clk) },
+			func(i session.Info) bool { return staleCreatingStateInfo(i, clk) },
+		},
+		"sessionStartRequested": {
+			func(b beads.Bead) bool { return sessionStartRequested(b, clk) },
+			func(i session.Info) bool { return sessionStartRequestedInfo(i, clk) },
+		},
+		"pendingCreateSessionStillLeased": {
+			func(b beads.Bead) bool { return pendingCreateSessionStillLeased(b, leaseCfg, clk) },
+			func(i session.Info) bool { return pendingCreateSessionStillLeasedInfo(i, leaseCfg, clk) },
+		},
 		"sessionIsQuarantined": {
 			func(b beads.Bead) bool { return sessionIsQuarantined(b, clk) },
 			func(i session.Info) bool { return sessionIsQuarantinedInfo(i, clk) },

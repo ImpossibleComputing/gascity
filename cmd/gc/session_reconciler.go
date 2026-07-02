@@ -630,6 +630,45 @@ func pendingCreateSessionStillLeased(session beads.Bead, cfg *config.City, clk c
 	return false
 }
 
+// pendingCreateSessionStillLeasedInfo is the session.Info sibling of
+// pendingCreateSessionStillLeased. Equivalence-proven. The template resolution
+// mirrors the raw form: normalizedSessionTemplateInfo with an Info.Template
+// fallback (Info.Template is the raw metadata["template"] mirror), and
+// findAgentByTemplate keys off the same resolved template. The claim branch and
+// the sessionStartRequestedInfo fallback both compose already-proven siblings.
+func pendingCreateSessionStillLeasedInfo(i sessionpkg.Info, cfg *config.City, clk clock.Clock) bool {
+	var startupTimeout time.Duration
+	if cfg != nil {
+		startupTimeout = cfg.Session.StartupTimeoutDuration()
+	}
+	if i.PendingCreateClaim {
+		if !pendingCreateLeaseActiveInfo(i, clk, startupTimeout) {
+			return false
+		}
+		template := normalizedSessionTemplateInfo(i, cfg)
+		if template == "" {
+			template = i.Template
+		}
+		agent := findAgentByTemplate(cfg, template)
+		if agent != nil {
+			return !agent.Suspended
+		}
+		return true
+	}
+	if !sessionStartRequestedInfo(i, clk) {
+		return false
+	}
+	template := normalizedSessionTemplateInfo(i, cfg)
+	if template == "" {
+		template = i.Template
+	}
+	agent := findAgentByTemplate(cfg, template)
+	if agent != nil {
+		return !agent.Suspended
+	}
+	return false
+}
+
 func pendingCreateStartInFlight(session beads.Bead, clk clock.Clock, startupTimeout time.Duration) bool {
 	if strings.TrimSpace(session.Metadata["pending_create_claim"]) != "true" &&
 		sessionpkg.State(strings.TrimSpace(session.Metadata["state"])) != sessionpkg.StateCreating {
@@ -1364,7 +1403,18 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 			}
-			preserveNamed := preserveConfiguredNamedSessionBead(*session, cfg, cityName)
+			// Still pre-heal: the preserve-named + failed-create-close decision
+			// reads below reuse the top-of-loop `info` with no re-derive. This read
+			// runs on an unmutated bead (the rollback block above only mutates on
+			// its `continue` paths). The one mutation reachable further down —
+			// checkRateLimitStability (~1433) — writes only state/sleep/health/
+			// quarantine keys, never template/agent_name/alias, so the template
+			// trace read on its hit/err path stays byte-identical against `info`;
+			// and the failed-create-close reads are reached only when it took its
+			// non-mutating (false,nil) return (any mutation sets hit/err → continue).
+			// The two trace-payload raw reads (pending_create_claim, state) stay raw:
+			// pending_create_claim has no raw-string Info mirror (it is a bool).
+			preserveNamed := preserveConfiguredNamedSessionBeadInfo(info, cfg, cityName)
 			// #3630: the configured spec is present this tick — reset any
 			// suspend-drain confirmation window so a later genuine removal still
 			// gets the full confirmation buffer.
@@ -1388,9 +1438,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 			if rateLimitHit || rateLimitErr != nil {
 				if trace != nil {
-					template := normalizedSessionTemplate(*session, cfg)
+					template := normalizedSessionTemplateInfo(info, cfg)
 					if template == "" {
-						template = session.Metadata["template"]
+						template = info.Template
 					}
 					result := "held"
 					if rateLimitErr != nil {
@@ -1402,12 +1452,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				}
 				continue
 			}
-			if isFailedCreateSessionBead(*session) {
-				template := normalizedSessionTemplate(*session, cfg)
+			if isFailedCreateSessionInfo(info) {
+				template := normalizedSessionTemplateInfo(info, cfg)
 				if template == "" {
-					template = session.Metadata["template"]
+					template = info.Template
 				}
-				if pendingCreateSessionStillLeased(*session, cfg, clk) {
+				if pendingCreateSessionStillLeasedInfo(info, cfg, clk) {
 					if trace != nil {
 						trace.recordDecision("reconciler.session.pending_create_preserved", template, name, "pending_create", "kept_open", traceRecordPayload{
 							"pending_create_claim": strings.TrimSpace(session.Metadata["pending_create_claim"]),

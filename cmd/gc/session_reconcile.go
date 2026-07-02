@@ -197,6 +197,24 @@ func sessionStartRequested(session beads.Bead, clk clock.Clock) bool {
 	return !staleCreatingState(session, clk)
 }
 
+// sessionStartRequestedInfo is the session.Info sibling of sessionStartRequested.
+// Equivalence-proven. It reads the RAW metadata state (Info.MetadataState) and the
+// projected pending-create claim flag (Info.PendingCreateClaim, which the codec
+// derives as strings.TrimSpace(pending_create_claim) == "true" — identical to the
+// raw read), and keeps the literal "creating" state compare the original uses.
+func sessionStartRequestedInfo(i sessionpkg.Info, clk clock.Clock) bool {
+	if strings.TrimSpace(i.MetadataState) == string(sessionpkg.StateStartPending) {
+		return true
+	}
+	if i.PendingCreateClaim {
+		return true
+	}
+	if strings.TrimSpace(i.MetadataState) != "creating" {
+		return false
+	}
+	return !staleCreatingStateInfo(i, clk)
+}
+
 // staleCreatingStateTimeout bounds how long a state=creating bead may sit
 // before generic creating metadata and corrupt start leases roll back. It is
 // measured from the pending-create transition (see staleCreatingState below),
@@ -1206,6 +1224,19 @@ func staleCreatingState(session beads.Bead, clk clock.Clock) bool {
 		return false
 	}
 	return pendingCreateAttemptStale(session, clk)
+}
+
+// staleCreatingStateInfo is the session.Info sibling of staleCreatingState.
+// Equivalence-proven. It reads the RAW metadata state (Info.MetadataState),
+// matching staleCreatingState's session.Metadata["state"] read.
+func staleCreatingStateInfo(i sessionpkg.Info, clk clock.Clock) bool {
+	if clk == nil {
+		return false
+	}
+	if strings.TrimSpace(i.MetadataState) != string(sessionpkg.StateCreating) {
+		return false
+	}
+	return pendingCreateAttemptStaleInfo(i, clk)
 }
 
 // pendingCreateAttemptStale reports whether the current pending-create attempt
