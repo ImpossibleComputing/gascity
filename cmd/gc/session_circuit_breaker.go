@@ -866,19 +866,25 @@ func computeNamedSessionProgressSignatures(
 	ambiguous := make(map[string]bool)
 	knownIdentities := make(map[string]bool)
 	for _, sb := range sessionBeads {
-		identity := strings.TrimSpace(sb.Metadata[namedSessionIdentityMetadata])
+		// Read the identity/name/alias resolver keys through the typed Info
+		// projection instead of cracking sb.Metadata inline. This scan runs in
+		// Phase 0.5 before the reconciler's coherent infoByID snapshot exists, so
+		// it projects per bead (the same shape advanceSessionDrains uses); the
+		// projection is pure, so it is byte-identical to the raw reads.
+		info := session.InfoFromPersistedBead(sb)
+		identity := strings.TrimSpace(info.ConfiguredNamedIdentity)
 		if identity == "" {
 			continue
 		}
 		knownIdentities[identity] = true
 		resolve[identity] = identity
-		if id := strings.TrimSpace(sb.ID); id != "" {
+		if id := strings.TrimSpace(info.ID); id != "" {
 			resolve[id] = identity
 		}
-		if sn := strings.TrimSpace(sb.Metadata["session_name"]); sn != "" {
+		if sn := strings.TrimSpace(info.SessionNameMetadata); sn != "" {
 			addSessionCircuitResolverKey(bareResolve, ambiguous, sn, identity)
 		}
-		if alias := strings.TrimSpace(sb.Metadata["alias"]); alias != "" {
+		if alias := strings.TrimSpace(info.Alias); alias != "" {
 			addSessionCircuitResolverKey(bareResolve, ambiguous, alias, identity)
 		}
 	}
