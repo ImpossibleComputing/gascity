@@ -72,18 +72,35 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
       Excluded: `detachedProbeMetadataKey` (reads an **assigned-work** bead, not a
       session bead). No call-site change (4c-foundation shape).
       **`PoolSlot`/`CommonName`/`ConfiguredNamedIdentity` already existed.**
-- [ ] **Step 2 — coherent snapshot + refresh-on-write, alongside the existing
-      lockstep** (additive, behavior-identical). Promote `session.Store.List` to a
-      `ListInfo(ListFilter) ([]Info,error)` and load the tick working set as
-      `[]Info`/`map[id]Info`; after any mutation, refresh that session's entry via
-      `Get`. Keep the raw lockstep in place (retired in step 6). Proceed without an
-      upfront benchmark; add a follow-up only if it shows hot.
-- [ ] **Step 3 — per-session reads onto the snapshot.** Fold clusters 1–4e off the
-      `InfoFromPersistedBead(*session)` re-derive onto the snapshot `Info`; convert
-      each write + its non-`continue` dependent read as a unit. `restart_requested`
-      stays an **in-memory intra-tick field** (spec §5.2 — do NOT persist it).
-      Trace-payload reads of bool/int-mirrored keys keep the raw string (spec §4.1).
-      E2E after each cluster.
+- [x] **Step 2 — coherent snapshot, alongside the existing lockstep** (additive,
+      behavior-identical). DONE. Built the tick working set once as
+      `infoByID map[string]session.Info` from `ordered` (post-Phase-0.5, in
+      `session_reconciler.go` right after `beadByID`) and re-sourced the top-of-loop
+      pre-mutation `info` (was `InfoFromPersistedBead(*session)`) onto it. Verified
+      byte-identical: Phase 1 mutates only the current iteration's session (no
+      cross-session writes — grep-confirmed), and the snapshot is built after
+      Phase-0.5, so no entry goes stale before it is visited. Lockstep + raw
+      `ordered`/`beadByID` untouched. **Two justified refinements of the literal
+      plan (flagged):** (1) **`ListInfo(ListFilter)` deferred** — `session.Store.List`
+      has ZERO production callers; the reconciler's working set is the in-memory
+      `ordered` (topo-ordered / healed / retired / CB-restored), NOT a fresh
+      `store.List`, so promoting `List` now would add an unconsumed method (YAGNI).
+      (2) **Refresh-on-write moved to Step 3** — it has no consumer until a
+      post-mutation read migrates onto the snapshot; wiring it per-unit in Step 3
+      (each `write + refresh + dependent-read` as ONE commit) honors §2's governing
+      principle *better* than blanket-wiring unconsumed refreshes now. Gates:
+      build ./... · vet · golangci-lint=0 · gofmt · `TestReconcileSessionBeads*` +
+      reconciler/phase0/chaos/named (427 PASS) + trace green.
+- [ ] **Step 3 — per-session reads onto the snapshot + refresh-on-write (folded
+      from Step 2).** Introduce a `refreshSessionInfo(id)` helper (re-`Get` →
+      `infoByID[id]`) and fold clusters 1–4e off the `InfoFromPersistedBead(*session)`
+      re-derive onto the snapshot `Info` — `infoPostHeal`@~1545, `infoPostZombie`
+      @~1793, `infoAsleepDrift`@~2457, wake-pass `info`@~2690. Convert each **write +
+      its refresh + the non-`continue` dependent read as ONE unit, one commit** (§2
+      governing principle); each such drop needs a multi-session / read-after-write
+      test. `restart_requested` stays an **in-memory intra-tick field** (spec §5.2 —
+      do NOT persist it). Trace-payload reads of bool/int-mirrored keys keep the raw
+      string (spec §4.1). E2E after each cluster.
 - [ ] **Step 4 — `LifecycleInput` from `Info` + the four cross-session scans.**
       Populate `LifecycleInput` from `Info` fields (needs step 1), then convert the
       scans onto the coherent snapshot — **`buildAwakeInputFromReconciler` first**

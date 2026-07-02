@@ -1316,6 +1316,21 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		beadByID[ordered[i].ID] = &ordered[i]
 	}
 
+	// Coherent typed snapshot of the tick's working set, loaded once (front-door
+	// migration Phase 5, Step 2). Reconciler decision reads route through this
+	// instead of a per-iteration InfoFromPersistedBead(*session) re-derive: it is
+	// the typed replacement for the raw session.Metadata[k]=v lockstep, which is
+	// kept in lockstep with it until every dependent read has moved onto the
+	// snapshot (Step 6). Built here from `ordered` (post-Phase-0.5), so each entry
+	// is byte-identical to a fresh projection of that session's bead at loop entry
+	// — Phase 1 mutates only the current iteration's session, so no entry goes
+	// stale before it is visited. Entries are refreshed from the store (via Get)
+	// after a mutation as the post-mutation reads migrate onto them (Step 3+).
+	infoByID := make(map[string]sessionpkg.Info, len(ordered))
+	for i := range ordered {
+		infoByID[ordered[i].ID] = sessionpkg.InfoFromPersistedBead(ordered[i])
+	}
+
 	// Phase 1: Forward pass (topo order) — wake sessions, handle alive state.
 	var startCandidates []startCandidate
 	var wakeTargets []wakeTarget
@@ -1358,12 +1373,17 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		session := &ordered[i]
 		// Typed projection for this iteration's mutation-free preamble decision
 		// reads (session_name, reset-pending, known-state, and the unknown-state
-		// trace). reconcileDrainAckStopPending below only mutates on its
+		// trace), read from the coherent snapshot loaded above rather than a fresh
+		// per-iteration re-derive. The snapshot entry equals InfoFromPersistedBead
+		// (*session) at this point: it was built from `ordered` at loop entry and
+		// Phase 1 mutates only the current session, so no earlier iteration could
+		// have staled it. reconcileDrainAckStopPending below only mutates on its
 		// true/continue paths, so when control falls through to the known-state
 		// check the session is still unmutated and this projection stays
 		// byte-identical. Reads after the first mutation (heal/rollback/close)
-		// stay raw for now — later clusters re-derive after each mutation.
-		info := sessionpkg.InfoFromPersistedBead(*session)
+		// stay raw / re-derived for now — later clusters refresh the snapshot
+		// entry after each mutation (Step 3+).
+		info := infoByID[session.ID]
 		name := strings.TrimSpace(info.SessionNameMetadata)
 		tp, desired := desiredState[name]
 		if _, _, pending := resetPendingCommittedAtInfo(info); !pending && dt != nil {
