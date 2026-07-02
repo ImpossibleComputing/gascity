@@ -215,15 +215,17 @@ on the raw bead (accepted).** Therefore:
   not the value copy. The inline `session.Status="closed"` write + trace-only bool
   payloads stay raw. No new siblings/codec change; correctness proven by the E2E.
 
-**Verified scope (at HEAD `6ccf9d698`):** 194 raw `.Metadata[` reads at the
+**Verified scope (census at HEAD `6ccf9d698`):** 194 raw `.Metadata[` reads at the
 CONT-5 census — reconciler 123 / reconcile 50 / wake 21 — plus 6 `.Status`.
 Most are inside the raw machinery that stays. Only DECISION reads convert.
-Phase 2 + Phase-1 clusters 1+2+3 have converted the drain-advance loop and the
-**entire `!desired` pre-heal region** (loop preamble, pending-create rollback
-gate, preserve-named, failed-create-close). The **post-heal region**
-(heal/stability, drain-ack, orphan-drain/suspend/close, pool-demand — everything
-after `healStateWithRollback` at `session_reconciler.go:1491`) is the remaining
-bulk (cluster 4+, the **first genuine re-derive**).
+**Done so far (HEAD `8c3e600ae`):** Phase 2 drain-advance + the **entire `!desired`
+branch** — pre-heal (clusters 1–3: loop preamble, pending-create rollback gate,
+preserve-named, failed-create-close) AND post-heal (cluster 4a switch guards +
+cluster 4b `default` block: drain-ack / orphan-drain / suspend / close). **Remaining
+(cluster 4c+):** the **desired branch** (after `session_reconciler.go:~1718` — the
+zombie-detection fast-path + the stability/churn/drain-advance branches) and the
+scattered field-gap decision reads (`started_config_hash`, `pin_awake`). The
+apply/write-back cluster + `ProjectLifecycle` + circuit breaker stay raw (by design).
 
 ## Field-gaps still needed (decision-reads only)
 
@@ -252,17 +254,18 @@ bulk (cluster 4+, the **first genuine re-derive**).
    - **DONE — cluster 2 (`6c1e41d1b`): pending-create rollback gate (`~1338–1357`).**
      The first block inside `!desired`. See the Status "cluster 2" block.
 
-   **KEY RE-FRAMING (corrects the earlier plan):** the `!desired` orphan/suspend
+   **KEY RE-FRAMING (settled by clusters 2–4b):** the `!desired` orphan/suspend
    branch does NOT need re-derive until the heal. Everything from the top of
-   `!desired` (`~1330`) down to **`healStateWithRollback` (`session_reconciler.go:1441`)**
-   is the **pre-heal region**: every mutation reachable before the heal
-   (`checkRateLimitStability` on hit/err, `attemptRollbackPendingCreate`, the inline
-   `session.Status="closed"` at the failed-create close, `~1428`) is immediately
+   `!desired` down to **`healStateWithRollback` (`session_reconciler.go:1491` at the
+   current HEAD)** is the **pre-heal region**: every mutation reachable before the
+   heal (`checkRateLimitStability` on hit/err, `attemptRollbackPendingCreate`, the
+   inline `session.Status="closed"` at the failed-create close) is immediately
    followed by `continue`, and `workerSessionTargetRunningWithConfig` reads by ID.
    So control only reaches the next decision read on the still-unmutated bead, and
-   the **top-of-loop `info` stays byte-identical for the whole pre-heal region** —
-   same safety class as clusters 1–2, **NO re-derive**. The genuine
-   re-derive-after-mutation work is the **post-heal region** (after `1441`).
+   the **top-of-loop `info` stayed byte-identical for the whole pre-heal region**
+   (clusters 1–3, NO re-derive). The **post-heal region** (after `1491`) needed the
+   `infoPostHeal` re-derive — done in clusters 4a (switch guards) + 4b (`default`
+   block), which found a single top-of-switch re-derive sufficed.
 
    - **DONE — cluster 3 (`937beeb13`): the remaining pre-heal blocks
      (`~1414–1457`), no re-derive.** preserve-named + failed-create-close, both
