@@ -552,6 +552,98 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				"pin_awake":           "true",
 			},
 		},
+		// --- reconciler decision-read cluster fixtures (front-door Phase 5) ---
+		"hold-and-quarantine": {
+			// held_until suppresses all wake reasons; the reconcile path also reads
+			// quarantined_until alongside it. Parity fixture for the hold/quarantine
+			// suppression branch.
+			ID:     "ga-hold",
+			Type:   session.BeadType,
+			Title:  "hold",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":          "worker",
+				"held_until":        futureRFC3339,
+				"quarantined_until": futureRFC3339,
+				"wake_attempts":     "2",
+			},
+		},
+		"wait-hold-flag": {
+			// wait_hold=="true" is the raw metadata compute_awake_bridge maps onto
+			// LifecycleInput.WaitHold; distinct from sleep_reason=="wait-hold".
+			ID:     "ga-waithold",
+			Type:   session.BeadType,
+			Title:  "waithold",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":     "worker",
+				"state":        "asleep",
+				"sleep_reason": "wait-hold",
+				"wait_hold":    "true",
+			},
+		},
+		"churn-spiraling": {
+			// churn_count read via strconv.Atoi (which does NOT trim): the padded
+			// value proves Info.ChurnCount preserves the raw bytes verbatim.
+			ID:     "ga-churn",
+			Type:   session.BeadType,
+			Title:  "churn",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":    "worker",
+				"churn_count": " 5 ",
+			},
+		},
+		"churn-cleared-zero": {
+			// Exercises the churn_count == "0" clear branch explicitly.
+			ID:     "ga-churnzero",
+			Type:   session.BeadType,
+			Title:  "churnzero",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":    "worker",
+				"churn_count": "0",
+			},
+		},
+		"wake-mode-and-intents": {
+			// wake_mode=="fresh" (fresh-wake / drain finalize), sleep_intent branch,
+			// instance_token wake match, detached_at detach gate (RFC3339), and
+			// currently_processing_bead_id (LifecycleInput) in one shape.
+			ID:     "ga-wakemode",
+			Type:   session.BeadType,
+			Title:  "wakemode",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":               "worker",
+				"wake_mode":              "fresh",
+				"sleep_intent":           "idle-stop-pending",
+				"instance_token":         "tok-xyz",
+				"detached_at":            pastRFC3339,
+				session.CurrentBeadIDKey: "ga-work-1",
+			},
+		},
+		"config-drift-full": {
+			// The config-drift sub-hash decision keys (core_hash_breakdown JSON,
+			// provision/launch/live fingerprints — launch padded to prove raw
+			// fidelity) plus the named + attached deferral timers and the stranded
+			// idempotency marker, all in one shape.
+			ID:     "ga-drift",
+			Type:   session.BeadType,
+			Title:  "drift",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                           "worker",
+				"core_hash_breakdown":                `{"command":"x","env":"y"}`,
+				"started_provision_hash":             "prov-1",
+				"started_launch_hash":                " launch-1 ",
+				"started_live_hash":                  "live-1",
+				"config_drift_deferred_at":           pastRFC3339,
+				"config_drift_deferred_key":          "h1:h2",
+				"attached_config_drift_deferred_at":  pastRFC3339,
+				"attached_config_drift_deferred_key": "h3:h4",
+				"stranded_event_emitted_at":          pastRFC3339,
+			},
+		},
 	}
 
 	const tmpl = "worker"
@@ -659,6 +751,78 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"sessionPinAwake": {
 			func(b beads.Bead) string { return b.Metadata["pin_awake"] },
 			func(i session.Info) string { return i.PinAwake },
+		},
+		// Reconciler decision-read mirrors (front-door Phase 5). These have no
+		// named classifier — the reconciler reads them inline — so each pins the
+		// raw codec mirror directly. The symbolic-key cases feed the cmd/gc
+		// constant, guarding the info_store.go literal against constant drift.
+		"sessionHeldUntil": {
+			func(b beads.Bead) string { return b.Metadata["held_until"] },
+			func(i session.Info) string { return i.HeldUntil },
+		},
+		"sessionWaitHold": {
+			func(b beads.Bead) string { return b.Metadata["wait_hold"] },
+			func(i session.Info) string { return i.WaitHold },
+		},
+		"sessionChurnCount": {
+			func(b beads.Bead) string { return b.Metadata["churn_count"] },
+			func(i session.Info) string { return i.ChurnCount },
+		},
+		"sessionWakeMode": {
+			func(b beads.Bead) string { return b.Metadata["wake_mode"] },
+			func(i session.Info) string { return i.WakeMode },
+		},
+		"sessionSleepIntent": {
+			func(b beads.Bead) string { return b.Metadata["sleep_intent"] },
+			func(i session.Info) string { return i.SleepIntent },
+		},
+		"sessionInstanceToken": {
+			func(b beads.Bead) string { return b.Metadata["instance_token"] },
+			func(i session.Info) string { return i.InstanceToken },
+		},
+		"sessionDetachedAt": {
+			func(b beads.Bead) string { return b.Metadata["detached_at"] },
+			func(i session.Info) string { return i.DetachedAt },
+		},
+		"sessionCurrentlyProcessingBeadID": {
+			func(b beads.Bead) string { return b.Metadata[session.CurrentBeadIDKey] },
+			func(i session.Info) string { return i.CurrentlyProcessingBeadID },
+		},
+		"sessionCoreHashBreakdown": {
+			func(b beads.Bead) string { return b.Metadata["core_hash_breakdown"] },
+			func(i session.Info) string { return i.CoreHashBreakdown },
+		},
+		"sessionStartedProvisionHash": {
+			func(b beads.Bead) string { return b.Metadata["started_provision_hash"] },
+			func(i session.Info) string { return i.StartedProvisionHash },
+		},
+		"sessionStartedLaunchHash": {
+			func(b beads.Bead) string { return b.Metadata["started_launch_hash"] },
+			func(i session.Info) string { return i.StartedLaunchHash },
+		},
+		"sessionStartedLiveHash": {
+			func(b beads.Bead) string { return b.Metadata["started_live_hash"] },
+			func(i session.Info) string { return i.StartedLiveHash },
+		},
+		"sessionConfigDriftDeferredAt": {
+			func(b beads.Bead) string { return b.Metadata[namedSessionConfigDriftDeferredAtMetadata] },
+			func(i session.Info) string { return i.ConfigDriftDeferredAt },
+		},
+		"sessionConfigDriftDeferredKey": {
+			func(b beads.Bead) string { return b.Metadata[namedSessionConfigDriftDeferredKeyMetadata] },
+			func(i session.Info) string { return i.ConfigDriftDeferredKey },
+		},
+		"sessionAttachedConfigDriftDeferredAt": {
+			func(b beads.Bead) string { return b.Metadata[sessionAttachedConfigDriftDeferredAtMetadata] },
+			func(i session.Info) string { return i.AttachedConfigDriftDeferredAt },
+		},
+		"sessionAttachedConfigDriftDeferredKey": {
+			func(b beads.Bead) string { return b.Metadata[sessionAttachedConfigDriftDeferredKeyMetadata] },
+			func(i session.Info) string { return i.AttachedConfigDriftDeferredKey },
+		},
+		"sessionStrandedEventEmittedAt": {
+			func(b beads.Bead) string { return b.Metadata[strandedEventEmittedKey] },
+			func(i session.Info) string { return i.StrandedEventEmittedAt },
 		},
 	}
 

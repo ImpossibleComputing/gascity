@@ -102,6 +102,30 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		Generation:               b.Metadata["generation"],
 		StartedConfigHash:        b.Metadata["started_config_hash"],
 		PinAwake:                 b.Metadata["pin_awake"],
+
+		// reconciler decision-read cluster (front-door Phase 5). Raw mirrors of
+		// the keys the reconciler decision paths still crack inline. The key
+		// literals mirror the cmd/gc reconciler constants (config_drift_deferred_*,
+		// attached_config_drift_deferred_*, stranded_event_emitted_at, …); the
+		// classifier-equivalence oracle feeds those constants and so guards these
+		// literals against drift. CurrentBeadIDKey is a session-package constant.
+		HeldUntil:                      b.Metadata["held_until"],
+		WaitHold:                       b.Metadata["wait_hold"],
+		ChurnCount:                     b.Metadata["churn_count"],
+		WakeMode:                       b.Metadata["wake_mode"],
+		SleepIntent:                    b.Metadata["sleep_intent"],
+		InstanceToken:                  b.Metadata["instance_token"],
+		DetachedAt:                     b.Metadata["detached_at"],
+		CurrentlyProcessingBeadID:      b.Metadata[CurrentBeadIDKey],
+		CoreHashBreakdown:              b.Metadata["core_hash_breakdown"],
+		StartedProvisionHash:           b.Metadata["started_provision_hash"],
+		StartedLaunchHash:              b.Metadata["started_launch_hash"],
+		StartedLiveHash:                b.Metadata["started_live_hash"],
+		ConfigDriftDeferredAt:          b.Metadata["config_drift_deferred_at"],
+		ConfigDriftDeferredKey:         b.Metadata["config_drift_deferred_key"],
+		AttachedConfigDriftDeferredAt:  b.Metadata["attached_config_drift_deferred_at"],
+		AttachedConfigDriftDeferredKey: b.Metadata["attached_config_drift_deferred_key"],
+		StrandedEventEmittedAt:         b.Metadata["stranded_event_emitted_at"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n

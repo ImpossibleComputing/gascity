@@ -58,15 +58,20 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
 ## THE BACKLOG (ordered; one verified commit per item)
 
 - [x] **Step 0 — rename `InfoStore` → `session.Store`** (`990076d86`, this session).
-- [ ] **Step 1 — missing `Info` mirrors.** FIRST regenerate the exhaustive key
-      inventory: grep every `Metadata[...]` read reachable from the reconciler
-      decision paths + `lifecycle_projection.go`. Known-missing at HEAD:
-      `held_until`, `wait_hold`, `restart_requested`, `churn_count`, `wake_mode`,
-      `session_name_explicit`. Add each as a raw-string `Info` mirror
-      (Generation/StartedConfigHash pattern) + a `TestSessionClassifierInfoEquivalence`
-      case + hold/quarantine/wait-hold/churn-spiral parity fixtures.
-      **`PoolSlot`/`CommonName`/`ConfiguredNamedIdentity` already exist — do NOT
-      re-add.** No call-site change. (Same shape as the 4c-foundation commit.)
+- [x] **Step 1 — missing `Info` mirrors.** DONE. Regenerated the exhaustive key
+      inventory (`raw/step1-key-inventory.md`) — the handoff's "6 known-missing" was
+      wrong on three counts: `session_name_explicit` is a **PHANTOM** (nonexistent in
+      the repo — dropped); `restart_requested` is the §5.2 **intra-tick special**
+      (deferred to Step 3, not a codec mirror); and the real set is **17**, not 6.
+      Landed 17 raw-string `Info` mirrors (12 core lifecycle keys +
+      `config_drift_deferred_{at,key}` / `attached_config_drift_deferred_{at,key}` /
+      `stranded_event_emitted_at`), each with a `TestSessionClassifierInfoEquivalence`
+      `stringChecks` case (symbolic-key cases feed the cmd/gc constant → guards the
+      `info_store.go` literal against drift) + hold/quarantine, wait-hold,
+      churn-spiral (padded), wake-mode/intents, and config-drift-full fixtures.
+      Excluded: `detachedProbeMetadataKey` (reads an **assigned-work** bead, not a
+      session bead). No call-site change (4c-foundation shape).
+      **`PoolSlot`/`CommonName`/`ConfiguredNamedIdentity` already existed.**
 - [ ] **Step 2 — coherent snapshot + refresh-on-write, alongside the existing
       lockstep** (additive, behavior-identical). Promote `session.Store.List` to a
       `ListInfo(ListFilter) ([]Info,error)` and load the tick working set as

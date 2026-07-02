@@ -240,6 +240,75 @@ type Info struct {
 	// string compare, so the mirror keeps the raw value. Additive, internal-only
 	// (absent from the HTTP wire).
 	PinAwake string // pin_awake (raw)
+
+	// --- reconciler decision-read cluster (front-door migration, Phase 5) ---
+	//
+	// These complete the codec for the raw session-bead metadata the reconciler
+	// decision paths still crack inline (held/wait/churn/wake/sleep/config-drift/
+	// detach bookkeeping). Each is the RAW projected value, verbatim, so the
+	// eventual Info-routed read stays byte-identical to the current
+	// session.Metadata[...] read (several are compared both trimmed and untrimmed,
+	// or parsed as RFC3339/int, so an int/bool mirror could not preserve fidelity).
+	// Additive, internal-only (absent from the HTTP wire). The classifier-
+	// equivalence oracle guards these against codec drift.
+
+	// HeldUntil is the RAW held_until metadata. evaluateWakeReasons suppresses ALL
+	// wake reasons while it is non-empty; healExpiredTimers clears it once elapsed.
+	HeldUntil string // held_until (raw)
+	// WaitHold is the RAW wait_hold metadata. The reconcile hold path branches on
+	// its emptiness; compute_awake_bridge maps it to LifecycleInput.WaitHold via an
+	// exact == "true" compare, so the mirror keeps the raw value.
+	WaitHold string // wait_hold (raw)
+	// ChurnCount is the RAW churn_count metadata. The death-spiral quarantine path
+	// reads it BOTH via strconv.Atoi (numeric threshold) AND as == "" / == "0"
+	// (clear/first-increment gates), so the mirror keeps the raw string.
+	ChurnCount string // churn_count (raw)
+	// WakeMode is the RAW wake_mode metadata. The wake and drain-finalize paths
+	// branch on an exact == "fresh" compare.
+	WakeMode string // wake_mode (raw)
+	// SleepIntent is the RAW sleep_intent metadata. The sleep-intent branch reads
+	// it as != "" and == "idle-stop-pending".
+	SleepIntent string // sleep_intent (raw)
+	// InstanceToken is the RAW instance_token metadata. The wake path compares it
+	// against the live instance token to detect a superseded session.
+	InstanceToken string // instance_token (raw)
+	// DetachedAt is the RAW detached_at metadata (RFC3339 or empty). The detach
+	// gate reads it as != "" and parses it via time.Parse, so the mirror keeps the
+	// raw bytes.
+	DetachedAt string // detached_at (raw)
+	// CurrentlyProcessingBeadID is the RAW currently_processing_bead_id metadata
+	// (CurrentBeadIDKey). compute_awake_bridge maps it (trimmed) onto
+	// LifecycleInput.CurrentlyProcessingBeadID.
+	CurrentlyProcessingBeadID string // currently_processing_bead_id (raw)
+	// CoreHashBreakdown is the RAW core_hash_breakdown metadata (a JSON blob). The
+	// config-drift path feeds it verbatim to runtime.CoreFingerprintDriftFieldsFromJSON
+	// / LogCoreFingerprintDrift for the drift trace payload; the mirror keeps the
+	// raw JSON exactly.
+	CoreHashBreakdown string // core_hash_breakdown (raw)
+	// StartedProvisionHash / StartedLaunchHash / StartedLiveHash are the RAW
+	// provision/launch/live sub-fingerprints captured at start. The launch-only-
+	// drift decision compares StartedProvisionHash against the recomputed provision
+	// fingerprint and StartedLaunchHash against the launch fingerprint (both exact
+	// string compares, both gated on != ""); the live-hash drift path compares
+	// StartedLiveHash. Mirrors keep the raw values.
+	StartedProvisionHash string // started_provision_hash (raw)
+	StartedLaunchHash    string // started_launch_hash (raw)
+	StartedLiveHash      string // started_live_hash (raw)
+	// ConfigDriftDeferredAt / ConfigDriftDeferredKey mirror the named-session
+	// config-drift deferral timer (config_drift_deferred_at / _key). The deferral
+	// path compares the stored key against the current drift key (exact compare)
+	// and parses the timestamp (RFC3339). Mirrors keep the raw values.
+	ConfigDriftDeferredAt  string // config_drift_deferred_at (raw)
+	ConfigDriftDeferredKey string // config_drift_deferred_key (raw)
+	// AttachedConfigDriftDeferredAt / AttachedConfigDriftDeferredKey mirror the
+	// attached-session config-drift deferral timer (attached_config_drift_deferred_at
+	// / _key), the same shape as the named pair above but for the attached path.
+	AttachedConfigDriftDeferredAt  string // attached_config_drift_deferred_at (raw)
+	AttachedConfigDriftDeferredKey string // attached_config_drift_deferred_key (raw)
+	// StrandedEventEmittedAt is the RAW stranded_event_emitted_at metadata, the
+	// idempotency marker the stranded-diagnostic emitter checks (trimmed != "")
+	// before firing once.
+	StrandedEventEmittedAt string // stranded_event_emitted_at (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a
