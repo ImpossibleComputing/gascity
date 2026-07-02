@@ -81,6 +81,14 @@ re-derive — reuse the top-of-loop `info`. Two sub-blocks:
    under `fork/exec`, split the run if it times out) + rollback/lease chaos + pool/
    named suites.
 
+The handoff's **"Cluster 3 foundation gaps (VERIFIED at HEAD `6c1e41d1b`)"** section
+is the exact checklist: 4 new siblings to add bottom-up — `staleCreatingStateInfo`,
+`sessionStartRequestedInfo`, `pendingCreateSessionStillLeasedInfo`,
+`preserveConfiguredNamedSessionBeadInfo` — with each one's source anchor + leaf
+dependencies (all leaves already EXIST) + which equivalence-check group it lands in.
+No `Info` struct/codec change is needed (all fields already exist). Re-run the
+sanity greps in that section first in case HEAD moved.
+
 **Then:** cluster 4+ — the **post-heal region** (`1441`+), the FIRST genuine
 re-derive cluster: after the heal, **re-derive
 `info := sessionpkg.InfoFromPersistedBead(*session)`** and convert the switch/

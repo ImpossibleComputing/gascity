@@ -223,6 +223,43 @@ pool-demand) is the remaining bulk (cluster 4+, first genuine re-derive).
    `persistSessionCircuitBreakerMetadata`, the inline `session.Status="closed"` /
    `restart_requested` writes), `ProjectLifecycle`, and the circuit breaker.
 
+## Cluster 3 foundation gaps (VERIFIED at HEAD `6c1e41d1b`)
+
+Exact sibling-mirror checklist for cluster 3. All `Info` **fields** the cluster
+needs already exist (`MetadataState`, `PendingCreateClaim`, `SessionNameMetadata`,
+`SleepReason`, `LastWokeAt`, `ConfiguredNamedIdentity`, `Template`, `CreatedAt`) —
+**no codec/struct change needed**. Add these 4 `*Info` siblings (each with an
+equivalence case; build bottom-up so each composes proven leaves):
+
+1. **`staleCreatingStateInfo(i, clk)`** — sub-leaf, TRIVIAL. Mirrors
+   `staleCreatingState` (`session_reconcile.go:1201`): `clk==nil`→false;
+   `strings.TrimSpace(i.MetadataState) != StateCreating`→false; else
+   `pendingCreateAttemptStaleInfo(i, clk)` [EXISTS]. → `clkBoolChecks`.
+2. **`sessionStartRequestedInfo(i, clk)`** — mirrors `sessionStartRequested`
+   (`session_reconcile.go:187`): `TrimSpace(i.MetadataState)==StateStartPending`→
+   true; `i.PendingCreateClaim`→true; `TrimSpace(i.MetadataState)!="creating"`→
+   false; else `!staleCreatingStateInfo(i, clk)`. → `clkBoolChecks`.
+3. **`pendingCreateSessionStillLeasedInfo(i, cfg, clk)`** — mirrors
+   `pendingCreateSessionStillLeased` (`session_reconciler.go:600`): `i.PendingCreateClaim`
+   branch → `pendingCreateLeaseActiveInfo` [EXISTS] + `normalizedSessionTemplateInfo`
+   [EXISTS] + `i.Template` fallback + `findAgentByTemplate(cfg, …).Suspended`; else
+   `sessionStartRequestedInfo(i, clk)` [gap #2] + same template/agent tail. → a new
+   `cfgClkBoolChecks` group (or fold into `clkBoolChecks` with a captured `cfg`).
+4. **`preserveConfiguredNamedSessionBeadInfo(i, cfg, cityName)`** — mirrors
+   `preserveConfiguredNamedSessionBead` (`session_beads.go:265`): `cfg==nil ||
+   !isNamedSessionInfo(i)` [EXISTS] → false; `namedSessionIdentityInfo(i)` [EXISTS] +
+   `findNamedSessionSpec` + `i.SessionNameMetadata==spec.SessionName` gate; the
+   terminal-state switch reads `i.MetadataState`/`i.SleepReason`/`i.LastWokeAt` via
+   `parseRFC3339Metadata` + `staleCreatingStateTimeout`. → the `namedSpecCfg`-based
+   `cfgBoolChecks` (reuse the real-cfg guard pattern cluster 2 added, so the "named"
+   fixture actually hits the keep-alias true branch, not a trivial both-false pass).
+
+Sanity re-check before you start (guards against staleness): the 4 above report
+MISSING and their leaves (`pendingCreateAttemptStaleInfo`, `pendingCreateLeaseActiveInfo`,
+`isNamedSessionInfo`, `namedSessionIdentityInfo`, `normalizedSessionTemplateInfo`,
+`isFailedCreateSessionInfo`) report EXISTS via
+`grep -rn 'func <name>\b' cmd/gc/ internal/session/ | grep -v _test`.
+
 ## Method (proven this stack)
 
 Keep each original classifier/read UNTOUCHED + ADD the typed `Info` field/sibling
