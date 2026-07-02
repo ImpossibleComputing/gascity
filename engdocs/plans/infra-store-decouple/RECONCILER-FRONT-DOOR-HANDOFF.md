@@ -1,12 +1,17 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `990076d86`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `d251a6b64`**.
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
+
+**Status (as of `d251a6b64`):** Steps 0–3 DONE, Step 4 in progress (4A done).
+Next actionable = **Step 4B** (typed `LifecycleInput` core). Session commits
+`cece437df`..`d251a6b64` (9). `RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is
+paste-ready for 4B.
 
 **Read first:** `RECONCILER-FRONT-DOOR-SPEC.md` (the design, review-hardened v2) and
 `OBJECT-MODEL-FRONT-DOOR-DESIGN.md` (the parent design; §3.1 session, §7 Phases 4–5).
