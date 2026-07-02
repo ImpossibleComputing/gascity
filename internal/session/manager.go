@@ -319,6 +319,11 @@ type Info struct {
 	// explicit-wake cause. Mirror keeps the raw value so a typed LifecycleInput can
 	// be populated from Info without touching the bead.
 	WakeRequest string // wake_request (raw)
+	// RestartRequested is the RAW restart_requested metadata, the §5.2 intra-tick
+	// restart marker compute_awake_bridge reads (trimmed == "true") to surface a
+	// pending restart on the awake scan. Under raw-refresh coexistence the mirror
+	// reflects the in-memory value; Step 6 handles the Get-cutover intra-tick carrier.
+	RestartRequested string // restart_requested (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

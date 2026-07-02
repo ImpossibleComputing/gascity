@@ -93,46 +93,51 @@ func buildAwakeInputFromReconciler(
 		}
 	}
 
-	// Session beads
+	// Session beads. Read persisted facts through the typed session.Info
+	// projection rather than cracking b.Metadata inline. 4C re-derives Info from
+	// the raw bead locally to keep the diff self-contained; 4D feeds the
+	// reconciler's coherent infoByID snapshot in so this scan reads the same Info
+	// the tick already built.
 	for i := range sessionBeads {
 		b := &sessionBeads[i]
-		if b.Status == "closed" {
+		info := session.InfoFromPersistedBead(*b)
+		if info.Closed {
 			continue
 		}
-		name := strings.TrimSpace(b.Metadata["session_name"])
+		name := strings.TrimSpace(info.SessionNameMetadata)
 		if name == "" {
 			continue
 		}
-		lcInput := session.LifecycleInputFromMetadata(b.Status, b.Metadata)
+		lcInput := session.LifecycleInputFromInfo(info)
 		lcInput.Now = clk
 		lifecycle := session.ProjectLifecycle(lcInput)
 		bead := AwakeSessionBead{
-			ID:          b.ID,
+			ID:          info.ID,
 			SessionName: name,
 			// Canonicalize so adopted beads persisted under a legacy identity
 			// (e.g. a removed binding) key the awake engine by the current
 			// agent template. Unresolvable templates pass through unchanged.
-			Template:               normalizeAgentTemplateIdentity(cfg, b.Metadata["template"]),
+			Template:               normalizeAgentTemplateIdentity(cfg, info.Template),
 			State:                  string(lifecycle.CompatState),
-			SleepReason:            b.Metadata["sleep_reason"],
-			ManualSession:          isManualSessionBead(*b),
+			SleepReason:            info.SleepReason,
+			ManualSession:          isManualSessionInfo(info),
 			PendingCreate:          lifecycle.HasWakeCause(session.WakeCausePendingCreate),
 			ExplicitWake:           lifecycle.HasWakeCause(session.WakeCauseExplicit),
-			DependencyOnly:         b.Metadata["dependency_only"] == "true",
+			DependencyOnly:         info.DependencyOnly,
 			NamedIdentity:          lifecycle.NamedIdentity,
-			ConfiguredNamedSession: isNamedSessionBead(*b),
+			ConfiguredNamedSession: isNamedSessionInfo(info),
 			Pinned:                 lifecycle.HasWakeCause(session.WakeCausePinned),
 			Drained:                lifecycle.BaseState == session.BaseStateDrained,
-			WaitHold:               b.Metadata["wait_hold"] == "true",
-			RestartRequested:       strings.TrimSpace(b.Metadata["restart_requested"]) == "true",
-			ContinuationResetPending: strings.TrimSpace(b.Metadata["continuation_reset_pending"]) == "true" &&
-				strings.TrimSpace(b.Metadata[session.ResetCommittedAtKey]) != "",
-			CurrentlyProcessingBeadID: strings.TrimSpace(b.Metadata[session.CurrentBeadIDKey]),
+			WaitHold:               info.WaitHold == "true",
+			RestartRequested:       strings.TrimSpace(info.RestartRequested) == "true",
+			ContinuationResetPending: strings.TrimSpace(info.ContinuationResetPending) == "true" &&
+				strings.TrimSpace(info.ResetCommittedAt) != "",
+			CurrentlyProcessingBeadID: strings.TrimSpace(info.CurrentlyProcessingBeadID),
 		}
 		bead.HeldUntil = lifecycle.HeldUntil
 		bead.QuarantinedUntil = lifecycle.QuarantinedUntil
-		bead.CreatedAt = b.CreatedAt
-		if t, err := time.Parse(time.RFC3339, b.Metadata["detached_at"]); err == nil && !t.IsZero() {
+		bead.CreatedAt = info.CreatedAt
+		if t, err := time.Parse(time.RFC3339, info.DetachedAt); err == nil && !t.IsZero() {
 			bead.IdleSince = t
 		}
 		input.SessionBeads = append(input.SessionBeads, bead)

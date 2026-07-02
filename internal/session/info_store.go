@@ -128,6 +128,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		StrandedEventEmittedAt:         b.Metadata["stranded_event_emitted_at"],
 		SessionNameExplicit:            b.Metadata["session_name_explicit"],
 		WakeRequest:                    b.Metadata["wake_request"],
+		RestartRequested:               b.Metadata["restart_requested"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n
