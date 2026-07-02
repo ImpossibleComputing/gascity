@@ -95,6 +95,34 @@ type defaultScaleCheckTarget struct {
 	err      error
 }
 
+// cityStoreProbeForRigPool reports whether a rig-scoped pool template should
+// ALSO probe the city store for routed demand, in addition to its own rig
+// store. A cold pool (no running sessions, min=0) always probes so cross-store
+// delivered routed demand can wake it (the original cross-store cold-wake).
+//
+// Under graph_store=sqlite the genuinely-ready graph-resident routed work lives
+// in the city Router store, which a rig's plain Dolt store structurally cannot
+// surface (GraphOnlyReadyFor(rigStore) is false); so a warm-but-asleep rig pool
+// must STILL probe the graph-capable city store to wake for ready graph steps.
+// Default Dolt-only cities have no distinct ClassGraph backend, so
+// GraphOnlyReadyFor(cityStore) is false and behavior is byte-identical
+// (cold-only). The store-alias/health guards mirror the original inline gate.
+func cityStoreProbeForRigPool(isCold bool, cityStore beads.Store, ownTarget defaultScaleCheckTarget) bool {
+	if cityStore == nil || ownTarget.storeKey == "city" || ownTarget.store == nil || ownTarget.err != nil || ownTarget.store == cityStore {
+		return false
+	}
+	if isCold {
+		return true
+	}
+	// Under graph_store=sqlite the city store is a per-class Router exposing the
+	// ClassGraph ready set; a warm rig pool's Dolt rig store cannot surface that
+	// graph-resident routed work, so it must still probe the city store. Absent a
+	// distinct ClassGraph backend (default Dolt-only city) this is false and the
+	// gate stays cold-only, byte-identical.
+	_, cityHasGraph := beads.GraphOnlyReadyFor(cityStore)
+	return cityHasGraph
+}
+
 var errPoolSessionCreateBudgetExhausted = errors.New("pool session create budget exhausted")
 
 // poolSessionCreateFairShareCounter rotates scarce create tokens across
@@ -572,7 +600,7 @@ func buildDesiredStateWithSessionBeads(
 				// wake the pool. Same guard conditions apply: healthy own rig store,
 				// not city-aliased, not city-scoped. The named-session target list
 				// mirrors these probes only for partial-query retention bookkeeping.
-				if isCold && ownTarget.storeKey != "city" && ownTarget.store != nil && ownTarget.err == nil && ownTarget.store != store {
+				if cityStoreProbeForRigPool(isCold, store, ownTarget) {
 					cityTarget := defaultScaleCheckTarget{template: template, store: store, storeKey: "city"}
 					defaultScaleTargets = append(defaultScaleTargets, cityTarget)
 					defaultNamedScaleTargets = append(defaultNamedScaleTargets, cityTarget)
@@ -624,7 +652,7 @@ func buildDesiredStateWithSessionBeads(
 			// double-count the same beads, since defaultScaleCheckCounts dedups
 			// per group, not across groups. Current store-map builders skip
 			// such rigs, so this is defense-in-depth against future callers.
-			if isCold && ownTarget.storeKey != "city" && ownTarget.store != nil && ownTarget.err == nil && ownTarget.store != store {
+			if cityStoreProbeForRigPool(isCold, store, ownTarget) {
 				defaultScaleTargets = append(defaultScaleTargets, defaultScaleCheckTarget{template: template, store: store, storeKey: "city"})
 			}
 			continue

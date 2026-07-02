@@ -146,3 +146,46 @@ func TestDefaultScaleCheckCountsSeesGraphResidentRoutedWork(t *testing.T) {
 		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 1 (graph-resident routed-unassigned work must drive pool demand)", template, got)
 	}
 }
+
+// TestCityStoreProbeForRigPoolWakesWarmGraphPool is the WARM-pool regression for
+// the graph-resident rig-pool starve (maintainer-city gcg-42082 →
+// gascity/gc.review-synthesizer): a rig-scoped pool's own Dolt rig store cannot
+// surface graph-resident routed work (GraphOnlyReadyFor(rigStore)=false), so the
+// graph demand only appears via the city Router store. The original gate probed
+// the city store ONLY when the pool was cold (0 running sessions), so a
+// warm-but-asleep/wedged rig pool never re-woke for ready graph steps. The probe
+// must fire for a warm rig pool whenever the city store carries the ClassGraph
+// capability, while staying byte-identical (cold-only) on default Dolt-only
+// cities. Fails pre-fix (warm+graph returns false).
+func TestCityStoreProbeForRigPoolWakesWarmGraphPool(t *testing.T) {
+	graphCity := &graphDemandStore{hasGraph: true} // graph_store=sqlite city Router
+	doltCity := &graphDemandStore{hasGraph: false} // default Dolt-only city
+	rigTarget := defaultScaleCheckTarget{
+		template: "gascity/gc.review-synthesizer",
+		storeKey: "rig:gascity",
+		store:    &graphDemandStore{hasGraph: false}, // rig Dolt store, distinct instance
+	}
+
+	// WARM + graph-capable city: must probe (the fix). Pre-fix returned false.
+	if !cityStoreProbeForRigPool(false, graphCity, rigTarget) {
+		t.Fatal("warm rig pool on a graph_store=sqlite city must probe the city store for graph-resident routed demand")
+	}
+	// WARM + Dolt-only city: must NOT probe (byte-identical default behavior).
+	if cityStoreProbeForRigPool(false, doltCity, rigTarget) {
+		t.Fatal("warm rig pool on a Dolt-only city must not probe the city store (preserve default behavior)")
+	}
+	// COLD: always probes (cross-store cold-wake), regardless of graph capability.
+	if !cityStoreProbeForRigPool(true, doltCity, rigTarget) {
+		t.Fatal("cold rig pool must probe the city store (cross-store cold-wake)")
+	}
+	// Guard: a city-scoped pool's own target is already the city store.
+	cityScoped := defaultScaleCheckTarget{template: "x", storeKey: "city", store: graphCity}
+	if cityStoreProbeForRigPool(false, graphCity, cityScoped) {
+		t.Fatal("city-scoped pool must not add a redundant city-store probe")
+	}
+	// Guard: a rig store aliasing the city store must not double-count.
+	aliased := defaultScaleCheckTarget{template: "x", storeKey: "rig:x", store: graphCity}
+	if cityStoreProbeForRigPool(false, graphCity, aliased) {
+		t.Fatal("rig store aliasing the city store must not add a duplicate probe")
+	}
+}
