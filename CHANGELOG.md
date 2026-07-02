@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-07-02
+
+### Fixed
+
+- **Seed the `gascity/roles` pack in new gascity cities.** `gc init --template
+  gascity` now adds the `gascity/roles` subpack (the `gc-roles` agents:
+  `run-operator`, `requirements-planner`, `design-author`, ...) as a default rig
+  import, pinned to the same gascity-packs commit as the formulas pack. Fresh
+  cities can launch built-in formulas through the Mayor without manually
+  importing roles, and every rig added with `gc rig add` — including
+  out-of-tree rigs — inherits the role agents the formulas coordinate.
+  Previously formula launches failed with
+  `agent "gc.run-operator" not found in city.toml`.
+- **Point at `gc import install` when a missing agent target names an
+  uninstalled pack import.** `gc sling`, `gc agent`, and `gc session` now
+  surface the declared import source and the exact repair command instead of
+  only a "did you mean" suggestion.
+- **Correct the rig-pack-coverage doctor hint.** The fix hint now points at
+  `city.toml`, where `[defaults.rig.imports]` actually lives, instead of
+  `pack.toml`.
+
 ## [1.3.2] - 2026-06-22
 
 ### Fixed
@@ -645,7 +666,10 @@ community contributors. See the GitHub release page for the full narrative.
   semantics, watchdog reconciliation cadence, dirty-cache fallback reads.
 - Long tail of session lifecycle, wake-budget, and pool identity fixes.
 
-[Unreleased]: https://github.com/gastownhall/gascity/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/gastownhall/gascity/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/gastownhall/gascity/compare/v1.3.2...v1.3.3
+[1.3.2]: https://github.com/gastownhall/gascity/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/gastownhall/gascity/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/gastownhall/gascity/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/gastownhall/gascity/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/gastownhall/gascity/releases/tag/v1.2.0
