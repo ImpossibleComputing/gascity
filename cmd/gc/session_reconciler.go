@@ -1501,11 +1501,22 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				providerAlive,
 				healBatch,
 			)
+			// Post-heal re-derive: healStateWithRollback (above) mutates
+			// session.Metadata in lockstep, so the top-of-loop `info` (@~1296) is
+			// now stale for this switch. Re-derive from the just-healed bead. The
+			// trace call above takes the bead by value (cannot mutate), and Go
+			// switch cases do not fall through, so both the preserveNamed body and
+			// the pendingCreateSessionStillLeased guard/body below read the same
+			// unmutated post-heal bead — `infoPostHeal` is byte-identical for them.
+			// The `default` block's own reads stay raw for now (later sub-cluster):
+			// it interleaves mutations (markDrainAckStopPending, beginSessionDrain,
+			// finalize/close) with reads and needs a per-mutation re-derive.
+			infoPostHeal := sessionpkg.InfoFromPersistedBead(*session)
 			switch {
 			case preserveNamed:
-				template := normalizedSessionTemplate(*session, cfg)
+				template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 				if template == "" {
-					template = session.Metadata["template"]
+					template = infoPostHeal.Template
 				}
 				switch {
 				case preserveErr != nil:
@@ -1523,10 +1534,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						"degraded":       preserveErr != nil,
 					}, nil, "")
 				}
-			case pendingCreateSessionStillLeased(*session, cfg, clk):
-				template := normalizedSessionTemplate(*session, cfg)
+			case pendingCreateSessionStillLeasedInfo(infoPostHeal, cfg, clk):
+				template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 				if template == "" {
-					template = session.Metadata["template"]
+					template = infoPostHeal.Template
 				}
 				if trace != nil {
 					trace.recordDecision("reconciler.session.pending_create_preserved", template, name, "pending_create", "kept_open", traceRecordPayload{
