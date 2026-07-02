@@ -24,7 +24,7 @@ func TestBuildAwakeInputFromReconcilerUsesLifecycleProjectionForCompatibilitySta
 				"session_name": "s-worker",
 				"template":     "worker",
 			},
-		}},
+		}}, nil,
 		nil,
 		nil,
 		nil,
@@ -41,6 +41,41 @@ func TestBuildAwakeInputFromReconcilerUsesLifecycleProjectionForCompatibilitySta
 	}
 	if got := input.SessionBeads[0].State; got != "asleep" {
 		t.Fatalf("State = %q, want asleep-compatible projection for stopped", got)
+	}
+}
+
+// TestBuildAwakeInputFromReconcilerReadsInfoSnapshot pins that the scan reads the
+// typed Info snapshot the reconciler passes, not a fresh re-projection of the raw
+// bead. The reconciler refreshes infoByID to the beads just before the call, so in
+// production the two agree; this test drives them apart deliberately (a snapshot
+// value the raw bead does not carry) to prove which one the scan honors.
+func TestBuildAwakeInputFromReconcilerReadsInfoSnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	b := beads.Bead{
+		ID:     "mc-session-1",
+		Status: "open",
+		Type:   "session",
+		Metadata: map[string]string{
+			"state":        "active",
+			"session_name": "s-worker",
+			"template":     "worker",
+			"sleep_reason": "from-bead",
+		},
+	}
+	info := session.InfoFromPersistedBead(b)
+	info.SleepReason = "from-snapshot"
+	snapshot := map[string]session.Info{b.ID: info}
+
+	input := buildAwakeInputFromReconciler(
+		&config.City{}, "", []beads.Bead{b}, snapshot,
+		nil, nil, nil, nil, nil, nil, nil, nil, now,
+	)
+
+	if len(input.SessionBeads) != 1 {
+		t.Fatalf("SessionBeads length = %d, want 1", len(input.SessionBeads))
+	}
+	if got := input.SessionBeads[0].SleepReason; got != "from-snapshot" {
+		t.Fatalf("SleepReason = %q, want from-snapshot (scan must read the Info snapshot, not re-derive the raw bead)", got)
 	}
 }
 
@@ -70,7 +105,7 @@ func TestBuildAwakeInputFromReconcilerCanonicalizesLegacyBoundTemplate(t *testin
 				"template":     "gascity-packs/gc.implementation-worker",
 				"wake_request": "explicit",
 			},
-		}},
+		}}, nil,
 		nil,
 		nil,
 		nil,
@@ -117,7 +152,7 @@ func TestBuildAwakeInputFromReconcilerKeepsUnresolvableTemplateRaw(t *testing.T)
 				"session_name": "s-orphan",
 				"template":     "removed-rig/gone-worker",
 			},
-		}},
+		}}, nil,
 		nil,
 		nil,
 		nil,
@@ -154,7 +189,7 @@ func TestBuildAwakeInputFromReconcilerCarriesResetPendingMetadata(t *testing.T) 
 				"continuation_reset_pending": "true",
 				session.ResetCommittedAtKey:  now.Format(time.RFC3339),
 			},
-		}},
+		}}, nil,
 		nil,
 		nil,
 		nil,
@@ -200,7 +235,7 @@ func TestBuildAwakeInputFromReconcilerPopulatesPendingInteractions(t *testing.T)
 	input := buildAwakeInputFromReconciler(
 		&config.City{Agents: []config.Agent{{Name: "worker"}}},
 		"", // cityPath: empty exercises zero suspension state
-		[]beads.Bead{session},
+		[]beads.Bead{session}, nil,
 		nil,
 		nil,
 		nil,
@@ -251,7 +286,7 @@ func TestBuildAwakeInputFromReconciler_BlockedAssignedOpenBeadDoesNotKeepSession
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"",
-		[]beads.Bead{sessionBead},
+		[]beads.Bead{sessionBead}, nil,
 		nil,
 		nil,
 		nil,
@@ -303,7 +338,7 @@ func TestBuildAwakeInputFromReconciler_ReadyAssignedOpenBeadWakesSession(t *test
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"",
-		[]beads.Bead{sessionBead},
+		[]beads.Bead{sessionBead}, nil,
 		nil,
 		nil,
 		nil,
@@ -352,7 +387,7 @@ func TestBuildAwakeInputFromReconciler_InProgressAssignedBeadStillWakes(t *testi
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"",
-		[]beads.Bead{sessionBead},
+		[]beads.Bead{sessionBead}, nil,
 		nil,
 		nil,
 		nil,
@@ -432,7 +467,7 @@ func TestBuildAwakeInputFromReconciler_CrossStoreSameIDReadinessIsStoreScoped(t 
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"",
-		[]beads.Bead{citySession, rigSession},
+		[]beads.Bead{citySession, rigSession}, nil,
 		nil,
 		nil,
 		nil,
@@ -528,7 +563,7 @@ func TestBuildAwakeInputFromReconcilerCarriesNamedSessionDemand(t *testing.T) {
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"", // cityPath: empty exercises zero suspension state
-		[]beads.Bead{sessionBead},
+		[]beads.Bead{sessionBead}, nil,
 		map[string]int{"worker": 1},
 		map[string]bool{"primary": true},
 		nil,
@@ -580,7 +615,7 @@ func TestBuildAwakeInputFromReconciler_RigNamedWorkQueryDemandWakesCanonicalSess
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"", // cityPath: empty exercises zero suspension state
-		[]beads.Bead{sessionBead},
+		[]beads.Bead{sessionBead}, nil,
 		nil,
 		nil,
 		map[string]bool{"rig-a/worker": true},
@@ -641,7 +676,7 @@ func TestBuildAwakeInputFromReconcilerNamedAlwaysPostChurnRewakes(t *testing.T) 
 	input := buildAwakeInputFromReconciler(
 		cfg,
 		"", // cityPath: empty exercises zero suspension state
-		[]beads.Bead{postChurnBead},
+		[]beads.Bead{postChurnBead}, nil,
 		nil, nil, nil, nil, nil, nil, nil,
 		runtime.NewFake(),
 		now,

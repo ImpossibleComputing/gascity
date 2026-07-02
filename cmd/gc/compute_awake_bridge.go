@@ -19,6 +19,7 @@ func buildAwakeInputFromReconciler(
 	cfg *config.City,
 	cityPath string,
 	sessionBeads []beads.Bead,
+	sessionInfoByID map[string]session.Info,
 	poolDesired map[string]int,
 	namedSessionDemand map[string]bool,
 	workSet map[string]bool,
@@ -94,13 +95,18 @@ func buildAwakeInputFromReconciler(
 	}
 
 	// Session beads. Read persisted facts through the typed session.Info
-	// projection rather than cracking b.Metadata inline. 4C re-derives Info from
-	// the raw bead locally to keep the diff self-contained; 4D feeds the
-	// reconciler's coherent infoByID snapshot in so this scan reads the same Info
-	// the tick already built.
+	// projection rather than cracking b.Metadata inline. The reconciler passes its
+	// coherent sessionInfoByID snapshot (refreshed to the beads just before this
+	// call) so the scan reads the same Info the tick already built. Callers that do
+	// not maintain a snapshot (unit tests) pass nil and fall back to a per-bead
+	// projection — byte-identical, since the snapshot IS that projection. Step 6
+	// removes the raw working set and this fallback with it.
 	for i := range sessionBeads {
 		b := &sessionBeads[i]
-		info := session.InfoFromPersistedBead(*b)
+		info, ok := sessionInfoByID[b.ID]
+		if !ok {
+			info = session.InfoFromPersistedBead(*b)
+		}
 		if info.Closed {
 			continue
 		}

@@ -2716,10 +2716,21 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		return 0
 	}
 
-	// Use ComputeAwakeSet for the wake/sleep decision.
+	// Use ComputeAwakeSet for the wake/sleep decision. The awake scan reads every
+	// session's typed Info from the coherent infoByID snapshot rather than
+	// re-deriving per bead, so re-sync the snapshot to the beads here first: the
+	// forward pass's late mutations that are not lockstep-refreshed — the §5.2
+	// restart_requested marker (@~2084) and pending-create rollback (which
+	// `continue`s without a refresh) — must be reflected before the scan reads
+	// them. refreshSessionInfo re-projects from the raw working bead, so each entry
+	// becomes byte-identical to a fresh InfoFromPersistedBead(bead); step 6 folds
+	// this into the Get-cutover refresh discipline.
+	for i := range ordered {
+		refreshSessionInfo(ordered[i].ID)
+	}
 	phaseStart = time.Now()
 	awakeInput := buildAwakeInputFromReconciler(
-		cfg, cityPath, ordered, poolDesired, namedSessionDemand, workSet, readyWaitSet,
+		cfg, cityPath, ordered, infoByID, poolDesired, namedSessionDemand, workSet, readyWaitSet,
 		assignedWorkBeads, reconcileOpts.readyAssignedFlags, wakeTargets, sp, clk.Now(),
 	)
 	awakeDecisions := ComputeAwakeSet(awakeInput)
