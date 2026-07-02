@@ -1,17 +1,18 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `d251a6b64`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `17f138775`**.
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status (as of `d251a6b64`):** Steps 0–3 DONE, Step 4 in progress (4A done).
-Next actionable = **Step 4B** (typed `LifecycleInput` core). Session commits
-`cece437df`..`d251a6b64` (9). `RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is
-paste-ready for 4B.
+**Status (as of `17f138775`):** Steps 0–3 DONE, Step 4 in progress (4A + 4B done).
+Next actionable = **Step 4C** (cmd/gc callers → `LifecycleInputFromInfo` off the
+snapshot + direct `b.Metadata[...]` reads → `Info`). Session commits
+`cece437df`..`17f138775` (10). `RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is
+paste-ready for 4C.
 
 **Read first:** `RECONCILER-FRONT-DOOR-SPEC.md` (the design, review-hardened v2) and
 `OBJECT-MODEL-FRONT-DOOR-DESIGN.md` (the parent design; §3.1 session, §7 Phases 4–5).
@@ -126,17 +127,26 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
       are display/API paths, NOT the reconciler scan, so they KEEP their `map`
       params (out of scope). Phases:
       - [x] **4A** — add `Info.WakeRequest` mirror (`af9471021`).
-      - [ ] **4B** — typed `LifecycleInput` core (internal/session): drop
-        `.Metadata`, add the 13 typed fields (12 raw-string + `PendingCreateClaim
-        bool`), convert `ProjectLifecycle` + helpers (`projectBlockers`,
+      - [x] **4B** — typed `LifecycleInput` core (`17f138775`). Dropped
+        `.Metadata`, added the 13 typed fields (12 raw-string + `PendingCreateClaim
+        bool`), converted `ProjectLifecycle` + helpers (`projectBlockers`,
         `projectWakeCauses`, `projectRuntimeProjection`, `creatingStateIsStale`,
-        `shouldResetContinuation`) to read them. Add `LifecycleInputFromMetadata
-        (status, meta, …)` (legacy/display callers) + `LifecycleInputFromInfo(info,
-        …)` (reconciler) constructors — both in internal/session (key literals stay
-        below the codec edge). Route the internal wrappers + `manager.go`/`waits.go`
-        through `FromMetadata`. Byte-identical oracle: `FromMetadata(meta)` ≡
-        `FromInfo(InfoFromPersistedBead(bead))` → identical `LifecycleView` across
-        the 13-key set (incl. missing-vs-empty).
+        `shouldResetContinuation`) to read them — byte-identical (source moved from
+        `meta[k]` to a field, every `TrimSpace`/`== "true"`/`time.Parse` kept in
+        place). Added `LifecycleInputFromMetadata(status, meta)` +
+        `LifecycleInputFromInfo(info)` constructors (both in internal/session; key
+        literals below the codec edge; `FromInfo` reconstructs `Status` from
+        `Info.Closed`, reads `Info.MetadataState` for the raw `state`). Routed the
+        internal wrappers + `manager.go`/`waits.go` through `FromMetadata`.
+        **Byte-identical oracle landed** (`lifecycle_input_test.go`,
+        `TestLifecycleInputConstructorsProjectIdentically`): 15 shapes,
+        `ProjectLifecycle(FromMetadata(b))` ≡ `ProjectLifecycle(FromInfo(
+        InfoFromPersistedBead(b)))`. **NOTE — the cmd/gc construction sites
+        (`compute_awake_bridge`, `cmd_session`, `session_sleep`, `session_reconcile`,
+        chaos test) were routed through `FromMetadata` in THIS commit as the
+        mechanical, behavior-identical compile-fix that dropping the struct field
+        forces for `go build ./...`.** So 4C is now purely the SEMANTIC conversion
+        (below), not the mechanical routing.
       - [ ] **4C** — cmd/gc callers: `compute_awake_bridge.go`
         `buildAwakeInputFromReconciler` → `LifecycleInputFromInfo(info)` off the
         snapshot + convert its DIRECT `b.Metadata[...]` reads (`sleep_reason`,
@@ -146,8 +156,11 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
         + the ProjectLifecycle-adjacent one — it is the §5.2 intra-tick marker set
         in-memory @2084; during raw-refresh coexistence a raw `Info.RestartRequested`
         mirror reflects it (add it), Step 6 handles the Get-cutover intra-tick
-        carrier. Route `session_reconcile.go`/`session_sleep.go`/`cmd_session.go`
-        through `FromMetadata`.
+        carrier. (The `session_reconcile.go`/`session_sleep.go`/`cmd_session.go`
+        `FromMetadata` routing already landed in 4B as the compile-fix; the remaining
+        4C work is the `compute_awake_bridge` `FromInfo`-off-snapshot conversion, its
+        direct `b.Metadata[...]` reads → `Info`, and the `Info.RestartRequested`
+        mirror.)
       - [ ] **4D** — the 3 simpler scans: min-floor (`ordered[j].Status != "closed"`
         → `!Info.Closed`; every close site must set Closed on the refreshed snapshot),
         `computeNamedSessionProgressSignatures`, `advanceSessionDrains`; and pass the
