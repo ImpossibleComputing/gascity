@@ -1546,6 +1546,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					if closeSessionBeadIfReachableStoreUnassigned(cityPath, cfg, store, rigStores, *session, string(sessionpkg.StateFailedCreate), clk.Now().UTC(), stderr) {
 						session.Status = "closed"
+						// Reflect the in-memory close on the snapshot: the cross-session
+						// min-floor scan (below) reads Info.Closed off infoByID, so a
+						// session closed this tick must not still count as open in its pool.
+						refreshSessionInfo(session.ID)
 					}
 					continue
 				}
@@ -1688,6 +1692,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							cityPath, cfg, store, rigStores, session, template,
 							true, dops, dt, clk, rec, stderr,
 						)
+						// finalizeDrainAckStoppedSession may close the bead in memory; keep
+						// the snapshot's Info.Closed coherent for the cross-session min-floor scan.
+						refreshSessionInfo(session.ID)
 						continue
 					}
 				}
@@ -1784,6 +1791,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					if closeSessionBeadIfReachableStoreUnassigned(cityPath, cfg, store, rigStores, *session, reason, clk.Now().UTC(), stderr) {
 						session.Status = "closed"
+						// Keep the snapshot's Info.Closed in step with the in-memory close
+						// so the cross-session min-floor scan does not count this orphan.
+						refreshSessionInfo(session.ID)
 					}
 				}
 				continue
@@ -1992,6 +2002,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						dops, finalizeDT,
 						clk, rec, stderr,
 					)
+					// finalizeDrainAckStoppedSession may close the bead in memory; keep
+					// the snapshot's Info.Closed coherent for the cross-session min-floor scan.
+					refreshSessionInfo(session.ID)
 					continue
 				}
 			}
@@ -2036,12 +2049,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					if cfgAgent := findAgentByTemplate(cfg, tp.TemplateName); cfgAgent != nil {
 						minFloor := cfgAgent.EffectiveMinActiveSessions()
 						if minFloor > 0 {
-							openInPool := 0
-							for j := range ordered {
-								if ordered[j].Status != "closed" && normalizedSessionTemplate(ordered[j], cfg) == tp.TemplateName {
-									openInPool++
-								}
-							}
+							openInPool := openPoolSessionCountForTemplate(ordered, infoByID, cfg, tp.TemplateName)
 							if isMinFloorIdleWorker(minFloor, openInPool) {
 								exempt = true
 								if trace != nil {
