@@ -1285,11 +1285,9 @@ func sessionReason(s session.Info, beadIndex map[string]beads.Bead, cfg *config.
 	}
 
 	now := time.Now().UTC()
-	lifecycle := session.ProjectLifecycle(session.LifecycleInput{
-		Status:   b.Status,
-		Metadata: b.Metadata,
-		Now:      now,
-	})
+	lcInput := session.LifecycleInputFromMetadata(b.Status, b.Metadata)
+	lcInput.Now = now
+	lifecycle := session.ProjectLifecycle(lcInput)
 	if lifecycle.BaseState == session.BaseStateArchived && !lifecycle.ContinuityEligible {
 		return "-"
 	}

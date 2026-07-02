@@ -103,11 +103,9 @@ func buildAwakeInputFromReconciler(
 		if name == "" {
 			continue
 		}
-		lifecycle := session.ProjectLifecycle(session.LifecycleInput{
-			Status:   b.Status,
-			Metadata: b.Metadata,
-			Now:      clk,
-		})
+		lcInput := session.LifecycleInputFromMetadata(b.Status, b.Metadata)
+		lcInput.Now = clk
+		lifecycle := session.ProjectLifecycle(lcInput)
 		bead := AwakeSessionBead{
 			ID:          b.ID,
 			SessionName: name,

@@ -1084,14 +1084,12 @@ func healStatePatchWithRollback(session beads.Bead, alive bool, clk clock.Clock,
 		now = clk.Now()
 		staleCreatingAfter = staleCreatingStateTimeout
 	}
-	view := sessionpkg.ProjectLifecycle(sessionpkg.LifecycleInput{
-		Status:             session.Status,
-		Metadata:           meta,
-		Runtime:            sessionpkg.RuntimeFacts{Observed: true, Alive: alive},
-		CreatedAt:          session.CreatedAt,
-		StaleCreatingAfter: staleCreatingAfter,
-		Now:                now,
-	})
+	lcInput := sessionpkg.LifecycleInputFromMetadata(session.Status, meta)
+	lcInput.Runtime = sessionpkg.RuntimeFacts{Observed: true, Alive: alive}
+	lcInput.CreatedAt = session.CreatedAt
+	lcInput.StaleCreatingAfter = staleCreatingAfter
+	lcInput.Now = now
+	view := sessionpkg.ProjectLifecycle(lcInput)
 
 	batch := make(map[string]string)
 	if !alive && view.BaseState == sessionpkg.BaseStateDrained {

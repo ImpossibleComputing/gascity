@@ -127,16 +127,14 @@ func pendingInteractionKeepsAwake(session beads.Bead, sp runtime.Provider, name 
 	if clk != nil {
 		now = clk.Now()
 	}
-	view := sessionpkg.ProjectLifecycle(sessionpkg.LifecycleInput{
-		Status:   session.Status,
-		Metadata: session.Metadata,
-		Runtime: sessionpkg.RuntimeFacts{
-			Observed: true,
-			Alive:    true,
-			Pending:  true,
-		},
-		Now: now,
-	})
+	lcInput := sessionpkg.LifecycleInputFromMetadata(session.Status, session.Metadata)
+	lcInput.Runtime = sessionpkg.RuntimeFacts{
+		Observed: true,
+		Alive:    true,
+		Pending:  true,
+	}
+	lcInput.Now = now
+	view := sessionpkg.ProjectLifecycle(lcInput)
 	return !view.HasBlocker(sessionpkg.BlockerHeld) && !view.HasBlocker(sessionpkg.BlockerQuarantined)
 }
 

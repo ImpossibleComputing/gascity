@@ -1286,10 +1286,7 @@ func (m *Manager) Reactivate(id string) error {
 		if err != nil {
 			return err
 		}
-		view := ProjectLifecycle(LifecycleInput{
-			Status:   b.Status,
-			Metadata: b.Metadata,
-		})
+		view := ProjectLifecycle(LifecycleInputFromMetadata(b.Status, b.Metadata))
 		// Note: quarantine_cycle is intentionally preserved across reactivations.
 		// It tracks how many quarantine rounds the session has been through,
 		// enabling eviction after quarantine_max_attempts.
