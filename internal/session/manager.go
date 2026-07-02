@@ -314,6 +314,11 @@ type Info struct {
 	// alongside alias / session_name, and build_desired_state / the parallel
 	// lifecycle path branch on it (trimmed == "true"). Mirror keeps the raw value.
 	SessionNameExplicit string // session_name_explicit (raw)
+	// WakeRequest is the RAW wake_request metadata. ProjectLifecycle's wake-cause
+	// projection reads it (trimmed == string(WakeCauseExplicit)) to raise the
+	// explicit-wake cause. Mirror keeps the raw value so a typed LifecycleInput can
+	// be populated from Info without touching the bead.
+	WakeRequest string // wake_request (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

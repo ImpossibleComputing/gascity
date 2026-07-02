@@ -617,6 +617,7 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 			Metadata: map[string]string{
 				"template":               "worker",
 				"wake_mode":              "fresh",
+				"wake_request":           "explicit",
 				"sleep_intent":           "idle-stop-pending",
 				"instance_token":         "tok-xyz",
 				"detached_at":            pastRFC3339,
@@ -828,6 +829,10 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"sessionNameExplicit": {
 			func(b beads.Bead) string { return b.Metadata["session_name_explicit"] },
 			func(i session.Info) string { return i.SessionNameExplicit },
+		},
+		"sessionWakeRequest": {
+			func(b beads.Bead) string { return b.Metadata["wake_request"] },
+			func(i session.Info) string { return i.WakeRequest },
 		},
 	}
 
