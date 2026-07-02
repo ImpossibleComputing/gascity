@@ -2,7 +2,7 @@
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`,
-**HEAD `937beeb13`** (pushed; Phase 2 + Phase-1 clusters 1+2+3 landed). Self-contained
+**HEAD `dac68d506`** (pushed; Phase 2 + Phase-1 clusters 1+2+3 + 4a landed). Self-contained
 guide for finishing the reconciler spine flip. It supersedes the Fork-A material in
 `RECONCILER-CASCADE-HANDOFF.md` (kept only as background).
 
@@ -175,6 +175,24 @@ on the raw bead (accepted).** Therefore:
   preserve/failed-create/pending-create/stale-creating + `TestReconciler_*`
   rollback-deferral + `TestSessionLifecycleChaos*` + trace-integration suites.
 
+**DONE — Phase 1, cluster 4a: post-heal switch guards (`dac68d506`):**
+- The **FIRST genuine re-derive-after-mutation** increment. `healStateWithRollback`
+  (`session_reconciler.go:1491`) mutates `session.Metadata` in lockstep, so the
+  top-of-loop `info` (`~1296`) is stale for the switch that follows. Re-derive
+  `infoPostHeal := sessionpkg.InfoFromPersistedBead(*session)` immediately after the
+  heal (`~1514`) — the intervening `traceHealClearedPendingCreateLease` takes the
+  bead **by value** and cannot mutate — and route the two non-`default` switch arms
+  through it: the `preserveNamed` case template trace read, and the
+  `pendingCreateSessionStillLeased(*session,cfg,clk)` switch guard →
+  `pendingCreateSessionStillLeasedInfo(infoPostHeal,cfg,clk)` + its case template.
+- **Safety:** Go switch cases do not fall through, so reaching either arm means no
+  mutation happened between the heal and the read → `infoPostHeal` is byte-identical
+  for both. No new siblings/codec change (both siblings already exist,
+  equivalence-proven). Correctness of the re-derive placement is proven by the
+  whole-tick E2E. The trace-payload raw reads (`pending_create_claim`, `state`) stay
+  raw.
+- The **`default` block stays raw this commit** — see cluster 4b below.
+
 **Verified scope (at HEAD `6ccf9d698`):** 194 raw `.Metadata[` reads at the
 CONT-5 census — reconciler 123 / reconcile 50 / wake 21 — plus 6 `.Status`.
 Most are inside the raw machinery that stays. Only DECISION reads convert.
@@ -230,15 +248,33 @@ bulk (cluster 4+, the **first genuine re-derive**).
      converted reads, the 4 new siblings, and the verified pre-heal safety argument
      (checkRateLimitStability writes no template/agent_name/alias key; the
      failed-create reads sit behind its non-mutating `(false,nil)` return).
-   - **NEXT — cluster 4+: the post-heal region (`1491`+), the first genuine
-     re-derive cluster.** After `healStateWithRollback` mutates `session.Metadata`,
-     **re-derive `info := sessionpkg.InfoFromPersistedBead(*session)`** and convert
-     the switch/`default` decision reads (post-heal `pendingCreateSessionStillLeased`
-     at `~1526`, the drain-ack block, the orphan-drain/suspend/close block). Add
-     `Info.StartedConfigHash` (raw) + a `pin_awake` mirror as those sites are reached
-     (see the field-gap table). Do this with fresh context — it is where the
-     stale-`info` risk actually lives; re-derive after EACH mutation. Leave the
-     apply/write-back cluster + ProjectLifecycle + circuit breaker raw.
+   - **DONE — cluster 4a (`dac68d506`): post-heal switch guards.** Re-derive
+     `infoPostHeal` after the heal; converted the `preserveNamed` + post-heal
+     `pendingCreateSessionStillLeased` switch arms. See the Status "cluster 4a"
+     block above.
+   - **NEXT — cluster 4b: the post-heal `default` block
+     (`session_reconciler.go:~1550–1716`) — drain-ack / orphan-drain / suspend /
+     close.** This is the fiddly per-mutation part. Decision read to convert:
+     `isNamedSessionBead(*session)` (`~1666`) → `isNamedSessionInfo(infoPostHeal)`.
+     Plus the ~8 `normalizedSessionTemplate(*session,cfg)` trace reads scattered
+     through the block → `normalizedSessionTemplateInfo(…, cfg)`. **Audit each
+     mutation boundary and re-derive after any mutation that precedes a converted
+     read:** the block interleaves `cancelSessionDrainForAssignedWork`/
+     `cancelRecoveredDrainForAssignedWork`, `markDrainAckStopPending`,
+     `clearDrainTrackerForStopPending`, `finalizeDrainAckStoppedSession`,
+     `beginSessionDrain`, and the inline close (`closeSessionBeadIfReachableStoreUnassigned`
+     + `session.Status="closed"`) with the reads. Most template reads sit right
+     before a `continue`-terminated trace, so many are still pre-mutation for their
+     path — but confirm each. Whether a single top-of-`default` re-derive suffices
+     or per-branch re-derives are needed is the core judgement; when in doubt add a
+     re-derive right before the read (cheap, always correct). The trace-payload raw
+     reads + the `session.Status="closed"` write stay raw.
+   - **THEN — cluster 4c+: the remaining post-`!desired` decision reads** (the
+     desired-branch / drain-advance tail, `started_config_hash` drift checks at
+     `session_reconciler.go:2026/2278/3571/3733`, `pin_awake` at `~2501`). Add
+     `Info.StartedConfigHash` (raw) + a `pin_awake` mirror as those sites are
+     reached (see the field-gap table). Leave the apply/write-back cluster +
+     `ProjectLifecycle` + circuit breaker raw.
 3. **Leave raw:** the apply/write-back cluster (`healState*`, `checkStability`,
    `checkChurn`, `record*`/`clear*`, `markProviderTerminalError`, `healExpiredTimers`,
    `persistSessionCircuitBreakerMetadata`, the inline `session.Status="closed"` /

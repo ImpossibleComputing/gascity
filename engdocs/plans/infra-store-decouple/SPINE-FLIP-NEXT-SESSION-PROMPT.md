@@ -6,7 +6,7 @@ Paste the block below into a fresh session.
 
 Continue the **reconciler spine flip** on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
-`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `937beeb13`).
+`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `dac68d506`).
 
 **Read first:** `engdocs/plans/infra-store-decouple/SPINE-FLIP-HANDOFF.md` — the
 authoritative, self-contained guide (design = Fork B, verified scope, field-gap
@@ -65,22 +65,40 @@ git checkout go.sum
   template/agent_name/alias key; the failed-create reads sit behind its
   non-mutating `(false,nil)` return. Trace-payload `pending_create_claim`/`state` +
   inline `session.Status="closed"` + read-before-heal snapshots stay raw.
+- **Phase 1, cluster 4a (`dac68d506`):** the FIRST genuine re-derive-after-mutation
+  increment. Re-derived `infoPostHeal := sessionpkg.InfoFromPersistedBead(*session)`
+  right after `healStateWithRollback` (`session_reconciler.go:~1514`; the intervening
+  `traceHealClearedPendingCreateLease` takes the bead by value, cannot mutate) and
+  routed the two non-`default` post-heal switch arms through it: the `preserveNamed`
+  case template + the `pendingCreateSessionStillLeased(*session,cfg,clk)` guard →
+  `pendingCreateSessionStillLeasedInfo(infoPostHeal,cfg,clk)` + its case template. Go
+  switch cases don't fall through, so both arms read the byte-identical post-heal
+  bead. No new siblings/codec change. The `default` block stays raw (→ cluster 4b).
 
 **KEY RE-FRAMING (settled):** the whole `!desired` pre-heal region — from the top of
-`!desired` down to **`healStateWithRollback` (`session_reconciler.go:1491`)** — is now
-fully converted (clusters 1–3), NO re-derive. The genuine re-derive-after-mutation
-work is the **post-heal region** (after `1491`).
+`!desired` down to **`healStateWithRollback` (`session_reconciler.go:1491`)** — is
+fully converted (clusters 1–3), NO re-derive. The post-heal region begins at `1491`;
+cluster 4a converted its switch guards. The remaining post-heal work is the
+`default` block (cluster 4b) then the tail (4c+).
 
-**First concrete increment (do this, as ONE verified commit): Phase 1, cluster 4+
-— the post-heal region (`session_reconciler.go:1491`+), the FIRST genuine re-derive
-cluster.** After `healStateWithRollback` mutates `session.Metadata`, **re-derive
-`info := sessionpkg.InfoFromPersistedBead(*session)`** and convert the switch/
-`default` decision reads: post-heal `pendingCreateSessionStillLeased` at `~1526`,
-the drain-ack block, the orphan-drain/suspend/close block. **Re-derive `info` after
-EACH mutation** in this region — this is where the stale-`info` risk actually lives,
-so go slowly and with fresh context. Add `Info.StartedConfigHash` (raw) + a
-`pin_awake` mirror as those sites are reached (see the handoff field-gap table).
-Leave the apply/write-back cluster + `ProjectLifecycle` + circuit breaker raw.
+**First concrete increment (do this, as ONE verified commit): Phase 1, cluster 4b
+— the post-heal `default` block (`session_reconciler.go:~1550–1716`): drain-ack /
+orphan-drain / suspend / close.** `infoPostHeal` is already re-derived at the top of
+the switch (`~1514`); the `default` block is the fiddly per-mutation part. Convert:
+the decision read `isNamedSessionBead(*session)` (`~1666`) →
+`isNamedSessionInfo(infoPostHeal)`, and the ~8 `normalizedSessionTemplate(*session,
+cfg)` trace reads → `normalizedSessionTemplateInfo(…,cfg)`. **Audit each mutation
+boundary** (`cancelSessionDrainForAssignedWork`/`cancelRecoveredDrainForAssignedWork`,
+`markDrainAckStopPending`, `clearDrainTrackerForStopPending`,
+`finalizeDrainAckStoppedSession`, `beginSessionDrain`, the inline close +
+`session.Status="closed"`) and **re-derive after any mutation that precedes a
+converted read** — most template reads sit right before a `continue`-terminated
+trace so are still pre-mutation for their path, but confirm each; when in doubt add a
+re-derive right before the read (cheap, always correct). The trace-payload raw reads
++ the `session.Status="closed"` write stay raw. **THEN cluster 4c+:** the remaining
+post-`!desired` reads + `started_config_hash` drift checks (`~2026/2278/3571/3733`,
+add `Info.StartedConfigHash` raw) + `pin_awake` (`~2501`, add a mirror). Leave the
+apply/write-back cluster + `ProjectLifecycle` + circuit breaker raw.
 
 Verify each cluster: build + vet + lint + equivalence + guards + trace-integration +
 the full `TestReconcileSessionBeads*` suite (205 tests; ≥420s timeout — the box can
