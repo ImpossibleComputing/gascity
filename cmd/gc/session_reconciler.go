@@ -1561,9 +1561,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						if storeQueryPartial {
 							fmt.Fprintf(stdout, "Skipping drain-ack stop for '%s': store query partial (transient failure)\n", name) //nolint:errcheck
 							if trace != nil {
-								template := normalizedSessionTemplate(*session, cfg)
+								template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 								if template == "" {
-									template = session.Metadata["template"]
+									template = infoPostHeal.Template
 								}
 								trace.recordDecision("reconciler.session.drain_ack", template, name, "store_query_partial", "deferred", traceRecordPayload{
 									"store_query_partial": true,
@@ -1582,9 +1582,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							if cancelSessionDrainForAssignedWork(*session, sp, dt) ||
 								cancelRecoveredDrainForAssignedWork(*session, sp, name) {
 								_ = dops.clearDrain(name)
-								template := normalizedSessionTemplate(*session, cfg)
+								template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 								if template == "" {
-									template = session.Metadata["template"]
+									template = infoPostHeal.Template
 								}
 								fmt.Fprintf(stdout, "Canceled drain-acked session '%s' (assigned work)\n", name) //nolint:errcheck
 								if trace != nil {
@@ -1594,9 +1594,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							}
 						}
 						if providerAlive {
-							template := normalizedSessionTemplate(*session, cfg)
+							template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 							if template == "" {
-								template = session.Metadata["template"]
+								template = infoPostHeal.Template
 							}
 							if markDrainAckStopPending(session, sessFront, clk, stderr) {
 								clearDrainTrackerForStopPending(session, dt)
@@ -1607,9 +1607,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							}
 							continue
 						}
-						template := normalizedSessionTemplate(*session, cfg)
+						template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 						if template == "" {
-							template = session.Metadata["template"]
+							template = infoPostHeal.Template
 						}
 						finalizeDrainAckStoppedSession(
 							cityPath, cfg, store, rigStores, session, template,
@@ -1639,9 +1639,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					if hasAssignedWork {
 						if trace != nil {
-							template := normalizedSessionTemplate(*session, cfg)
+							template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 							if template == "" {
-								template = session.Metadata["template"]
+								template = infoPostHeal.Template
 							}
 							trace.recordDecision("reconciler.session.orphan_or_suspended", template, name, reason, "kept_open", traceRecordPayload{
 								"store_query_partial": storeQueryPartial,
@@ -1663,12 +1663,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					// cleared above once the spec reappears. Scoped to live sessions:
 					// a dead bead with no spec still releases its alias immediately
 					// (ga-ue1r).
-					if isNamedSessionBead(*session) {
+					if isNamedSessionInfo(infoPostHeal) {
 						if n := dt.bumpSuspendDeferral(session.ID); n < namedSuspendConfirmTicks {
 							if trace != nil {
-								template := normalizedSessionTemplate(*session, cfg)
+								template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 								if template == "" {
-									template = session.Metadata["template"]
+									template = infoPostHeal.Template
 								}
 								trace.recordDecision("reconciler.session.orphan_or_suspended", template, name, reason, "deferred_confirm", traceRecordPayload{
 									"confirm_ticks":    n,
@@ -1682,9 +1682,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 					if beginSessionDrain(*session, sp, dt, reason, clk, defaultDrainTimeout) {
 						if trace != nil {
-							template := normalizedSessionTemplate(*session, cfg)
+							template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 							if template == "" {
-								template = session.Metadata["template"]
+								template = infoPostHeal.Template
 							}
 							trace.recordDecision("reconciler.session.orphan_or_suspended", template, name, reason, "drain", traceRecordPayload{
 								"store_query_partial": storeQueryPartial,
@@ -1699,9 +1699,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					if configuredNames[name] {
 						reason = "suspended"
 					}
-					template := normalizedSessionTemplate(*session, cfg)
+					template := normalizedSessionTemplateInfo(infoPostHeal, cfg)
 					if template == "" {
-						template = session.Metadata["template"]
+						template = infoPostHeal.Template
 					}
 					if trace != nil {
 						trace.recordDecision("reconciler.session.close_orphan", template, name, reason, "closed", nil, nil, "")
