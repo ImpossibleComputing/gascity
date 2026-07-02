@@ -918,6 +918,37 @@ func pendingResumePreservingNamedRestart(session beads.Bead, clk clock.Clock, st
 	return true
 }
 
+// pendingResumePreservingNamedRestartInfo is the session.Info-typed sibling of
+// pendingResumePreservingNamedRestart. It routes the asleep-named-session
+// drift-repair skip decision through the typed projection: the start-pending/
+// creating state gate, the pending-create claim, session_key, started_config_hash
+// (the Info.StartedConfigHash mirror), and pending_create_started_at all read from
+// Info, with the lease-active tail delegated to pendingCreateLeaseActiveInfo.
+// Kept byte-identical to the raw form by TestSessionClassifierInfoEquivalence.
+func pendingResumePreservingNamedRestartInfo(i sessionpkg.Info, clk clock.Clock, startupTimeout time.Duration) bool {
+	switch sessionpkg.State(strings.TrimSpace(i.MetadataState)) {
+	case sessionpkg.StateStartPending, sessionpkg.StateCreating:
+	default:
+		return false
+	}
+	if !i.PendingCreateClaim {
+		return false
+	}
+	if strings.TrimSpace(i.SessionKey) == "" {
+		return false
+	}
+	if strings.TrimSpace(i.StartedConfigHash) == "" {
+		return false
+	}
+	if _, ok := parseRFC3339Metadata(i.PendingCreateStartedAt); !ok {
+		return false
+	}
+	if !pendingCreateLeaseActiveInfo(i, clk, startupTimeout) {
+		return false
+	}
+	return true
+}
+
 func wakeDemandOverridesSleepSuppression(
 	decision AwakeDecision,
 	eval wakeEvaluation,
@@ -2407,8 +2438,15 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// hash until the new process commits. Without the durable guard,
 		// a deferred start's next reconcile tick would clear the preserved
 		// hash and rotate session_key before --resume can be prepared.
+		// Re-derive: the top-of-loop info is stale here — the desired-path
+		// blocks above (drain-ack, restart-request, alive config-drift) may have
+		// mutated session.Metadata in lockstep — so project the current bead for
+		// the drift-repair skip decision. The Info sibling is only evaluated when
+		// driftRestartedInPlace is false (short-circuit ||); the fresh projection
+		// reflects the bead exactly, byte-identical to the raw read it replaces.
+		infoAsleepDrift := sessionpkg.InfoFromPersistedBead(*session)
 		skipAsleepDriftRepair := driftRestartedInPlace ||
-			pendingResumePreservingNamedRestart(*session, clk, startupTimeout)
+			pendingResumePreservingNamedRestartInfo(infoAsleepDrift, clk, startupTimeout)
 		if !alive && isNamedSessionBead(*session) && !skipAsleepDriftRepair {
 			template := tp.TemplateName
 			if template == "" {

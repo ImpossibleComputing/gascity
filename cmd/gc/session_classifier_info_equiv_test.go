@@ -516,6 +516,26 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				"generation": " 3 ",
 			},
 		},
+		"pending-resume-preserve": {
+			// Hits the pendingResumePreservingNamedRestart TRUE branch: creating
+			// state + pending_create_claim + session_key + started_config_hash +
+			// a recent pending_create_started_at (so the lease is start-in-flight,
+			// not expired). Makes the clkBoolChecks equivalence case a real
+			// true-branch comparison, not a trivial both-false pass, and exercises
+			// the new Info.StartedConfigHash gate.
+			ID:     "ga-resumepreserve",
+			Type:   session.BeadType,
+			Title:  "resumepreserve",
+			Labels: []string{session.LabelSession},
+			Metadata: map[string]string{
+				"template":                  "worker",
+				"state":                     "creating",
+				"pending_create_claim":      "true",
+				"session_key":               "sess-key-123",
+				"started_config_hash":       "cfghash-abc",
+				"pending_create_started_at": clk.Now().UTC().Format(time.RFC3339),
+			},
+		},
 		"config-hash-and-pin": {
 			// started_config_hash is read BOTH as a direct string compare (stored
 			// hash vs recomputed Core fingerprint) and via strings.TrimSpace (the
@@ -775,6 +795,20 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				return pendingCreateLeaseExpiredForRollbackInfo(i, clk, leaseStartupTimeout)
 			},
 		},
+		"pendingResumePreservingNamedRestart": {
+			func(b beads.Bead) bool { return pendingResumePreservingNamedRestart(b, clk, leaseStartupTimeout) },
+			func(i session.Info) bool {
+				return pendingResumePreservingNamedRestartInfo(i, clk, leaseStartupTimeout)
+			},
+		},
+	}
+
+	// The "pending-resume-preserve" fixture must hit the true branch under
+	// leaseStartupTimeout so the equivalence case above is a real true-branch
+	// comparison (exercising the Info.StartedConfigHash gate + the lease tail),
+	// not a trivial both-false pass.
+	if !pendingResumePreservingNamedRestart(beadsByShape["pending-resume-preserve"], clk, leaseStartupTimeout) {
+		t.Fatal("pendingResumePreservingNamedRestart(pending-resume-preserve) = false; fixture no longer exercises the resume-preserve true branch")
 	}
 
 	for shape, b := range beadsByShape {
