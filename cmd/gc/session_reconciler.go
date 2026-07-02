@@ -2733,12 +2733,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	for _, target := range wakeTargets {
 		eval := wakeEvals[target.session.ID]
 		// Typed projection for this iteration's decision reads (session_name,
-		// pin_awake, template). The loop writes only wakeEvals/eval — never the
-		// bead — so a single projection is byte-identical throughout. The sleep
-		// policy resolvers (resolveSessionSleepPolicy, configWakeSuppressed) read
-		// whole-bead + runtime state and stay raw; sleep_intent has no mirror yet
-		// and stays raw (next cluster).
-		info := sessionpkg.InfoFromPersistedBead(*target.session)
+		// pin_awake, template, sleep_intent). Refreshed from the snapshot: this is
+		// a post-Phase-1 loop, so target.session may have been mutated during Phase
+		// 1 after its last refresh. The loop itself writes only wakeEvals/eval —
+		// never the bead — so one refresh here is byte-identical throughout. The
+		// sleep policy resolvers (resolveSessionSleepPolicy, configWakeSuppressed)
+		// read whole-bead + runtime state and stay raw.
+		refreshSessionInfo(target.session.ID)
+		info := infoByID[target.session.ID]
 		policy := resolveSessionSleepPolicy(*target.session, cfg, sp)
 		eval.Policy = policy
 		name := info.SessionNameMetadata
@@ -2757,7 +2759,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// Explicit sleep_intent always wins — if the session has
 			// signaled it wants to sleep, honor that regardless of demand.
 			template := normalizedSessionTemplateInfo(info, cfg)
-			hasExplicitSleepIntent := target.session.Metadata["sleep_intent"] != ""
+			hasExplicitSleepIntent := info.SleepIntent != ""
 			demandOverrides := wakeDemandOverridesSleepSuppression(decision, eval, policy, poolDesired, template, hasExplicitSleepIntent)
 			if !demandOverrides {
 				eval.ConfigSuppressed = true
