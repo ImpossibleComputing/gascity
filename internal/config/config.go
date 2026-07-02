@@ -3636,7 +3636,8 @@ func legacyEphemeralPoolDemandShell(limit int, includeEphemeralReady, quiet bool
 	)
 	if !quiet {
 		query := bdQueryEphemeralStatusShell("open")
-		return `{ ` + query + ` | jq --arg target "$target" ` + shellquote.Quote(filter) + `; } || printf "[]"`
+		return `ephemeral_json=$(` + query + `) || exit $?; ` +
+			`printf '%s' "$ephemeral_json" | jq --arg target "$target" ` + shellquote.Quote(filter)
 	}
 	// quiet: this snippet becomes the body of the caller's own command
 	// substitution (legacy_ephemeral_candidates=$(...)), so a bare `exit`
@@ -3706,7 +3707,7 @@ func poolDemandCountShell(target string, includeEphemeralReady bool) string {
 		`ready_json=$(` + bdReadyPoolDemandShell("--limit 0", includeEphemeralReady) + `) || exit $?; ` +
 		`legacy_candidates=$(` + bdReadyPoolDemandMigrationShell("--limit 0", includeEphemeralReady) + `) || exit $?; ` +
 		`legacy_json=$(printf "%s" "$legacy_candidates" | ` + poolDemandMigrationFilterJQ(0) + `) || exit $?; ` +
-		`legacy_ephemeral_json=$(` + legacyEphemeralPoolDemandShell(0, includeEphemeralReady, false) + `); ` +
+		`legacy_ephemeral_json=$(` + legacyEphemeralPoolDemandShell(0, includeEphemeralReady, false) + `) || exit $?; ` +
 		`printf "%s\n%s\n%s\n" "$ready_json" "$legacy_json" "$legacy_ephemeral_json" | jq -s "(add // []) | unique_by(.id) | length"`
 	return shellquote.Join([]string{"sh", "-c", script, "--", target})
 }
