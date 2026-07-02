@@ -1274,7 +1274,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				continue
 			}
 			circuitSessionByIdentity[identity] = &ordered[i]
-			if err := cb.observeResetGenerationFromMetadata(identity, ordered[i].Metadata); err != nil {
+			// Read the persisted breaker cluster through the typed CircuitState
+			// front door instead of cracking ordered[i].Metadata inline. This runs
+			// in Phase 0.5, before the reconciler's coherent infoByID snapshot
+			// exists (and CircuitState is a distinct concern from Info anyway), so
+			// it projects per bead — the same shape computeNamedSessionProgressSignatures
+			// uses. The projection is pure, so it is byte-identical to the raw reads.
+			if err := cb.observeResetGenerationFromMetadata(identity, sessionpkg.CircuitStateFromMetadata(ordered[i].Metadata)); err != nil {
 				fmt.Fprintf(stderr, "session reconciler: loading session circuit breaker reset generation for %s: %v\n", identity, err) //nolint:errcheck // best-effort stderr
 			}
 		}
@@ -1283,7 +1289,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			if identity == "" {
 				continue
 			}
-			if reset, err := cb.restoreFromMetadata(identity, ordered[i].Metadata, cbNow); err != nil {
+			if reset, err := cb.restoreFromMetadata(identity, sessionpkg.CircuitStateFromMetadata(ordered[i].Metadata), cbNow); err != nil {
 				fmt.Fprintf(stderr, "session reconciler: loading session circuit breaker state for %s: %v\n", identity, err) //nolint:errcheck // best-effort stderr
 			} else if reset {
 				if err := persistSessionCircuitBreakerMetadata(sessFront, &ordered[i], cb, identity, cbNow); err != nil {

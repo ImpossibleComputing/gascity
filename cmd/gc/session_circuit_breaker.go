@@ -45,15 +45,19 @@ const (
 	defaultCircuitBreakerMaxRestarts = 5
 )
 
+// These alias the session-package key constants (the single source of truth for
+// the session_circuit_* cluster; see internal/session/circuit_state.go). Keeping
+// the local names lets the metadata read/write plumbing below stay unchanged
+// while the key literals live below the codec edge.
 const (
 	sessionCircuitStateMetadata             = session.SessionCircuitStateMetadataKey
-	sessionCircuitRestartsMetadata          = "session_circuit_restarts"
-	sessionCircuitLastRestartMetadata       = "session_circuit_last_restart"
-	sessionCircuitLastProgressMetadata      = "session_circuit_last_progress"
-	sessionCircuitLastObservedMetadata      = "session_circuit_last_observed"
-	sessionCircuitProgressSignatureMetadata = "session_circuit_progress_signature"
-	sessionCircuitOpenedAtMetadata          = "session_circuit_opened_at"
-	sessionCircuitOpenRestartCountMetadata  = "session_circuit_open_restart_count"
+	sessionCircuitRestartsMetadata          = session.SessionCircuitRestartsMetadataKey
+	sessionCircuitLastRestartMetadata       = session.SessionCircuitLastRestartMetadataKey
+	sessionCircuitLastProgressMetadata      = session.SessionCircuitLastProgressMetadataKey
+	sessionCircuitLastObservedMetadata      = session.SessionCircuitLastObservedMetadataKey
+	sessionCircuitProgressSignatureMetadata = session.SessionCircuitProgressSignatureMetadataKey
+	sessionCircuitOpenedAtMetadata          = session.SessionCircuitOpenedAtMetadataKey
+	sessionCircuitOpenRestartCountMetadata  = session.SessionCircuitOpenRestartCountMetadataKey
 	sessionCircuitResetGenerationMetadata   = session.SessionCircuitResetGenerationMetadataKey
 )
 
@@ -317,37 +321,42 @@ func (b *sessionCircuitBreaker) ObserveProgressSignature(identity, sig string, n
 	return false
 }
 
-func (b *sessionCircuitBreaker) restoreFromMetadata(identity string, meta map[string]string, now time.Time) (bool, error) {
-	if identity == "" || len(meta) == 0 {
+// restoreFromMetadata rehydrates a breaker entry for identity from a persisted
+// CircuitState (the typed projection of the session_circuit_* cluster). It reads
+// the same values the raw meta[key] form did — every parse/trim/compare below is
+// unchanged — so routing through CircuitState is byte-identical. An entry that
+// carries no non-reset circuit metadata is a no-op.
+func (b *sessionCircuitBreaker) restoreFromMetadata(identity string, cs session.CircuitState, now time.Time) (bool, error) {
+	if identity == "" {
 		return false, nil
 	}
-	if !hasSessionCircuitMetadata(meta) {
+	if !hasSessionCircuitMetadata(cs) {
 		return false, nil
 	}
-	resetGeneration, err := parseCircuitResetGeneration(meta[sessionCircuitResetGenerationMetadata])
+	resetGeneration, err := parseCircuitResetGeneration(cs.ResetGeneration)
 	if err != nil {
 		return false, err
 	}
 
 	e := &circuitBreakerEntry{
-		progressSig: meta[sessionCircuitProgressSignatureMetadata],
+		progressSig: cs.ProgressSignature,
 	}
-	if e.restarts, err = parseCircuitTimeList(meta[sessionCircuitRestartsMetadata]); err != nil {
+	if e.restarts, err = parseCircuitTimeList(cs.Restarts); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", sessionCircuitRestartsMetadata, err)
 	}
-	if e.lastRestart, err = parseCircuitTime(meta[sessionCircuitLastRestartMetadata]); err != nil {
+	if e.lastRestart, err = parseCircuitTime(cs.LastRestart); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", sessionCircuitLastRestartMetadata, err)
 	}
-	if e.lastProgress, err = parseCircuitTime(meta[sessionCircuitLastProgressMetadata]); err != nil {
+	if e.lastProgress, err = parseCircuitTime(cs.LastProgress); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", sessionCircuitLastProgressMetadata, err)
 	}
-	if e.lastObserved, err = parseCircuitTime(meta[sessionCircuitLastObservedMetadata]); err != nil {
+	if e.lastObserved, err = parseCircuitTime(cs.LastObserved); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", sessionCircuitLastObservedMetadata, err)
 	}
-	if e.openedAt, err = parseCircuitTime(meta[sessionCircuitOpenedAtMetadata]); err != nil {
+	if e.openedAt, err = parseCircuitTime(cs.OpenedAt); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", sessionCircuitOpenedAtMetadata, err)
 	}
-	if s := strings.TrimSpace(meta[sessionCircuitOpenRestartCountMetadata]); s != "" {
+	if s := strings.TrimSpace(cs.OpenRestartCount); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil {
 			return false, fmt.Errorf("parsing %s: %w", sessionCircuitOpenRestartCountMetadata, err)
@@ -355,13 +364,13 @@ func (b *sessionCircuitBreaker) restoreFromMetadata(identity string, meta map[st
 		e.openRestartCnt = n
 	}
 	e.observedSig = !e.lastObserved.IsZero() || strings.TrimSpace(e.progressSig) != ""
-	switch meta[sessionCircuitStateMetadata] {
+	switch cs.State {
 	case circuitOpen.String():
 		e.state = circuitOpen
 	case "", circuitClosed.String():
 		e.state = circuitClosed
 	default:
-		return false, fmt.Errorf("parsing %s: unknown state %q", sessionCircuitStateMetadata, meta[sessionCircuitStateMetadata])
+		return false, fmt.Errorf("parsing %s: unknown state %q", sessionCircuitStateMetadata, cs.State)
 	}
 
 	b.mu.Lock()
@@ -379,16 +388,20 @@ func (b *sessionCircuitBreaker) restoreFromMetadata(identity string, meta map[st
 	return reset, nil
 }
 
-func hasSessionCircuitMetadata(meta map[string]string) bool {
-	for _, key := range sessionCircuitMetadataKeys {
-		if key == sessionCircuitResetGenerationMetadata {
-			continue
-		}
-		if strings.TrimSpace(meta[key]) != "" {
-			return true
-		}
-	}
-	return false
+// hasSessionCircuitMetadata reports whether a CircuitState carries any breaker
+// state worth restoring. The reset generation is excluded: it is a stale-snapshot
+// floor, not breaker state, so a bead carrying only a reset generation must not
+// materialize an entry. This mirrors the raw all-keys-except-reset-generation
+// scan it replaces.
+func hasSessionCircuitMetadata(cs session.CircuitState) bool {
+	return strings.TrimSpace(cs.State) != "" ||
+		strings.TrimSpace(cs.Restarts) != "" ||
+		strings.TrimSpace(cs.LastRestart) != "" ||
+		strings.TrimSpace(cs.LastProgress) != "" ||
+		strings.TrimSpace(cs.LastObserved) != "" ||
+		strings.TrimSpace(cs.ProgressSignature) != "" ||
+		strings.TrimSpace(cs.OpenedAt) != "" ||
+		strings.TrimSpace(cs.OpenRestartCount) != ""
 }
 
 func parseCircuitResetGeneration(value string) (uint64, error) {
@@ -505,11 +518,16 @@ func (b *sessionCircuitBreaker) Reset(identity string) uint64 {
 	return b.resetGenerations[identity]
 }
 
-func (b *sessionCircuitBreaker) observeResetGenerationFromMetadata(identity string, meta map[string]string) error {
-	if b == nil || identity == "" || len(meta) == 0 {
+// observeResetGenerationFromMetadata observes the reset generation carried on a
+// persisted CircuitState into the breaker's stale-snapshot floor. An empty reset
+// generation is a no-op (parseCircuitResetGeneration returns 0, which
+// observeResetGeneration ignores), so a state with no generation behaves exactly
+// as the raw empty-map read did.
+func (b *sessionCircuitBreaker) observeResetGenerationFromMetadata(identity string, cs session.CircuitState) error {
+	if b == nil || identity == "" {
 		return nil
 	}
-	return b.observeResetGenerationValue(identity, meta[sessionCircuitResetGenerationMetadata])
+	return b.observeResetGenerationValue(identity, cs.ResetGeneration)
 }
 
 // observeResetGenerationValue parses a single persisted reset-generation metadata
