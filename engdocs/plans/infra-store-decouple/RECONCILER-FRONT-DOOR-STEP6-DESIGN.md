@@ -197,3 +197,80 @@ named_sessions.go}` and its guard only forbids the four raw snapshot accessors
 To make the reconciler files meaningfully raw-free, 6e must extend the guard to also
 forbid raw session-bead `.Metadata[` reads/writes (minus the documented raw-by-design
 exceptions: the witness full-resync @361-363 and work-bead reads @3391/4213).
+
+---
+
+## 5. Fable red-team (deeper pass) — corrections folded in
+
+A second red-team (fable, `step6-design-fable-redteam`, GO_WITH_CHANGES) went deeper
+than the opus pass and found two landmine-class gaps + inventory errors. Dispositions
+(the two starred items are the ones that "otherwise detonate the #2345/#2574 class"):
+
+- **★ LIVE min-floor divergence FIXED pre-6a.** `reconcileDrainAckStopPending`
+  (session_reconciler.go:1424, `continue`@1425) reaches
+  `finalizeDrainAckStoppedSession` (445) which closes a pool session in-memory
+  (`Status=closed`) — but Step 4D P2 added the close-refresh to the 1697/1802 finalize
+  sites and MISSED this one, so `openPoolSessionCountForTemplate` (`!Info.Closed`,
+  session_progress.go:21) over-counted a drain-ack-finalized pool worker as open for the
+  rest of the tick. Fixed by `refreshSessionInfo(session.ID)` before the 1425 continue
+  (byte-identical-restoring: the raw bead is already closed).
+- **★ Exposure set — add the store-only close family.** `closeFailedCreateBead`
+  (session_beads.go) persists `state=failed_create` + clears
+  `pending_create_claim`/`pending_create_started_at`/`sleep_intent` via
+  `setMetaBatch(sessFront, id, …)` (store-only — takes an `id`, cannot mirror the raw
+  bead); `rollbackPendingCreate` (session_lifecycle_parallel.go) mirrors only
+  `session_name`. When 6d's refresh reads these from the store, `Info.Closed` flips true
+  → the session is **evicted from `AwakeInput.SessionBeads`** (compute_awake_bridge.go
+  ~129-131), which makes the other keys moot for the awake scan — but 6d must BLESS that
+  eviction as its own tested commit (or add a same-tick stale-open overlay), and add
+  `MetadataState`/`PendingCreateClaim`/`PendingCreateStartedAt`/`SleepIntent` to the
+  exposure table with that disposition. So the exposure set is `{reset_committed_at,
+  restart_requested}` for *metadata* divergence **+ the `Status`/`Closed`
+  reconstruction case + the store-only-close key family (masked by `Closed`)**.
+- **6d refresh set is 9 sites, not "~11", and the pre-pass-dependent writers are ~15,
+  not 3.** Verified refresh sites: 1558, 1596, 1703, 1802, 1854, 2013, 2521, 2743, 2767.
+  Before deleting the 2743 pre-pass, regenerate the FULL writer set at implementation
+  time (checkRateLimitStability ×4, markDrainAckStopPending ×2, healStateWithRollback,
+  recoverPendingIdleSleep, reconcileDetachedAt, checkStability, checkChurn,
+  silentRebaselineSessionHashes ×2, resetConfiguredNamedSessionForConfigDrift,
+  relaunchAgentForLaunchDrift ×2, + the 1424 finalize). Many sit **2-3 helper layers
+  deep**, so add a **fourth "nested-helper-write" bucket** to §2's classification and
+  pick a mechanism (helpers return their applied batch, or take a refresh callback) —
+  adjacent write-returns-`Info` cannot reach them. Classify **1854** explicitly as
+  conditional write-returns-`Info` (`markProviderTerminalError` returns its batch; the
+  refresh moves inside the write's success path; the unconditional refresh is deleted).
+  **Invariant: no 6d mechanism may add an unconditional per-iteration `Get` on the
+  forward pass** — a re-read default at 1854 reproduces the reverted failure.
+- **restart_requested overlay lifecycle (spec it in §2).** SET at 2098; CLEARED whenever
+  a persisted batch containing `restart_requested` lands for that session (the 2144
+  consume, the drain-ack clear ~394, the fresh-cycle patch); SURVIVES only the
+  kill-failure `continue`@2122. An overlay-always-wins impl re-creates the #2574
+  phantom-restart — 6d needs a kill-success-then-refresh test asserting
+  `restart_requested` reads empty.
+- **6a inventory expands beyond the two audited files.** The tick's write surface is ~45
+  `ApplyPatch`/`SetMarker` sites across ~8 files (session_sleep.go, session_wake.go,
+  session_circuit_breaker.go, session_lifecycle_parallel.go, session_bead_cycle.go,
+  soft_reload.go, session_hash.go). 6a must also mirror the **7-key sleep-policy cluster**
+  that `persistSleepPolicyMetadata` (session_sleep.go ~265-300) reads raw to shape its
+  diff-gated batch — none of those keys are in the `Info` codec and the reads have
+  nowhere to go when `ordered[]` dies. (The 3 audited gaps —
+  `session_id_flag`/`template_overrides`/raw `wake_attempts` — remain correct; their
+  consumers — `freshRestartSessionKey`@2139 + session_bead_cycle.go, `clearWakeFailures`
+  dual-form check @857, `applyTemplateOverridesToConfig`@3918,
+  `parseSessionTemplateOverridesForLaunch` — join 6b.)
+- **6c is READ-SIDE ONLY.** Its current text would convert loops that CONTAIN lockstep
+  mirrors (2151-2159, 2635-2636, 2709-2710, 2821), de-facto dropping locksteps early and
+  silently staling converted reads (invisible to the write oracle). Invariant: `for i :=
+  range ordered`, `&ordered[i]`, `beadByID`, refreshSessionInfo's raw read, and every
+  lockstep mirror stay UNTOUCHED until 6d. Resolve the
+  `computeNamedSessionProgressSignatures` ordering contradiction (scan @1300 vs snapshot
+  built @1335 after the CB mutates `ordered[i]`): keep it on per-bead
+  `InfoFromPersistedBead` until 6d (exclude from 6c) unless the snapshot is hoisted with
+  a post-CB refresh + oracle.
+- **Evidence/wording fixes.** All 3 injection tests are exposed
+  (session_reconciler_test.go:7661,7833; session_reconciler_progress_test.go:202) and are
+  6d gates; downgrade "verified end-to-end" to observed-once/by-inspection (6d must
+  re-derive reproducibly); the `raw/step6-*` audit artifacts are IN-MEMORY workflow
+  outputs (no committed files — do not cite as paths); `sleep_intent` IS read (@2787), so
+  it is reachability-safe not unread; amend SPEC §8 Q1 (still defaults to naive Get) to
+  the write-returns-`Info` default.
