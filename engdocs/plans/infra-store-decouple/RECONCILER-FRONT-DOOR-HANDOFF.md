@@ -8,14 +8,34 @@ raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a DONE.** Next
-actionable = **Step 6b** (convert residual raw decision reads to `Info`). Design +
-sub-phase backlog: `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens audit + opus
-synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team** GO_WITH_CHANGES
-folded into §5). Step 6 commits so far: `212581818` (fix the 1424 drain-ack min-floor
-snapshot divergence the fable review found), `20ee1a125` (fold fable §5), `ea5103b96`
-(**6a** codec-gap mirrors: `Info.SessionIDFlag`/`TemplateOverrides`/`WakeAttemptsMetadata`
-+ oracle).
+**Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a DONE + 6b
+substantively DONE.** Next actionable = **Step 6c** (retire the raw working set,
+read-side aggregate consumers) then **6d** (the write-returns-`Info` cutover + lockstep
+drop). Design + sub-phase backlog: `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
+audit + opus synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team**
+GO_WITH_CHANGES folded into §5; §6 has the 6b audit corrections + landed commits). Step 6
+commits so far: `212581818` (fix the 1424 drain-ack min-floor snapshot divergence),
+`20ee1a125` (fold fable §5), `ea5103b96` (**6a** codec-gap mirrors), then the **6b**
+conversions: `7b5dbc64d` (`lifecycleTimerBlocker`→Info), `9a7bfe650`
+(`isDrainAckStopPending`→Info), `bd9da510a` (template-override consumers→Info),
+`5968a1a32` (oracle fixture-vitality guard).
+
+**6b review verdict (fable review/red-team workflow, 8 agents, 0 confirmed defects).**
+All 3 conversions validated byte-identical + §5-compliant (read-side only; raw classifier
+siblings kept as oracle ground truth). 4 findings, ALL refuted: an observed oracle flake
+(`isDrainAckStopPending: info=false bead=true`) was traced to **stale shared-GOCACHE
+objects** — independently re-verified 5/5 green under a fresh isolated GOCACHE — plus two
+LOW polish nits (commit-message wording; a missing fixture-vitality guard, since added).
+**6b scope finding (opus audit, §6):** the reconciler decision path is *already* ~fully on
+`Info`; the 3 landed conversions were the ones whose call sites are genuinely flippable in
+6b. The remaining 6b-listed helpers (`freshRestartSessionKeyInfo`,
+`recentlyDeferredSessionAttachedConfigDriftInfo`, `resetPendingCommittedAtInfo`-wiring) are
+"add sibling+oracle now, flip the call site in 6d" scaffolding whose call sites live inside
+the frozen forward-pass loop / write-path helpers — optional 6d prep, not required 6b.
+Two audit corrections locked: **`resume_*` are NOT codec gaps** (already on `Info` since the
+base codec) and **`evaluateWakeReasons`/`wakeReasons`/`computeWakeEvaluations` are NOT dead**
+(live nil-guard fallback `session_wake.go:443` + `gc session list` column
+`cmd_session.go:1305`) — do NOT delete.
 
 **Step 6 sequencing correction (evidence-based):** the naive keystone "flip
 `refreshSessionInfo` to `sessFront.Get`" was implemented and **REVERTED** — the
@@ -23,7 +43,8 @@ unconditional per-iteration refresh at `session_reconciler.go:1854` consumes the
 `store.Get(sessionID)` errors reconciler fail-safe tests inject (failed
 `ProgressStallDoesNotRecycle/attachment_check_error_fails_safe`) for zero benefit while
 the lockstep still maintains the raw bead. Re-sequenced: **6a** codec-gap mirrors (DONE)
-→ **6b** convert residual raw decision reads to existing `*Info` siblings → **6c** retire
+→ **6b** convert residual raw decision reads to existing `*Info` siblings (**substantively
+DONE** — the flippable-in-6b call sites landed; see §6) → **6c** retire
 the raw `ordered[]`/`beadByID` working set (READ-SIDE ONLY — never convert a
 lockstep-mirroring loop early) → **6d** the cutover via **write-returns-`Info`** +
 targeted re-reads for status-close/aggregating refreshes, bundled with the lockstep drop

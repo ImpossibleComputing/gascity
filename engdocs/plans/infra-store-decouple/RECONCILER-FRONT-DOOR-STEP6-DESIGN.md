@@ -276,3 +276,39 @@ than the opus pass and found two landmine-class gaps + inventory errors. Disposi
   outputs (no committed files — do not cite as paths); `sleep_intent` IS read (@2787), so
   it is reachability-safe not unread; amend SPEC §8 Q1 (still defaults to naive Get) to
   the write-returns-`Info` default.
+
+## 6. 6b execution (in progress) + audit corrections (opus general-purpose audit, HEAD 7b5dbc64d)
+
+An independent full-surface audit of the residual raw decision reads (7 reconciler
+files) landed two corrections and a scope refinement that override earlier §5 wording:
+
+- **`resume_flag`/`resume_command`/`resume_style` are NOT codec gaps.** They have been
+  on `Info` (`Info.ResumeFlag`/`ResumeStyle`/`ResumeCommand`, info_store.go:50-52) since
+  the base codec. So `freshRestartSessionKey` needs **no new mirror** — only a `*Info`
+  sibling. The earlier "resume_* codec gap" note (in the 6b prompt) was wrong.
+- **`evaluateWakeReasons`/`wakeReasons`/`computeWakeEvaluations` are NOT dead — do NOT
+  delete.** `computeWakeEvaluations` is a live nil-guard fallback (`session_wake.go:443`,
+  fires when `wakeEvals==nil`) and `wakeReasons` feeds the `gc session list` wake column
+  (`cmd_session.go:1305`). They are dead only on the *production reconciler decision
+  path*. Their raw reads stay until `evaluateWakeReasons` is removed on its own TODO.
+- **The raw classifier siblings stay — they are the oracle's byte-identity ground
+  truth.** `lifecycleTimerBlocker`/`isDrainAckStopPending` (raw) are called by
+  `TestSessionClassifierInfoEquivalence` as the `bead` side of each pair; deleting them
+  breaks the oracle. (The audit's "delete dead raw siblings" suggestion is rejected.)
+- **Scope refinement: the decision path is already ~fully on `Info`.** The genuinely
+  flippable-in-6b conversions are the ones LANDED this session (below). The remaining
+  6b-listed helpers (`freshRestartSessionKeyInfo`, `recentlyDeferredSessionAttachedConfigDriftInfo`,
+  `resetPendingCommittedAtInfo`-wiring) are "add sibling+oracle now, flip the call site
+  in 6d" scaffolding — their call sites live inside the frozen forward-pass loop or
+  write-path helpers (§5). Adding un-wired siblings is optional 6d prep, not required 6b.
+
+**6b conversions LANDED (byte-identical, oracle-backed, gates green):**
+- `7b5dbc64d` **6b-A** `lifecycleTimerBlocker`→`lifecycleTimerBlockerInfo` (max-age @2614 +
+  idle @2686 reads `infoByID[session.ID].HeldUntil/QuarantinedUntil`; snapshot fresh at
+  2553, timer keys never re-written in the forward pass; verified independently).
+- `9a7bfe650` **6b-C** `isDrainAckStopPending`→`isDrainAckStopPendingInfo` (drain callers
+  @436/@476 project `InfoFromPersistedBead(*session)` locally, §5-blessed drain-path
+  pattern; new `drain-ack-stop-pending` fixture + true-branch guard).
+- `bd9da510a` **6b-B** template-override consumers → `ParseTemplateOverridesFromInfo`
+  (shared decode core + `internal/session` byte-identity test; leaf-helper local
+  projection, read-side only).
