@@ -1,17 +1,24 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `4617c0821`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `59af3b856`**.
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status (as of `4617c0821`):** Steps 0–4 DONE. Next actionable = **Step 5**
-(circuit-breaker typed `CircuitState` accessor over the Phase-0.5 CB reads). Session
-commits `cece437df`..`4617c0821` (16).
-`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready for Step 5.
+**Status (as of `59af3b856`):** Steps 0–5 DONE. Next actionable = **Step 6**
+(the finale: drop the raw `session.Metadata[k]=v` lockstep + remove the raw
+`ordered []beads.Bead`/`beadByID` working set + cut `refreshSessionInfo` over to
+`sessFront.Get`). Step 5 commits `aba514233` (session `CircuitState` foundation) +
+`59af3b856` (route the two Phase-0.5 CB reads + breaker signature). Reviewed by a
+5-lens fable red-team (byte-identical / field-key mapping / dropped-guards /
+routing / scope): **0 confirmed defects**, 2 findings both refuted (the
+`Store.CircuitState` "unused" and `hasSessionCircuitMetadata` "drift" flags are
+intentional Step-6 scaffolding / a pre-existing-and-net-reduced maintainability
+note, not defects).
+`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready for Step 6.
 
 **Read first:** `RECONCILER-FRONT-DOOR-SPEC.md` (the design, review-hardened v2) and
 `OBJECT-MODEL-FRONT-DOOR-DESIGN.md` (the parent design; §3.1 session, §7 Phases 4–5).
@@ -193,12 +200,35 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
         change**: it was already converted to `InfoFromPersistedBead(*session)`
         Info reads in a prior sub-cluster. Switching the two per-bead projections to
         the snapshot follows in steps 5/6.
-- [ ] **Step 5 — circuit-breaker typed accessor.** Add `session.Store.CircuitState
-      (id) (CircuitState, error)` reading the full `session_circuit_*` key cluster
-      (progress_signature/restarts/last_restart/last_progress/last_observed/opened_at/
-      open_restart_count/state/reset_generation) — a dedicated typed value, **NOT**
-      `Info`. Route `restoreFromMetadata`/`observeResetGenerationFromMetadata` through
-      it. Breaker-restore fixture in the oracle. (Blocks step 6 — do not defer.)
+- [x] **Step 5 — circuit-breaker typed accessor.** DONE (2 commits). **Phase 1**
+      (`aba514233`): `internal/session/circuit_state.go` — `type CircuitState` (9
+      raw-string fields), the 7 previously-bare `session_circuit_*` key literals
+      promoted to exported session-package constants (the state + reset-generation
+      keys already lived in `lifecycle_projection.go`), `CircuitStateFromMetadata`
+      (pure codec) and `Store.CircuitState(id)` (store-authoritative Get accessor,
+      the Step-6 destination — NOT wired into the reconciler hot path). Codec-edge
+      byte-identical oracle (`circuit_state_test.go`,
+      `TestCircuitStateFromMetadataProjectsVerbatim` across
+      open/closed/reset-gen/missing-vs-empty/malformed + store accessor Get-only /
+      error-surfacing). CircuitState is a **distinct concern from `Info`** (breaker
+      timers/counters are lifecycle-**safety** state, not decision facts — spec
+      §5.3). **Phase 2** (`59af3b856`): `restoreFromMetadata` /
+      `observeResetGenerationFromMetadata` / `hasSessionCircuitMetadata` now take
+      `session.CircuitState` instead of `map[string]string` — every parse/trim/
+      compare kept in place reading `cs.Field` (byte-identical); the two
+      `len(meta)==0` fast-paths dropped (an all-empty `CircuitState` already falls
+      through `hasSessionCircuitMetadata` / yields an ignored empty reset
+      generation). The cmd/gc key constants now **alias** the session constants (one
+      source of truth). The two reconciler Phase-0.5 reads build
+      `sessionpkg.CircuitStateFromMetadata(ordered[i].Metadata)` — a pure per-bead
+      projection of the in-memory working copy (the same shape
+      `computeNamedSessionProgressSignatures` uses; **no store Get on the hot
+      path**), byte-identical by construction. Breaker restore/round-trip/
+      stale-snapshot/auto-reset tests + the classifier-info oracle + front-door
+      guards routed through the typed path; whole-tick reconcile/circuit/named/pool/
+      wake/sleep/drain/trace suite green (86s). **Fable 5-lens red-team: 0 confirmed
+      defects.** This was the LAST raw session-metadata read cluster on the
+      reconciler decision path.
 - [ ] **Step 6 — drop the lockstep + remove the raw working set + cut refresh over
       to `Get`.** Now that all dependent reads are on the snapshot: drop every
       `session.Metadata[k]=v` lockstep, remove the raw `ordered []beads.Bead` +

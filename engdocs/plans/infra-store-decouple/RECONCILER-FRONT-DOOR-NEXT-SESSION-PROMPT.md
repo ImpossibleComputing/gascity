@@ -1,4 +1,4 @@
-# Next-session prompt — reconciler front-door Step 5 (CircuitState typed accessor)
+# Next-session prompt — reconciler front-door Step 6 (drop the lockstep + remove the raw working set)
 
 Paste the block below into a fresh session.
 
@@ -6,81 +6,80 @@ Paste the block below into a fresh session.
 
 Continue the **session reconciler front-door migration** on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
-`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `4617c0821`).
+`/data/projects/gascity/.claude/worktrees/object-front-doors`, HEAD `59af3b856`).
 
 **Read first, in order:**
 1. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-HANDOFF.md` — the
-   authoritative handoff + ordered backlog. **Steps 0–4 DONE**; you are starting
-   **Step 5**. (This SUPERSEDES the `SPINE-FLIP-*` docs.)
-2. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-SPEC.md` — design v2.
+   authoritative handoff + ordered backlog. **Steps 0–5 DONE**; you are starting
+   **Step 6, the finale**. (This SUPERSEDES the `SPINE-FLIP-*` docs.)
+2. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-SPEC.md` — design v2
+   (esp. §2 governing safety principle, §4.3 refresh-on-write, §5.2/§6 step 6).
 
-**Where things stand.** Step 4 is complete: all four reconciler session scans read
-typed `Info` (no raw session-bead metadata cracking). The `LifecycleInput` is typed
-(4B), `buildAwakeInputFromReconciler` reads the coherent `infoByID` snapshot (4C/4D),
-the min-floor scan reads the snapshot with a close-refresh discipline (4D phase 2),
-and `computeNamedSessionProgressSignatures` / `advanceSessionDrains` read per-bead
-`Info` projections at their Phase-0.5 / post-forward-pass points (4D phase 3).
+**Where things stand.** Every reconciler decision-path read is now on typed
+projections: the four cross-session scans read `Info` (Step 4), and the Phase-0.5
+circuit-breaker restore reads `session.CircuitState` (Step 5). **No raw
+`beads.Bead.Metadata` read remains on the reconciler decision path.** What still
+remains is the raw *write* machinery that has coexisted with the typed snapshot all
+along: the `session.Metadata[k]=v` **lockstep** mirror after each persisted write, the
+raw `ordered []beads.Bead` + `beadByID` working set, and `refreshSessionInfo`'s
+raw-bead projection source.
 
 **Confirm a green baseline:**
 ```
-git rev-parse HEAD            # expect 4617c0821 (or later)
+git rev-parse HEAD            # expect 59af3b856 (or later)
 go build ./... && go vet ./cmd/gc/... ./internal/session/...
 golangci-lint run ./cmd/gc/... ./internal/session/...   # expect 0
-go test ./cmd/gc/ -run 'TestSessionClassifierInfoEquivalence|TestOpenPoolSessionCountForTemplateExcludesClosed|TestBuildAwakeInputFromReconcilerReadsInfoSnapshot' -count=1
-go test ./internal/session/ -run 'TestLifecycleInputConstructorsProjectIdentically' -count=1
+go test ./internal/session/ -run 'TestCircuitStateFromMetadataProjectsVerbatim|TestStoreCircuitState|TestLifecycleInputConstructorsProjectIdentically' -count=1
+go test ./cmd/gc/ -run 'TestSessionCircuitBreaker|TestSessionClassifierInfoEquivalence|TestBuildAwakeInputFromReconcilerReadsInfoSnapshot|TestOpenPoolSessionCountForTemplateExcludesClosed' -count=1
 git checkout go.sum
 ```
 
-**DO STEP 5 (this session): the circuit-breaker typed accessor.** The reconciler's
-Phase-0.5 circuit-breaker restore reads raw `ordered[i].Metadata` — the last raw
-session-metadata read cluster on the reconciler's decision path. Add a dedicated
-typed value (NOT `Info` — this is a distinct concern) and route the reads through it.
+**DO STEP 6 (this session): retire the raw lockstep + working set.** This is the
+finale that makes the reconciler files raw-free and lets them join
+`snapshotInfoOnlyFiles`. It is a LANDMINE — do it in small verified commits, each
+guarded by a multi-session / read-after-write same-tick test (the byte-identical
+**write** oracle is blind to same-tick stale reads — spec §2).
 
-1. **`session.Store.CircuitState(id) (CircuitState, error)`** in `internal/session`,
-   reading the full `session_circuit_*` cluster (9 keys):
-   `session_circuit_breaker` (state), `session_circuit_progress_signature`,
-   `session_circuit_restarts`, `session_circuit_last_restart`,
-   `session_circuit_last_progress`, `session_circuit_last_observed`,
-   `session_circuit_opened_at`, `session_circuit_open_restart_count`,
-   `session_circuit_reset_generation` (`SessionCircuitResetGenerationMetadataKey`).
-   Define a typed `CircuitState` struct (raw-string fields + parsed forms as the
-   consumers need), with the metadata-key literals confined below the codec edge.
-   Also add a `CircuitStateFromMetadata(meta map[string]string) CircuitState` (and,
-   if useful, a `CircuitStateFromInfo` — but the CB keys are NOT mirrored on `Info`,
-   so likely `FromMetadata` only for now).
-2. **Route the two Phase-0.5 CB reads** (`session_reconciler.go`@~1277
-   `cb.observeResetGenerationFromMetadata(identity, ordered[i].Metadata)` and @~1286
-   `cb.restoreFromMetadata(identity, ordered[i].Metadata, cbNow)`) through the typed
-   accessor. Change `restoreFromMetadata`/`observeResetGenerationFromMetadata`
-   (`session_circuit_breaker.go`) to take a `session.CircuitState` instead of
-   `map[string]string`, keeping every parse/compare exactly where it is
-   (byte-identical). `persistSessionCircuitBreakerMetadata` (the WRITE half) already
-   goes through `sessFront`; leave it unless it also cracks raw reads.
-3. **Byte-identical oracle**: extend `TestSessionClassifierInfoEquivalence` (or add a
-   dedicated breaker-restore fixture/test) so `restoreFromMetadata`/`observe…` fed a
-   `CircuitStateFromMetadata(bead.Metadata)` produce identical breaker state to the
-   raw-map form, across representative `session_circuit_*` shapes (open/closed,
-   reset-generation stale vs fresh, missing-vs-empty).
+1. **Cut `refreshSessionInfo` over to the store, WITH intra-tick suppression.**
+   Today `refreshSessionInfo(id)` re-projects from the raw working copy
+   (`InfoFromPersistedBead(*beadByID[id])`). Switching it to `sessFront.Get(id)` is
+   the goal, but a naive `Get` **exposes keys the reconciler deliberately keeps OFF
+   the in-memory bead this tick** — `reset_committed_at` (persisted on the restart
+   handoff but withheld from the lockstep, #2145/#2345 force-wake prevention) and the
+   RunLive-reapplied `started_live_hash` (persisted without a lockstep). A `Get`
+   refresh would pull those into the snapshot and **re-introduce the #2345 force-wake
+   regression**. So Step 6 must add an **explicit intra-tick "hidden this tick" set**
+   (analogous to the `restart_requested` intra-tick field, spec §5.2) that suppresses
+   `reset_committed_at` / `started_live_hash` on the refreshed `Info` until the next
+   tick. Land the suppression FIRST (with a regression test that force-wake stays
+   suppressed), THEN flip the source.
 
-**Optional consolidation:** `computeNamedSessionProgressSignatures` also runs in this
-Phase-0.5 block on a per-bead projection. If Step 5 naturally builds a coherent typed
-view here, both it and the CB reads can share it — but do NOT move the `infoByID`
-snapshot construction ahead of the CB restore without handling the CB block's
-`persistSessionCircuitBreakerMetadata` mutation of `ordered[i]` (that mutation is
-exactly why `infoByID` is built AFTER the CB block today).
+2. **Drop the `session.Metadata[k]=v` lockstep** at every write site (heal, zombie,
+   sleep, drain-finalize, CB persist, config-drift, restart handoff, …). Now safe:
+   every dependent same-tick read is on the snapshot (Steps 3–5). Convert each
+   `write + refresh + dependent-read` cluster as ONE commit; after each, run the
+   whole-tick reconcile/pool/named/chaos/trace suite. Watch the §2 read-after-write
+   sites: `infoPostHeal` (~1545), `infoPostZombie` (~1793), `infoAsleepDrift` (~2457),
+   `restart_requested` (~2057, stays intra-tick), `churn_count` (~2133-2172).
 
-**Then Step 6** (the finale): drop every `session.Metadata[k]=v` lockstep, remove the
-raw `ordered []beads.Bead` + `beadByID` working set, cut `refreshSessionInfo` over to
-`sessFront.Get`, and add explicit intra-tick suppression of `reset_committed_at` /
-`started_live_hash` (else the #2345 force-wake regression returns). Only then do the
-reconciler files become raw-free and join `snapshotInfoOnlyFiles`.
+3. **Remove the raw `ordered []beads.Bead` + `beadByID` / `circuitSessionByIdentity`
+   aliasing** once nothing reads them. The tick's working set becomes the typed
+   `infoByID` snapshot (+ the store as the write authority). `persistSessionCircuit
+   BreakerMetadata`'s `sessionCircuitMetadataEqual(session.Metadata, …)` idempotence
+   read + lockstep mirror is part of this — replace with a store-authoritative
+   equality (e.g. read via `sessFront.CircuitState` / an Info field) or drop the
+   in-memory mirror.
+
+4. **Join `snapshotInfoOnlyFiles`.** Once `session_reconciler.go` /
+   `compute_awake_bridge.go` / `session_circuit_breaker.go` no longer touch raw
+   `beads.Bead.Metadata`, add them to the guard list so CI enforces they stay raw-free.
 
 **Gates per commit:** `go build ./...` · `go vet` · `golangci-lint ./cmd/gc/...
-./internal/session/...`=0 · gofmt · the new CircuitState oracle +
-`TestSessionClassifierInfoEquivalence` + front-door guards · whole-tick
-`TestReconcileSessionBeads*` + circuit/named/pool/wake/sleep/drain/trace (run heavy
-suites in the background; the broad sweep is ~70–130s here). `git checkout go.sum`
-after. Commit AND push `--no-verify`. Trailer:
+./internal/session/...`=0 · gofmt · the byte-identical write oracle **+ a same-tick
+read-after-write test per lockstep drop** · whole-tick `TestReconcileSessionBeads*` +
+circuit/named/pool/wake/sleep/drain/trace (run heavy suites in the background; the
+broad sweep is ~70–130s here). `git checkout go.sum` after. Commit AND push
+`--no-verify`. Trailer:
 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Never
 `tmux kill-server` / `go clean -cache` (`-testcache` ok); gascity Dolt is LOCAL-ONLY
 (no `bd dolt push`). #3839 stays DRAFT.
@@ -89,7 +88,9 @@ after. Commit AND push `--no-verify`. Trailer:
 errors under zsh and reads as a false "not found". Read-only mapping agents have
 repeatedly read the WRONG worktree (`.worktrees/pack-crud`) — pin
 `git rev-parse HEAD` and restrict them to this worktree; verify their line numbers.
-Update the handoff (check boxes) + memory (`infra-beads-decoupling-plan.md`) as you
-land each phase.
+The `reset_committed_at` / `started_live_hash` intra-tick divergence is the #1
+regression trap — do NOT flip `refreshSessionInfo` to `Get` before the suppression
+set is in place and tested. Update the handoff (check boxes) + memory
+(`infra-beads-decoupling-plan.md`) as you land each phase.
 
 ---
