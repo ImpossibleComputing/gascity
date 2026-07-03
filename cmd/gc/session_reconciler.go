@@ -311,6 +311,50 @@ func recordDrainAckAssignedWorkEvent(
 	})
 }
 
+// drainAckFinalizeResult captures the Info-snapshot effect of a
+// finalizeDrainAckStoppedSession call so the reconciler can refresh its typed
+// infoByID snapshot from the write it just performed (front-door migration Step
+// 6d write-returns-Info) instead of re-projecting the raw working bead. The zero
+// value is a no-op — the call mutated nothing (async/early-return/persist-error)
+// so applyTo returns the snapshot Info unchanged.
+type drainAckFinalizeResult struct {
+	// batch is the metadata patch mirrored onto the session bead this call: the
+	// close ClosePatch (Path A) or the AcknowledgeDrain/CompleteDrain patch (the
+	// non-close drain-ack path). nil when the call wrote no metadata.
+	batch sessionpkg.MetadataPatch
+	// closed reports that the call closed the bead in memory
+	// (session.Status = "closed"); the snapshot must fold that status close via
+	// MarkClosed, which no metadata patch can carry (Info.Closed derives from
+	// Status, not metadata).
+	closed bool
+	// witnessInfo carries a full reprojection for the NDI witness close, where the
+	// call adopts the store's authoritative metadata wholesale
+	// (session.Metadata = latest.Metadata) rather than applying a known patch, so
+	// the post-Info cannot be folded from batch and is reprojected instead.
+	witnessInfo *sessionpkg.Info
+}
+
+// applyTo folds the finalize result onto the coherent pre-call snapshot Info,
+// byte-identically to re-projecting the mutated bead (the raw refreshSessionInfo
+// path): the witness reprojection wins outright; otherwise the metadata patch
+// folds via ApplyPatch and an in-memory close folds via MarkClosed. The caller
+// must pass the session's coherent snapshot entry — infoByID[id] equal to the
+// pre-call InfoFromPersistedBead(*session) — which holds at every finalize call
+// site (top-of-loop / post-heal / post-zombie refresh, no un-refreshed *session
+// mutation reaches the call).
+func (r drainAckFinalizeResult) applyTo(info sessionpkg.Info) sessionpkg.Info {
+	if r.witnessInfo != nil {
+		return *r.witnessInfo
+	}
+	if r.batch != nil {
+		info = info.ApplyPatch(r.batch)
+	}
+	if r.closed {
+		info = info.MarkClosed()
+	}
+	return info
+}
+
 func finalizeDrainAckStoppedSession(
 	cityPath string,
 	cfg *config.City,
@@ -324,9 +368,9 @@ func finalizeDrainAckStoppedSession(
 	clk clock.Clock,
 	rec events.Recorder,
 	stderr io.Writer,
-) {
+) drainAckFinalizeResult {
 	if session == nil || store == nil || session.ID == "" {
-		return
+		return drainAckFinalizeResult{}
 	}
 	name := strings.TrimSpace(session.Metadata["session_name"])
 	if template == "" {
@@ -369,7 +413,8 @@ func finalizeDrainAckStoppedSession(
 			if session.Metadata == nil {
 				session.Metadata = make(map[string]string)
 			}
-			for key, value := range sessionpkg.ClosePatch(clk.Now().UTC(), "drained") {
+			closePatch := sessionpkg.ClosePatch(clk.Now().UTC(), "drained")
+			for key, value := range closePatch {
 				session.Metadata[key] = value
 			}
 			if dops != nil {
@@ -380,7 +425,10 @@ func finalizeDrainAckStoppedSession(
 				dt.remove(session.ID)
 			}
 			recordStopped(true)
-			return
+			// write-returns-Info (Step 6d): the snapshot fold is ApplyPatch(the
+			// ClosePatch just mirrored) + MarkClosed(the Status="closed"). The raw
+			// session.Metadata/Status lockstep above stays until the final lockstep drop.
+			return drainAckFinalizeResult{batch: closePatch, closed: true}
 		}
 		if latest, err := store.Get(session.ID); err == nil && latest.Status == "closed" {
 			session.Status = latest.Status
@@ -393,7 +441,13 @@ func finalizeDrainAckStoppedSession(
 				dt.remove(session.ID)
 			}
 			recordStopped(false)
-			return
+			// NDI witness close: another observer already closed the bead and this
+			// call adopted its authoritative metadata wholesale, so the post-Info is
+			// a full reprojection, not a patch fold. This is the one finalize path
+			// still reading the raw bead; it is byte-identical to the old
+			// refreshSessionInfo and is reworked when the lockstep drops.
+			witnessInfo := sessionpkg.InfoFromPersistedBead(*session)
+			return drainAckFinalizeResult{witnessInfo: &witnessInfo}
 		}
 		assignedAfterCloseGate, closeGateAssignedErr := sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)
 		if closeGateAssignedErr != nil {
@@ -420,7 +474,9 @@ func finalizeDrainAckStoppedSession(
 	}
 	if err := sessionFrontDoor(store).ApplyPatch(session.ID, batch); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: finalizing drain-ack stopped %s: %v\n", name, err) //nolint:errcheck
-		return
+		// Store write failed, so nothing was mirrored onto the raw bead — the
+		// snapshot must stay unchanged (zero result → applyTo no-op).
+		return drainAckFinalizeResult{}
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, len(batch))
@@ -439,6 +495,9 @@ func finalizeDrainAckStoppedSession(
 	if hasAssignedWork {
 		recordDrainAckAssignedWorkEvent(cityPath, cfg, store, rigStores, *session, template, template, name, rec, stderr)
 	}
+	// Non-close drain-ack: the snapshot fold is ApplyPatch(the drain-ack batch just
+	// mirrored) with no status close.
+	return drainAckFinalizeResult{batch: batch}
 }
 
 func reconcileDrainAckStopPending(
@@ -456,22 +515,25 @@ func reconcileDrainAckStopPending(
 	clk clock.Clock,
 	rec events.Recorder,
 	stderr io.Writer,
-) bool {
+) (bool, drainAckFinalizeResult) {
 	if session == nil || !isDrainAckStopPendingInfo(sessionpkg.InfoFromPersistedBead(*session)) {
-		return false
+		return false, drainAckFinalizeResult{}
 	}
 	name := strings.TrimSpace(session.Metadata["session_name"])
 	obs, err := workerObserveSessionTargetWithRuntimeHintsWithConfig(cityPath, store, sp, cfg, session.ID, tp.Hints.ProcessNames)
 	if err != nil || obs.Running || obs.Alive {
+		// Async-stop: queueDrainAckAsyncStop takes the session ID (not *session) and
+		// mutates only the async tracker, so the bead is untouched and the snapshot
+		// stays coherent — a zero result (applyTo no-op) matches the old refresh of
+		// the unmutated bead.
 		queueDrainAckAsyncStop(cityPath, store, sp, cfg, session.ID, name, asyncStopTracker, stderr)
-		return true
+		return true, drainAckFinalizeResult{}
 	}
-	finalizeDrainAckStoppedSession(
+	return true, finalizeDrainAckStoppedSession(
 		cityPath, cfg, store, rigStores, session, tp.TemplateName,
 		!desired || isPoolManagedSessionBead(*session),
 		dops, dt, clk, rec, stderr,
 	)
-	return true
 }
 
 func finalizeDrainAckStopPendingSessions(
@@ -1445,15 +1507,18 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			dt.clearSuspendDeferral(session.ID)
 		}
 
-		if reconcileDrainAckStopPending(cityPath, cfg, sp, store, rigStores, session, tp, desired, dops, dt, asyncStopTracker, clk, rec, stderr) {
-			// finalizeDrainAckStoppedSession may close the bead in memory
-			// (Status=closed) on this true/continue path; refresh the snapshot so the
-			// cross-session min-floor scan (openPoolSessionCountForTemplate, !Info.Closed)
-			// excludes a pool session closed this tick. Mirrors the close-refresh
-			// discipline applied to the other finalizeDrainAckStoppedSession call sites
-			// (Step 4D P2); this path was missed, so the count over-included a
-			// drain-ack-finalized pool worker as open for the rest of the tick.
-			refreshSessionInfo(session.ID)
+		if handled, result := reconcileDrainAckStopPending(cityPath, cfg, sp, store, rigStores, session, tp, desired, dops, dt, asyncStopTracker, clk, rec, stderr); handled {
+			// finalizeDrainAckStoppedSession (inside reconcileDrainAckStopPending)
+			// may close the bead in memory (Status=closed) on this true/continue
+			// path; fold that close onto the snapshot so the cross-session min-floor
+			// scan (openPoolSessionCountForTemplate, !Info.Closed) excludes a pool
+			// session closed this tick. write-returns-Info (Step 6d) replaces the raw
+			// refreshSessionInfo re-projection; the async-stop branch returns a zero
+			// result so applyTo is a no-op there, matching the old refresh of the
+			// unmutated bead. infoByID[session.ID] is coherent here (top-of-loop
+			// snapshot, no *session mutation before the finalize call). Guarded by
+			// TestReconcileSessionBeads_MinFloorCountReflectsMidTickCloseDrainAck.
+			infoByID[session.ID] = result.applyTo(infoByID[session.ID])
 			continue
 		}
 
@@ -1734,13 +1799,17 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						if template == "" {
 							template = infoPostHeal.Template
 						}
-						finalizeDrainAckStoppedSession(
+						result := finalizeDrainAckStoppedSession(
 							cityPath, cfg, store, rigStores, session, template,
 							true, dops, dt, clk, rec, stderr,
 						)
-						// finalizeDrainAckStoppedSession may close the bead in memory; keep
-						// the snapshot's Info.Closed coherent for the cross-session min-floor scan.
-						refreshSessionInfo(session.ID)
+						// finalizeDrainAckStoppedSession may close the bead in memory; fold
+						// that close onto the snapshot so the cross-session min-floor scan
+						// stays coherent (write-returns-Info, Step 6d, replacing the raw
+						// refreshSessionInfo re-projection). infoByID[session.ID] holds the
+						// coherent post-heal Info (refreshed at the heal above; no *session
+						// mutation reaches here on this !providerAlive path).
+						infoByID[session.ID] = result.applyTo(infoByID[session.ID])
 						continue
 					}
 				}
@@ -2051,15 +2120,19 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					if reconcilerOwnedAck {
 						finalizeDT = nil
 					}
-					finalizeDrainAckStoppedSession(
+					result := finalizeDrainAckStoppedSession(
 						cityPath, cfg, store, rigStores, session, tp.TemplateName,
 						isPoolManagedSessionBead(*session),
 						dops, finalizeDT,
 						clk, rec, stderr,
 					)
-					// finalizeDrainAckStoppedSession may close the bead in memory; keep
-					// the snapshot's Info.Closed coherent for the cross-session min-floor scan.
-					refreshSessionInfo(session.ID)
+					// finalizeDrainAckStoppedSession may close the bead in memory; fold
+					// that close onto the snapshot so the cross-session min-floor scan
+					// stays coherent (write-returns-Info, Step 6d, replacing the raw
+					// refreshSessionInfo re-projection). infoByID[session.ID] holds the
+					// coherent post-zombie Info (refreshed above; no *session mutation
+					// reaches here on this !alive fall-through path).
+					infoByID[session.ID] = result.applyTo(infoByID[session.ID])
 					continue
 				}
 			}
