@@ -247,17 +247,19 @@ than the opus pass and found two landmine-class gaps + inventory errors. Disposi
   kill-failure `continue`@2122. An overlay-always-wins impl re-creates the #2574
   phantom-restart — 6d needs a kill-success-then-refresh test asserting
   `restart_requested` reads empty.
-- **6a inventory expands beyond the two audited files.** The tick's write surface is ~45
-  `ApplyPatch`/`SetMarker` sites across ~8 files (session_sleep.go, session_wake.go,
-  session_circuit_breaker.go, session_lifecycle_parallel.go, session_bead_cycle.go,
-  soft_reload.go, session_hash.go). 6a must also mirror the **7-key sleep-policy cluster**
-  that `persistSleepPolicyMetadata` (session_sleep.go ~265-300) reads raw to shape its
-  diff-gated batch — none of those keys are in the `Info` codec and the reads have
-  nowhere to go when `ordered[]` dies. (The 3 audited gaps —
-  `session_id_flag`/`template_overrides`/raw `wake_attempts` — remain correct; their
-  consumers — `freshRestartSessionKey`@2139 + session_bead_cycle.go, `clearWakeFailures`
-  dual-form check @857, `applyTemplateOverridesToConfig`@3918,
-  `parseSessionTemplateOverridesForLaunch` — join 6b.)
+- **6a decision-read gaps DONE (commit `ea5103b96`);** the sleep-policy cluster is
+  RE-CLASSIFIED to 6d (opus refinement of the fable finding). The 3 audited gaps —
+  `Info.SessionIDFlag`/`TemplateOverrides`/`WakeAttemptsMetadata` — landed with oracle
+  cases; their consumers (`freshRestartSessionKey`@2139 + session_bead_cycle.go,
+  `clearWakeFailures` dual-form check @857, `applyTemplateOverridesToConfig`@3918,
+  `parseSessionTemplateOverridesForLaunch`) join 6b. The fable review's **7-key
+  sleep-policy cluster** (`sleep_policy_fingerprint` + the diff-gated sleep-policy keys)
+  is NOT a 6a/6b decision-read gap: every reader is in `session_sleep.go`'s write/persist
+  path (`persistSleepPolicyMetadata`@255 + the fingerprint compares @223/268/273/327),
+  i.e. a **write-path idempotence + lockstep read**. It belongs in **6d**, where
+  write-returns-`Info` decides whether it needs an `Info` mirror at all (the diff-gate may
+  read the returned/re-read `Info` directly). `state`/`sleep_reason`/`sleep_intent` it
+  also reads already exist on `Info`.
 - **6c is READ-SIDE ONLY.** Its current text would convert loops that CONTAIN lockstep
   mirrors (2151-2159, 2635-2636, 2709-2710, 2821), de-facto dropping locksteps early and
   silently staling converted reads (invisible to the write oracle). Invariant: `for i :=
