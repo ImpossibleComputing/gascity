@@ -286,10 +286,14 @@ func graphStoreSQLiteEnabled(cfg *config.City) bool {
 // one gcg-N id sequence across all scopes, so graph-bead IDs are globally unique
 // (no cross-scope collision); the per-rig work store stays on Dolt and ownership
 // is carried by the bead's fully-qualified routing metadata (gc.routed_to,
-// gc.root_store_ref), not by physical store partitioning. A failed open is
-// logged loudly and the graph class falls back to the work backend rather than
-// crashing the process — the loud log surfaces the misconfiguration. Callers gate
-// on graphStoreSQLiteEnabled; the guard here is defensive.
+// gc.root_store_ref), not by physical store partitioning. A failed open registers
+// a self-healing erroring backend for the graph class (lazyGraphStore) so
+// graph-class ops surface the real cause instead of silently misrouting
+// formula-v2 beads to the work (Dolt) backend — a fall-back to work would let
+// `gc sling` write formula work to the wrong store and exit 0 — while re-opening
+// on a later op so a transient startup failure does not permanently poison the
+// long-lived controller Router. Callers gate on graphStoreSQLiteEnabled; the
+// guard here is defensive.
 //
 // Retention sweeping is disabled on these opens: under no-socket many short-lived
 // gc processes open this same file, and N concurrent sweepers deleting terminal
@@ -320,6 +324,252 @@ type noCloseGraphStore struct {
 // CloseStore is a no-op: the cache, not the caller, owns the shared handle.
 func (noCloseGraphStore) CloseStore() error { return nil }
 
+// lazyGraphStoreRetryBackoff rate-limits a lazyGraphStore's re-open attempts so
+// a persistently unopenable graph file does not hammer OpenSQLiteStore on every
+// graph-class op. It is a var (not a const) only so tests can shrink the window.
+var lazyGraphStoreRetryBackoff = 2 * time.Second
+
+// lazyGraphStore is the self-healing graph-class backend registered when the
+// embedded SQLite graph store cannot be opened at registration time. It exists
+// to avoid poisoning the long-lived controller Router: a permanent error backend
+// would let a transient startup failure suppress graph demand reads (0 ready →
+// asleep pool workers never woken → silent fleet-wide stall) for the whole
+// process lifetime, even after the underlying cause cleared. Instead each op
+// re-resolves the real backend, rate-limited by lazyGraphStoreRetryBackoff, and
+// caches it once it heals.
+//
+// While unhealed EVERY op returns the open error — deliberately. Graph WRITES
+// must fail loud so formula-v2 beads never silently land on the work (Dolt)
+// backend, and graph READS must error so the reconciler's fail-safe branches
+// keep sessions alive; returning empty reads there would be unsafe (it would
+// look like "no assigned work" and recycle live sessions).
+type lazyGraphStore struct {
+	dir string
+
+	mu       sync.Mutex
+	delegate beads.Store // non-nil once healed
+	lastErr  error
+	lastTry  time.Time
+}
+
+// newLazyGraphStore builds a self-healing graph backend for dir, seeded with the
+// open error observed at registration time.
+func newLazyGraphStore(dir string, initialErr error) *lazyGraphStore {
+	return &lazyGraphStore{dir: dir, lastErr: initialErr}
+}
+
+// resolve returns the healed delegate, re-attempting the open when necessary. It
+// first adopts any handle another opener has since cached (winning the
+// concurrent-open race without a redundant open), then, subject to the backoff,
+// re-attempts OpenSQLiteStore and caches the result. Until it heals it returns
+// the most recent open error.
+func (s *lazyGraphStore) resolve() (beads.Store, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.delegate != nil {
+		return s.delegate, nil
+	}
+	// Another opener may have succeeded and cached a handle since registration —
+	// adopt it instead of opening our own (kills the concurrent-open race).
+	if cached, ok := graphStoreHandleCache.Load(s.dir); ok {
+		s.delegate = cached.(beads.Store)
+		return s.delegate, nil
+	}
+	if !s.lastTry.IsZero() && time.Since(s.lastTry) < lazyGraphStoreRetryBackoff {
+		return nil, s.lastErr
+	}
+	s.lastTry = time.Now()
+	store, err := beads.OpenSQLiteStore(s.dir, beads.WithSQLiteStoreRetention(0, 0), beads.WithSQLiteStoreIDPrefix(graphStoreIDPrefix))
+	if err != nil {
+		s.lastErr = fmt.Errorf("graph_store=%q: opening the SQLite graph store at %s failed: %w", graphStoreSQLite, s.dir, err)
+		return nil, s.lastErr
+	}
+	shared := beads.Store(store)
+	if sq, ok := store.(*beads.SQLiteStore); ok {
+		shared = noCloseGraphStore{sq}
+	}
+	if actual, loaded := graphStoreHandleCache.LoadOrStore(s.dir, shared); loaded {
+		// Lost the open race: close OUR real handle, use the cached shared one.
+		if closer, ok := store.(interface{ CloseStore() error }); ok {
+			_ = closer.CloseStore() //nolint:errcheck // best-effort close of the losing duplicate
+		}
+		shared = actual.(beads.Store)
+	}
+	s.delegate = shared
+	s.lastErr = nil
+	return s.delegate, nil
+}
+
+func (s *lazyGraphStore) Create(b beads.Bead) (beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	return d.Create(b)
+}
+
+func (s *lazyGraphStore) Get(id string) (beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return beads.Bead{}, err
+	}
+	return d.Get(id)
+}
+
+func (s *lazyGraphStore) Update(id string, opts beads.UpdateOpts) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Update(id, opts)
+}
+
+func (s *lazyGraphStore) Close(id string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Close(id)
+}
+
+func (s *lazyGraphStore) Reopen(id string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Reopen(id)
+}
+
+func (s *lazyGraphStore) CloseAll(ids []string, meta map[string]string) (int, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return 0, err
+	}
+	return d.CloseAll(ids, meta)
+}
+
+func (s *lazyGraphStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.List(q)
+}
+
+func (s *lazyGraphStore) ListOpen(ids ...string) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.ListOpen(ids...)
+}
+
+func (s *lazyGraphStore) Ready(q ...beads.ReadyQuery) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.Ready(q...)
+}
+
+func (s *lazyGraphStore) Children(id string, opts ...beads.QueryOpt) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.Children(id, opts...)
+}
+
+func (s *lazyGraphStore) ListByLabel(label string, limit int, opts ...beads.QueryOpt) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.ListByLabel(label, limit, opts...)
+}
+
+func (s *lazyGraphStore) ListByAssignee(assignee, status string, limit int) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.ListByAssignee(assignee, status, limit)
+}
+
+func (s *lazyGraphStore) ListByMetadata(match map[string]string, limit int, opts ...beads.QueryOpt) ([]beads.Bead, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.ListByMetadata(match, limit, opts...)
+}
+
+func (s *lazyGraphStore) SetMetadata(id, key, value string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.SetMetadata(id, key, value)
+}
+
+func (s *lazyGraphStore) SetMetadataBatch(id string, kv map[string]string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.SetMetadataBatch(id, kv)
+}
+
+func (s *lazyGraphStore) Tx(id string, fn func(beads.Tx) error) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Tx(id, fn)
+}
+
+func (s *lazyGraphStore) Delete(id string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Delete(id)
+}
+
+func (s *lazyGraphStore) Ping() error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.Ping()
+}
+
+func (s *lazyGraphStore) DepAdd(from, to, kind string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.DepAdd(from, to, kind)
+}
+
+func (s *lazyGraphStore) DepRemove(from, to string) error {
+	d, err := s.resolve()
+	if err != nil {
+		return err
+	}
+	return d.DepRemove(from, to)
+}
+
+func (s *lazyGraphStore) DepList(id, dir string) ([]beads.Dep, error) {
+	d, err := s.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return d.DepList(id, dir)
+}
+
+var _ beads.Store = (*lazyGraphStore)(nil)
+
 func registerGraphStoreBackend(r *coordrouter.Router, cfg *config.City, cityPath string) {
 	if !graphStoreSQLiteEnabled(cfg) {
 		return
@@ -331,7 +581,9 @@ func registerGraphStoreBackend(r *coordrouter.Router, cfg *config.City, cityPath
 	}
 	store, err := beads.OpenSQLiteStore(dir, beads.WithSQLiteStoreRetention(0, 0), beads.WithSQLiteStoreIDPrefix(graphStoreIDPrefix))
 	if err != nil {
-		log.Printf("beads: graph_store=%q requested but opening the SQLite graph store at %s failed: %v; graph beads stay on the work backend", cfg.Beads.GraphStore, dir, err)
+		graphErr := fmt.Errorf("graph_store=%q: opening the SQLite graph store at %s failed: %w", cfg.Beads.GraphStore, dir, err)
+		log.Printf("beads: %v; graph-class operations will error (and self-heal on a later attempt) rather than fall back to the work backend", graphErr)
+		r.Register(coordclass.ClassGraph, newLazyGraphStore(dir, graphErr))
 		return
 	}
 	// Cache a never-closed wrapper so a consumer's closeBeadStoreHandle cannot

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/internal/beads"
 	beadsexec "github.com/gastownhall/gascity/internal/beads/exec"
 	"github.com/gastownhall/gascity/internal/citylayout"
@@ -1187,12 +1188,49 @@ func openStoreAtForCity(storePath, cityPath string) (beads.Store, error) {
 	return result.Store, nil
 }
 
+// minimalCityGraphStoreSetting reads ONLY the [beads] graph_store value directly
+// from city.toml, without include/pack expansion, builtin-cache hydration, or
+// runtime validation. It lets openStoreResultAtForCity decide whether a
+// loadCityConfig failure is routing-relevant: graph_store set means a nil cfg
+// would misroute formula beads to the work backend (worth failing the open),
+// while an unset value means routing is unaffected and the historical nil-cfg
+// tolerance is safe. The bool reports whether graph_store is non-empty; the error
+// is non-nil only when city.toml itself is unparseable.
+func minimalCityGraphStoreSetting(cityPath string) (bool, error) {
+	var raw struct {
+		Beads struct {
+			GraphStore string `toml:"graph_store"`
+		} `toml:"beads"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(cityPath, citylayout.CityConfigFile), &raw); err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(raw.Beads.GraphStore) != "", nil
+}
+
 func openStoreResultAtForCity(storePath, cityPath string) (beads.StoreOpenResult, error) {
 	runtimeCityPath := cityPath
 	if runtimeCityPath == "" {
 		runtimeCityPath = cityForStoreDir(storePath)
 	}
-	cfg, _ := loadCityConfig(runtimeCityPath, io.Discard)
+	cfg, cfgErr := loadCityConfig(runtimeCityPath, io.Discard)
+	if cfgErr != nil && citylayout.HasCityConfig(runtimeCityPath) {
+		// A city config exists at the canonical path but failed to load. A
+		// swallowed error yields a nil cfg, which disables graph routing
+		// (graphStoreSQLiteEnabled(nil)==false), so formula-v2 beads would
+		// silently degrade to the work (Dolt) backend. But loadCityConfig fails
+		// for many routing-irrelevant reasons (pack-cache hydration, unresolvable
+		// includes, runtime validation); hard-failing every one would brick the
+		// whole bead plane — reads included — even on default-Dolt cities where
+		// graph_store is unset and the swallow was harmless. So consult a minimal
+		// raw parse of [beads].graph_store and surface the error ONLY when graph
+		// routing is actually at stake (graph_store set) or city.toml itself is
+		// unparseable. An out-of-city open has no city config and skips this guard.
+		graphSet, parseErr := minimalCityGraphStoreSetting(runtimeCityPath)
+		if parseErr != nil || graphSet {
+			return beads.StoreOpenResult{}, fmt.Errorf("loading city config at %s for store routing: %w", runtimeCityPath, cfgErr)
+		}
+	}
 	scopeRoot := resolveStoreScopeRoot(runtimeCityPath, storePath)
 	provider := rawBeadsProviderForScope(scopeRoot, runtimeCityPath)
 	switch strings.TrimSpace(provider) {

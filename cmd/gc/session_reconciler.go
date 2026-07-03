@@ -2737,12 +2737,14 @@ func sessionHasOpenAssignedWorkForReachableStore(
 	identifiers := sessionAssignmentIdentifiersForConfig(session, cfg)
 	// Take the graph-only close/recycle scope only when the store carries a
 	// DISTINCT ClassGraph backend (GraphIDPrefix != ""). In the identity phase —
-	// including the degraded mode where OpenSQLiteStore failed and graph beads
-	// stayed on the work backend — the Router advertises the List capability but
-	// its GraphIDPrefix is "" and its federation reaches only Router backends, not
-	// the rig stores; falling into the graph-only branch there would approve
-	// closing a session that still has live rig work. Mirror the orphan-heal and
-	// liveListForRoot gates (both check GraphIDPrefix != "").
+	// including the degraded mode where OpenSQLiteStore failed, so the graph class
+	// is served by a self-healing erroring backend (lazyGraphStore) that errors
+	// graph ops until it re-opens rather than falling back to the work store — the
+	// Router advertises the List capability but its GraphIDPrefix is "" and its
+	// federation reaches only Router backends, not the rig stores; falling into
+	// the graph-only branch there would approve closing a session that still has
+	// live rig work. Mirror the orphan-heal and liveListForRoot gates (both check
+	// GraphIDPrefix != "").
 	if gol, ok := beads.GraphOnlyListFor(store); ok && gol.GraphIDPrefix() != "" {
 		return graphOnlyHasAssignedWork(gol, identifiers, []string{"open", "in_progress"})
 	}
