@@ -623,6 +623,12 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 				"instance_token":         "tok-xyz",
 				"detached_at":            pastRFC3339,
 				session.CurrentBeadIDKey: "ga-work-1",
+				// Step 6a codec-gap mirrors. wake_attempts="0" is the raw/int edge:
+				// WakeAttemptsMetadata must keep "0" verbatim while WakeAttempts parses 0
+				// (the distinction clearWakeFailures's != "" && != "0" gate needs).
+				"session_id_flag":    "--session-id",
+				"template_overrides": `{"model":"opus"}`,
+				"wake_attempts":      "0",
 			},
 		},
 		"config-drift-full": {
@@ -838,6 +844,18 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 		"sessionRestartRequested": {
 			func(b beads.Bead) string { return b.Metadata["restart_requested"] },
 			func(i session.Info) string { return i.RestartRequested },
+		},
+		"sessionSessionIDFlag": {
+			func(b beads.Bead) string { return b.Metadata["session_id_flag"] },
+			func(i session.Info) string { return i.SessionIDFlag },
+		},
+		"sessionTemplateOverrides": {
+			func(b beads.Bead) string { return b.Metadata["template_overrides"] },
+			func(i session.Info) string { return i.TemplateOverrides },
+		},
+		"sessionWakeAttemptsMetadata": {
+			func(b beads.Bead) string { return b.Metadata["wake_attempts"] },
+			func(i session.Info) string { return i.WakeAttemptsMetadata },
 		},
 	}
 

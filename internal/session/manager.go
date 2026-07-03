@@ -324,6 +324,22 @@ type Info struct {
 	// pending restart on the awake scan. Under raw-refresh coexistence the mirror
 	// reflects the in-memory value; Step 6 handles the Get-cutover intra-tick carrier.
 	RestartRequested string // restart_requested (raw)
+	// SessionIDFlag is the RAW session_id_flag metadata. freshRestartSessionKey
+	// (cmd/gc) reads it (trimmed != "") to decide whether the provider can inject a
+	// fresh session ID on a restart handoff. Additive mirror so that read can move off
+	// the raw bead in Step 6b. (Distinct from the resume-time SessionIDFlag field
+	// above, which is the CLI flag string resolved from config, not bead metadata.)
+	SessionIDFlag string // session_id_flag (raw)
+	// TemplateOverrides is the RAW template_overrides metadata (a JSON object string).
+	// ParseTemplateOverrides decodes it on the config-drift hash path; the mirror keeps
+	// the verbatim string so that decode can be fed from Info instead of the bead map
+	// in Step 6b.
+	TemplateOverrides string // template_overrides (raw JSON)
+	// WakeAttemptsMetadata is the RAW wake_attempts metadata string, kept verbatim
+	// alongside the int-parsed WakeAttempts above. clearWakeFailures (cmd/gc) gates on
+	// the raw string (!= "" && != "0"), which the int form cannot reproduce (it collapses
+	// missing/"0"/malformed all to 0); the mirror preserves that distinction for Step 6b.
+	WakeAttemptsMetadata string // wake_attempts (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a
