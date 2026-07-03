@@ -1566,3 +1566,41 @@ func TestDrainTracker_FinishIdleProbeIgnoresStaleProbe(t *testing.T) {
 		t.Fatalf("replacement probe should complete successfully, got ok=%v probe=%+v", ok, probe)
 	}
 }
+
+// TestClearMissingIdleProbes guards the Step-6c conversion of
+// clearMissingIdleProbes off the raw beadByID pointer map onto the typed
+// infoByID snapshot. Both carry exactly the working set's ids, so presence in
+// infoByID must decide retention identically to a non-nil beadByID entry: a
+// probe whose session is still in the snapshot is kept; a probe whose session
+// has left the working set is cleared. Info values are irrelevant — only key
+// presence matters (a closed-but-present session keeps its probe here; the
+// drain path clears it elsewhere).
+func TestClearMissingIdleProbes(t *testing.T) {
+	dt := newDrainTracker()
+	for _, id := range []string{"present", "also-present", "missing"} {
+		if dt.startIdleProbe(id) == nil {
+			t.Fatalf("expected idle probe to start for %q", id)
+		}
+	}
+
+	infoByID := map[string]sessionpkg.Info{
+		"present":      {ID: "present"},
+		"also-present": {ID: "also-present", Closed: true},
+	}
+
+	clearMissingIdleProbes(dt, infoByID)
+
+	if _, ok := dt.idleProbe("present"); !ok {
+		t.Fatal("probe for a session still in the snapshot must be retained")
+	}
+	if _, ok := dt.idleProbe("also-present"); !ok {
+		t.Fatal("probe for a closed-but-present session must be retained (presence, not Info value, decides)")
+	}
+	if _, ok := dt.idleProbe("missing"); ok {
+		t.Fatal("probe for a session absent from the snapshot must be cleared")
+	}
+
+	// Nil-tracker fast path: the reconciler may run without a drain tracker in
+	// reduced configurations, so the call must be a safe no-op.
+	clearMissingIdleProbes(nil, infoByID)
+}

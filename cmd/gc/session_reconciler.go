@@ -3097,7 +3097,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		return beadByID[id]
 	}
 	advanceSessionDrainsWithSessionsTraced(dt, sp, store, sessionLookup, ordered, wakeEvals, cfg, poolDesired, nil, readyWaitSet, clk, trace)
-	clearMissingIdleProbes(dt, beadByID)
+	clearMissingIdleProbes(dt, infoByID)
 	recordPhase(TraceSiteSessionReconcileDrainAdvance, "session_reconcile.advance_drains", phaseStart, map[string]any{
 		"ordered_session_count": len(ordered),
 		"wake_eval_count":       len(wakeEvals),
@@ -4198,14 +4198,22 @@ func clearCompletedIdleProbe(beadID string, dt *drainTracker) {
 	}
 }
 
-func clearMissingIdleProbes(dt *drainTracker, beadByID map[string]*beads.Bead) {
+// clearMissingIdleProbes drops idle-probe state for any session that has left
+// the tick's working set. It uses infoByID purely as a presence oracle: an id
+// absent from the snapshot is a session no longer under reconciliation, so its
+// stale probe must be cleared. infoByID carries exactly the ids of the raw
+// working set (both are built 1:1 from `ordered`, the snapshot is never keyed
+// beyond it, and refresh only updates existing entries), so routing this off the
+// typed snapshot instead of the raw beadByID pointer map is presence-identical
+// (front-door migration Step 6c: retire a read-side raw working-set consumer).
+func clearMissingIdleProbes(dt *drainTracker, infoByID map[string]sessionpkg.Info) {
 	if dt == nil {
 		return
 	}
 	dt.mu.Lock()
 	var stale []string
 	for id := range dt.idleProbes {
-		if beadByID[id] == nil {
+		if _, ok := infoByID[id]; !ok {
 			stale = append(stale, id)
 		}
 	}
