@@ -837,7 +837,10 @@ export type EventStreamEnvelope = {
     actor: string;
     message?: string;
     payload?: EventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: string;
@@ -1962,6 +1965,12 @@ export type ProviderCreateInputBody = {
      */
     name: string;
     /**
+     * Provider option defaults (e.g. model). Keys are merged on update.
+     */
+    option_defaults?: {
+        [key: string]: string;
+    };
+    /**
      * Options schema merge mode across inheritance chain.
      */
     options_schema_merge?: string;
@@ -2165,6 +2174,12 @@ export type ProviderUpdateInputBody = {
      * Environment variables.
      */
     env?: {
+        [key: string]: string;
+    };
+    /**
+     * Provider option defaults (e.g. model). Keys are merged on update.
+     */
+    option_defaults?: {
         [key: string]: string;
     };
     /**
@@ -3176,7 +3191,10 @@ export type TaggedEventStreamEnvelope = {
     city: string;
     message?: string;
     payload?: EventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: string;
@@ -3321,7 +3339,10 @@ export type TypedEventStreamEnvelopeBeadClosed = {
     actor: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.closed';
@@ -3335,7 +3356,10 @@ export type TypedEventStreamEnvelopeBeadCreated = {
     actor: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.created';
@@ -3349,7 +3373,10 @@ export type TypedEventStreamEnvelopeBeadUpdated = {
     actor: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.updated';
@@ -3363,7 +3390,10 @@ export type TypedEventStreamEnvelopeCityCreated = {
     actor: string;
     message?: string;
     payload: CityLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.created';
@@ -3377,7 +3407,10 @@ export type TypedEventStreamEnvelopeCityResumed = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.resumed';
@@ -3391,7 +3424,10 @@ export type TypedEventStreamEnvelopeCitySuspended = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.suspended';
@@ -3405,7 +3441,10 @@ export type TypedEventStreamEnvelopeCityUnregisterRequested = {
     actor: string;
     message?: string;
     payload: CityLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.unregister_requested';
@@ -3419,7 +3458,10 @@ export type TypedEventStreamEnvelopeControllerStarted = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'controller.started';
@@ -3433,7 +3475,10 @@ export type TypedEventStreamEnvelopeControllerStopped = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'controller.stopped';
@@ -3447,7 +3492,10 @@ export type TypedEventStreamEnvelopeConvoyClosed = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'convoy.closed';
@@ -3461,7 +3509,10 @@ export type TypedEventStreamEnvelopeConvoyCreated = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'convoy.created';
@@ -3475,7 +3526,10 @@ export type TypedEventStreamEnvelopeCustom = {
     actor: string;
     message?: string;
     payload: unknown;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: string;
@@ -3489,7 +3543,10 @@ export type TypedEventStreamEnvelopeEventsRotated = {
     actor: string;
     message?: string;
     payload: RotatedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'events.rotated';
@@ -3503,7 +3560,10 @@ export type TypedEventStreamEnvelopeExtmsgAdapterAdded = {
     actor: string;
     message?: string;
     payload: AdapterEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.adapter_added';
@@ -3517,7 +3577,10 @@ export type TypedEventStreamEnvelopeExtmsgAdapterRemoved = {
     actor: string;
     message?: string;
     payload: AdapterEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.adapter_removed';
@@ -3531,7 +3594,10 @@ export type TypedEventStreamEnvelopeExtmsgBound = {
     actor: string;
     message?: string;
     payload: BoundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.bound';
@@ -3545,7 +3611,10 @@ export type TypedEventStreamEnvelopeExtmsgGroupCreated = {
     actor: string;
     message?: string;
     payload: GroupCreatedEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.group_created';
@@ -3559,7 +3628,10 @@ export type TypedEventStreamEnvelopeExtmsgInbound = {
     actor: string;
     message?: string;
     payload: InboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.inbound';
@@ -3573,7 +3645,10 @@ export type TypedEventStreamEnvelopeExtmsgOutbound = {
     actor: string;
     message?: string;
     payload: OutboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.outbound';
@@ -3587,7 +3662,10 @@ export type TypedEventStreamEnvelopeExtmsgUnbound = {
     actor: string;
     message?: string;
     payload: UnboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.unbound';
@@ -3601,7 +3679,10 @@ export type TypedEventStreamEnvelopeGcStoreMaintenanceDone = {
     actor: string;
     message?: string;
     payload: StoreMaintenanceDonePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'gc.store.maintenance.done';
@@ -3615,7 +3696,10 @@ export type TypedEventStreamEnvelopeGcStoreMaintenanceFailed = {
     actor: string;
     message?: string;
     payload: StoreMaintenanceFailedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'gc.store.maintenance.failed';
@@ -3629,7 +3713,10 @@ export type TypedEventStreamEnvelopeMailArchived = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.archived';
@@ -3643,7 +3730,10 @@ export type TypedEventStreamEnvelopeMailDeleted = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.deleted';
@@ -3657,7 +3747,10 @@ export type TypedEventStreamEnvelopeMailMarkedRead = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.marked_read';
@@ -3671,7 +3764,10 @@ export type TypedEventStreamEnvelopeMailMarkedUnread = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.marked_unread';
@@ -3685,7 +3781,10 @@ export type TypedEventStreamEnvelopeMailRead = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.read';
@@ -3699,7 +3798,10 @@ export type TypedEventStreamEnvelopeMailReplied = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.replied';
@@ -3713,7 +3815,10 @@ export type TypedEventStreamEnvelopeMailSent = {
     actor: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.sent';
@@ -3727,7 +3832,10 @@ export type TypedEventStreamEnvelopeOrderCompleted = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.completed';
@@ -3741,7 +3849,10 @@ export type TypedEventStreamEnvelopeOrderFailed = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.failed';
@@ -3755,7 +3866,10 @@ export type TypedEventStreamEnvelopeOrderFired = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.fired';
@@ -3769,7 +3883,10 @@ export type TypedEventStreamEnvelopePgCredentialResolved = {
     actor: string;
     message?: string;
     payload: PostgresCredentialResolvedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'pg.credential_resolved';
@@ -3783,7 +3900,10 @@ export type TypedEventStreamEnvelopeProjectIdentityStamped = {
     actor: string;
     message?: string;
     payload: ProjectIdentityStampedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'project.identity.stamped';
@@ -3797,7 +3917,10 @@ export type TypedEventStreamEnvelopeProviderSwapped = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'provider.swapped';
@@ -3811,7 +3934,10 @@ export type TypedEventStreamEnvelopeRequestFailed = {
     actor: string;
     message?: string;
     payload: RequestFailedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.failed';
@@ -3825,7 +3951,10 @@ export type TypedEventStreamEnvelopeRequestResultCityCreate = {
     actor: string;
     message?: string;
     payload: CityCreateSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.city.create';
@@ -3839,7 +3968,10 @@ export type TypedEventStreamEnvelopeRequestResultCityUnregister = {
     actor: string;
     message?: string;
     payload: CityUnregisterSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.city.unregister';
@@ -3853,7 +3985,10 @@ export type TypedEventStreamEnvelopeRequestResultSessionCreate = {
     actor: string;
     message?: string;
     payload: SessionCreateSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.create';
@@ -3867,7 +4002,10 @@ export type TypedEventStreamEnvelopeRequestResultSessionMessage = {
     actor: string;
     message?: string;
     payload: SessionMessageSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.message';
@@ -3881,7 +4019,10 @@ export type TypedEventStreamEnvelopeRequestResultSessionSubmit = {
     actor: string;
     message?: string;
     payload: SessionSubmitSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.submit';
@@ -3895,7 +4036,10 @@ export type TypedEventStreamEnvelopeSessionCrashed = {
     actor: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.crashed';
@@ -3909,7 +4053,10 @@ export type TypedEventStreamEnvelopeSessionDrainAckedWithAssignedWork = {
     actor: string;
     message?: string;
     payload: SessionDrainAckedWithAssignedWorkPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.drain_acked_with_assigned_work';
@@ -3923,7 +4070,10 @@ export type TypedEventStreamEnvelopeSessionDraining = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.draining';
@@ -3937,7 +4087,10 @@ export type TypedEventStreamEnvelopeSessionIdleKilled = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.idle_killed';
@@ -3951,7 +4104,10 @@ export type TypedEventStreamEnvelopeSessionMaxAgeKilled = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.max_age_killed';
@@ -3965,7 +4121,10 @@ export type TypedEventStreamEnvelopeSessionQuarantined = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.quarantined';
@@ -3979,7 +4138,10 @@ export type TypedEventStreamEnvelopeSessionStopped = {
     actor: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.stopped';
@@ -3993,7 +4155,10 @@ export type TypedEventStreamEnvelopeSessionStranded = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.stranded';
@@ -4007,7 +4172,10 @@ export type TypedEventStreamEnvelopeSessionSuspended = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.suspended';
@@ -4021,7 +4189,10 @@ export type TypedEventStreamEnvelopeSessionUndrained = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.undrained';
@@ -4035,7 +4206,10 @@ export type TypedEventStreamEnvelopeSessionUpdated = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.updated';
@@ -4049,7 +4223,10 @@ export type TypedEventStreamEnvelopeSessionWoke = {
     actor: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.woke';
@@ -4063,7 +4240,10 @@ export type TypedEventStreamEnvelopeSessionWorkQueryFailed = {
     actor: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.work_query_failed';
@@ -4077,7 +4257,10 @@ export type TypedEventStreamEnvelopeSupervisorFsPressureSkippedTick = {
     actor: string;
     message?: string;
     payload: SupervisorFsPressureSkippedTickPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'supervisor.fs_pressure.skipped_tick';
@@ -4091,7 +4274,10 @@ export type TypedEventStreamEnvelopeSupervisorShutdownRequested = {
     actor: string;
     message?: string;
     payload: SupervisorShutdownPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'supervisor.shutdown_requested';
@@ -4105,7 +4291,10 @@ export type TypedEventStreamEnvelopeWorkerOperation = {
     actor: string;
     message?: string;
     payload: WorkerOperationEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'worker.operation';
@@ -4241,7 +4430,10 @@ export type TypedTaggedEventStreamEnvelopeBeadClosed = {
     city: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.closed';
@@ -4256,7 +4448,10 @@ export type TypedTaggedEventStreamEnvelopeBeadCreated = {
     city: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.created';
@@ -4271,7 +4466,10 @@ export type TypedTaggedEventStreamEnvelopeBeadUpdated = {
     city: string;
     message?: string;
     payload: BeadEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'bead.updated';
@@ -4286,7 +4484,10 @@ export type TypedTaggedEventStreamEnvelopeCityCreated = {
     city: string;
     message?: string;
     payload: CityLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.created';
@@ -4301,7 +4502,10 @@ export type TypedTaggedEventStreamEnvelopeCityResumed = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.resumed';
@@ -4316,7 +4520,10 @@ export type TypedTaggedEventStreamEnvelopeCitySuspended = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.suspended';
@@ -4331,7 +4538,10 @@ export type TypedTaggedEventStreamEnvelopeCityUnregisterRequested = {
     city: string;
     message?: string;
     payload: CityLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'city.unregister_requested';
@@ -4346,7 +4556,10 @@ export type TypedTaggedEventStreamEnvelopeControllerStarted = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'controller.started';
@@ -4361,7 +4574,10 @@ export type TypedTaggedEventStreamEnvelopeControllerStopped = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'controller.stopped';
@@ -4376,7 +4592,10 @@ export type TypedTaggedEventStreamEnvelopeConvoyClosed = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'convoy.closed';
@@ -4391,7 +4610,10 @@ export type TypedTaggedEventStreamEnvelopeConvoyCreated = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'convoy.created';
@@ -4406,7 +4628,10 @@ export type TypedTaggedEventStreamEnvelopeCustom = {
     city: string;
     message?: string;
     payload: unknown;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: string;
@@ -4421,7 +4646,10 @@ export type TypedTaggedEventStreamEnvelopeEventsRotated = {
     city: string;
     message?: string;
     payload: RotatedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'events.rotated';
@@ -4436,7 +4664,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgAdapterAdded = {
     city: string;
     message?: string;
     payload: AdapterEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.adapter_added';
@@ -4451,7 +4682,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgAdapterRemoved = {
     city: string;
     message?: string;
     payload: AdapterEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.adapter_removed';
@@ -4466,7 +4700,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgBound = {
     city: string;
     message?: string;
     payload: BoundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.bound';
@@ -4481,7 +4718,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgGroupCreated = {
     city: string;
     message?: string;
     payload: GroupCreatedEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.group_created';
@@ -4496,7 +4736,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgInbound = {
     city: string;
     message?: string;
     payload: InboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.inbound';
@@ -4511,7 +4754,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgOutbound = {
     city: string;
     message?: string;
     payload: OutboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.outbound';
@@ -4526,7 +4772,10 @@ export type TypedTaggedEventStreamEnvelopeExtmsgUnbound = {
     city: string;
     message?: string;
     payload: UnboundEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'extmsg.unbound';
@@ -4541,7 +4790,10 @@ export type TypedTaggedEventStreamEnvelopeGcStoreMaintenanceDone = {
     city: string;
     message?: string;
     payload: StoreMaintenanceDonePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'gc.store.maintenance.done';
@@ -4556,7 +4808,10 @@ export type TypedTaggedEventStreamEnvelopeGcStoreMaintenanceFailed = {
     city: string;
     message?: string;
     payload: StoreMaintenanceFailedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'gc.store.maintenance.failed';
@@ -4571,7 +4826,10 @@ export type TypedTaggedEventStreamEnvelopeMailArchived = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.archived';
@@ -4586,7 +4844,10 @@ export type TypedTaggedEventStreamEnvelopeMailDeleted = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.deleted';
@@ -4601,7 +4862,10 @@ export type TypedTaggedEventStreamEnvelopeMailMarkedRead = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.marked_read';
@@ -4616,7 +4880,10 @@ export type TypedTaggedEventStreamEnvelopeMailMarkedUnread = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.marked_unread';
@@ -4631,7 +4898,10 @@ export type TypedTaggedEventStreamEnvelopeMailRead = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.read';
@@ -4646,7 +4916,10 @@ export type TypedTaggedEventStreamEnvelopeMailReplied = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.replied';
@@ -4661,7 +4934,10 @@ export type TypedTaggedEventStreamEnvelopeMailSent = {
     city: string;
     message?: string;
     payload: MailEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'mail.sent';
@@ -4676,7 +4952,10 @@ export type TypedTaggedEventStreamEnvelopeOrderCompleted = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.completed';
@@ -4691,7 +4970,10 @@ export type TypedTaggedEventStreamEnvelopeOrderFailed = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.failed';
@@ -4706,7 +4988,10 @@ export type TypedTaggedEventStreamEnvelopeOrderFired = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'order.fired';
@@ -4721,7 +5006,10 @@ export type TypedTaggedEventStreamEnvelopePgCredentialResolved = {
     city: string;
     message?: string;
     payload: PostgresCredentialResolvedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'pg.credential_resolved';
@@ -4736,7 +5024,10 @@ export type TypedTaggedEventStreamEnvelopeProjectIdentityStamped = {
     city: string;
     message?: string;
     payload: ProjectIdentityStampedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'project.identity.stamped';
@@ -4751,7 +5042,10 @@ export type TypedTaggedEventStreamEnvelopeProviderSwapped = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'provider.swapped';
@@ -4766,7 +5060,10 @@ export type TypedTaggedEventStreamEnvelopeRequestFailed = {
     city: string;
     message?: string;
     payload: RequestFailedPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.failed';
@@ -4781,7 +5078,10 @@ export type TypedTaggedEventStreamEnvelopeRequestResultCityCreate = {
     city: string;
     message?: string;
     payload: CityCreateSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.city.create';
@@ -4796,7 +5096,10 @@ export type TypedTaggedEventStreamEnvelopeRequestResultCityUnregister = {
     city: string;
     message?: string;
     payload: CityUnregisterSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.city.unregister';
@@ -4811,7 +5114,10 @@ export type TypedTaggedEventStreamEnvelopeRequestResultSessionCreate = {
     city: string;
     message?: string;
     payload: SessionCreateSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.create';
@@ -4826,7 +5132,10 @@ export type TypedTaggedEventStreamEnvelopeRequestResultSessionMessage = {
     city: string;
     message?: string;
     payload: SessionMessageSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.message';
@@ -4841,7 +5150,10 @@ export type TypedTaggedEventStreamEnvelopeRequestResultSessionSubmit = {
     city: string;
     message?: string;
     payload: SessionSubmitSucceededPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'request.result.session.submit';
@@ -4856,7 +5168,10 @@ export type TypedTaggedEventStreamEnvelopeSessionCrashed = {
     city: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.crashed';
@@ -4871,7 +5186,10 @@ export type TypedTaggedEventStreamEnvelopeSessionDrainAckedWithAssignedWork = {
     city: string;
     message?: string;
     payload: SessionDrainAckedWithAssignedWorkPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.drain_acked_with_assigned_work';
@@ -4886,7 +5204,10 @@ export type TypedTaggedEventStreamEnvelopeSessionDraining = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.draining';
@@ -4901,7 +5222,10 @@ export type TypedTaggedEventStreamEnvelopeSessionIdleKilled = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.idle_killed';
@@ -4916,7 +5240,10 @@ export type TypedTaggedEventStreamEnvelopeSessionMaxAgeKilled = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.max_age_killed';
@@ -4931,7 +5258,10 @@ export type TypedTaggedEventStreamEnvelopeSessionQuarantined = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.quarantined';
@@ -4946,7 +5276,10 @@ export type TypedTaggedEventStreamEnvelopeSessionStopped = {
     city: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.stopped';
@@ -4961,7 +5294,10 @@ export type TypedTaggedEventStreamEnvelopeSessionStranded = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.stranded';
@@ -4976,7 +5312,10 @@ export type TypedTaggedEventStreamEnvelopeSessionSuspended = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.suspended';
@@ -4991,7 +5330,10 @@ export type TypedTaggedEventStreamEnvelopeSessionUndrained = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.undrained';
@@ -5006,7 +5348,10 @@ export type TypedTaggedEventStreamEnvelopeSessionUpdated = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.updated';
@@ -5021,7 +5366,10 @@ export type TypedTaggedEventStreamEnvelopeSessionWoke = {
     city: string;
     message?: string;
     payload: NoPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.woke';
@@ -5036,7 +5384,10 @@ export type TypedTaggedEventStreamEnvelopeSessionWorkQueryFailed = {
     city: string;
     message?: string;
     payload: SessionLifecyclePayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'session.work_query_failed';
@@ -5051,7 +5402,10 @@ export type TypedTaggedEventStreamEnvelopeSupervisorFsPressureSkippedTick = {
     city: string;
     message?: string;
     payload: SupervisorFsPressureSkippedTickPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'supervisor.fs_pressure.skipped_tick';
@@ -5066,7 +5420,10 @@ export type TypedTaggedEventStreamEnvelopeSupervisorShutdownRequested = {
     city: string;
     message?: string;
     payload: SupervisorShutdownPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'supervisor.shutdown_requested';
@@ -5081,7 +5438,10 @@ export type TypedTaggedEventStreamEnvelopeWorkerOperation = {
     city: string;
     message?: string;
     payload: WorkerOperationEventPayload;
+    run_id?: string;
     seq: number;
+    session_id?: string;
+    step_id?: string;
     subject?: string;
     ts: string;
     type: 'worker.operation';

@@ -616,6 +616,12 @@ type Rig struct {
 	// invoked with only a bead ID (no explicit target). Resolved via
 	// resolveAgentIdentity. Example: "rig/polecat"
 	DefaultSlingTarget string `toml:"default_sling_target,omitempty"`
+	// DefaultSlingTargets is the plural form of DefaultSlingTarget.
+	// When set, targetless gc sling picks one entry at random each dispatch.
+	// Takes precedence over DefaultSlingTarget when non-empty. Each entry is
+	// resolved the same way as DefaultSlingTarget. Example:
+	//   default_sling_targets = ["rig/polecat-a", "rig/polecat-b"]
+	DefaultSlingTargets []string `toml:"default_sling_targets,omitempty"`
 	// SessionSleep overrides workspace-level idle sleep defaults for agents in
 	// this rig.
 	SessionSleep SessionSleepConfig `toml:"session_sleep,omitempty"`
@@ -1134,6 +1140,18 @@ func (r *Rig) EffectivePrefix() string {
 	}
 	return DeriveBeadsPrefix(r.Name)
 }
+
+// Coordination class names, mirroring coordclass.Class.String(). They are part of
+// the [beads.classes.<name>] config contract and must not change without a
+// migration.
+const (
+	BeadClassWork      = "work"
+	BeadClassGraph     = "graph"
+	BeadClassMessaging = "messaging"
+	BeadClassSessions  = "sessions"
+	BeadClassOrders    = "orders"
+	BeadClassNudges    = "nudges"
+)
 
 // EffectiveDefaultBranch returns the rig's recorded default branch, or the
 // empty string if none is set. Callers should fall back to a runtime probe
@@ -2060,6 +2078,27 @@ type APIConfig struct {
 	// non-localhost. Set to true in containerized environments where the API
 	// must bind to 0.0.0.0 for health probes but mutations are still safe.
 	AllowMutations bool `toml:"allow_mutations,omitempty"`
+	// WriteAuthVerifyKey, when set, requires every mutating request to an
+	// already-registered city — the per-city routes under /v0/city/{cityName} —
+	// to carry a signed write grant from a configured trusted authority. It
+	// gates all per-city writes (beads, mail, sessions, agents, and config), not
+	// only config edits. City registry creation (POST /v0/city) is not covered:
+	// a grant binds a path-resident city name, which a not-yet-created city
+	// lacks, so creation stays governed by the supervisor-registry guards.
+	// Built-in callers (the bundled gc API client and dashboard SPA) send only
+	// the CSRF header and mint no grant, so enabling this gate turns their direct
+	// city mutations away with a clear 401; such deployments front mutations
+	// through the trusted authority that mints grants instead. The value is one
+	// or more "kid:base64-ed25519-pubkey" entries, comma separated.
+	// The GC_CITY_WRITE_PUBKEY env var overrides this. Grant revocation via an
+	// epoch floor is an ops-plane control set only through the
+	// GC_CITY_WRITE_EPOCH_FLOOR env var; it has no config field.
+	WriteAuthVerifyKey string `toml:"write_auth_verify_key,omitempty"`
+	// WriteAuthRequired makes a missing or empty WriteAuthVerifyKey a startup
+	// error instead of silently disabling the gate, so a config that intends to
+	// gate writes fails closed if the key is ever dropped. The
+	// GC_CITY_WRITE_REQUIRED=1 env var has the same effect.
+	WriteAuthRequired bool `toml:"write_auth_required,omitempty"`
 }
 
 // BindOrDefault returns the bind address, defaulting to "127.0.0.1".
@@ -3556,8 +3595,12 @@ func poolDemandFirstRowFunctionScript(includeEphemeralReady bool) string {
 
 func routedReadyTierCommand(includeEphemeralReady bool) string {
 	// The shared predicate stays order-free so the count-form does no wasted
-	// sorting; the worker first-row path asks bd for the oldest candidate.
-	return bdReadyPoolDemandShell("--sort oldest --limit=1", includeEphemeralReady) + ` 2>/dev/null`
+	// sorting; the worker first-row path asks bd for the oldest candidates.
+	// The tier is widened past a single row (limit=20, not limit=1) so a
+	// self-blocked head (is_blocked / status==blocked) has Ready routed work
+	// behind it to fall through to instead of idle-exiting; the hook layer
+	// (filterUnreadyHookCandidates) strips the blocked head from the result.
+	return bdReadyPoolDemandShell("--sort oldest --limit=20", includeEphemeralReady) + ` 2>/dev/null`
 }
 
 // poolDemandCountShell emits the reconciler count-form for target: it counts
@@ -4781,6 +4824,16 @@ func validateDependsOn(agents []Agent) error {
 // ValidateRigs checks rig configurations for errors. It returns an error if
 // any rig is missing required fields, has duplicate names, or has colliding
 // prefixes. The hqPrefix is the city's HQ prefix for collision checks.
+//
+// Reserved coordination-class id-prefixes (gcg/gcm/gcs/gco/gcn) are not rejected
+// here. On a default city the relocated SQLite class stores are an identity
+// seam — every class store resolves to the work store and the by-id class-prefix
+// routing arm never fires — so a work prefix that shadows one is harmless until
+// the multi-backend fork makes per-class stores independently routable. Making
+// the prefix fatal would break gc start and config reload for an existing city
+// that already uses one, so ReservedPrefixWarnings surfaces it as a non-fatal
+// advisory instead. Promote it back into a hard error here once per-class
+// routing activates.
 func ValidateRigs(rigs []Rig, hqPrefix string) error {
 	seenNames := make(map[string]bool, len(rigs))
 	seenPrefixes := make(map[string]string) // lowercase prefix → rig name (for error messages)
@@ -4813,6 +4866,29 @@ func ValidateRigs(rigs []Rig, hqPrefix string) error {
 		seenPrefixes[prefix] = r.Name
 	}
 	return nil
+}
+
+// ReservedPrefixWarnings returns advisory warnings for any effective HQ or rig
+// work-store prefix that shadows a reserved coordination-class id-prefix
+// (gcg/gcm/gcs/gco/gcn). The relocated SQLite class stores that mint these
+// prefixes are an identity seam on a default city, so such a prefix is allowed
+// today (see ValidateRigs) and only becomes ambiguous once the multi-backend
+// fork activates per-class routing. Callers should surface these as non-fatal
+// operator warnings so an existing city or rig that already uses one keeps
+// starting and reloading while it still has time to rename. The hqPrefix must
+// already be site-bound resolved (e.g. via EffectiveHQPrefix).
+func ReservedPrefixWarnings(rigs []Rig, hqPrefix string) []string {
+	var warnings []string
+	if IsReservedClassPrefix(hqPrefix) {
+		warnings = append(warnings, fmt.Sprintf("HQ prefix %q is a reserved coordination-class id-prefix (%s); it is allowed today because class-store relocation is inert, but rename it before per-class stores activate or class ids will be ambiguous", strings.ToLower(strings.TrimSpace(hqPrefix)), reservedClassPrefixListText()))
+	}
+	for _, r := range rigs {
+		prefix := strings.ToLower(r.EffectivePrefix())
+		if IsReservedClassPrefix(prefix) {
+			warnings = append(warnings, fmt.Sprintf("rig %q prefix %q is a reserved coordination-class id-prefix (%s); it is allowed today because class-store relocation is inert, but rename it before per-class stores activate or class ids will be ambiguous", r.Name, prefix, reservedClassPrefixListText()))
+		}
+	}
+	return warnings
 }
 
 // DefaultCity returns a City with the given name and a single default
@@ -4926,9 +5002,13 @@ func GastownCity(name, provider, startCommand string) City {
 
 // GascityCityWithProviders returns a minimal managed city that imports the
 // public gascity planning/implementation skills pack: a single mayor agent
-// plus [imports.gascity] pinned to the registry release. The pack ships
-// skills and formulas only (no agents), so the city shape matches the
-// minimal template with the pack layered on top.
+// plus [imports.gascity] (skills and formulas) pinned to the registry release.
+// The gascity formulas route their steps to role agents (gc.run-operator,
+// gc.requirements-planner, ...) that ship in the separate gc-roles subpack, so
+// the template also seeds that pack as a default rig import bound "gc" — every
+// rig added to the city then inherits the providerless, rig-scoped roles the
+// formulas coordinate. Without it a fresh city can discover a formula but fails
+// to launch with `agent "gc.run-operator" not found in city.toml` (gascity#3832).
 func GascityCityWithProviders(name, defaultProvider string, providers []string) City {
 	city := WizardCityWithProviders(name, defaultProvider, providers)
 	city.Imports = map[string]Import{
@@ -4937,6 +5017,13 @@ func GascityCityWithProviders(name, defaultProvider string, providers []string) 
 			Version: PublicGascityPackVersion,
 		},
 	}
+	city.DefaultRigImports = map[string]Import{
+		"gc": {
+			Source:  PublicGascityRolesPackSource,
+			Version: PublicGascityPackVersion,
+		},
+	}
+	city.DefaultRigImportOrder = []string{"gc"}
 	return city
 }
 

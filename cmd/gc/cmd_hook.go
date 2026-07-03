@@ -367,13 +367,22 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		assignee := firstNonEmptyHookValue(sessionName, sessionID, alias, agentForQuery, resolvedAgentName)
 		claimOpts := hookClaimOptions{
 			Assignee: assignee,
+			// IdentityCandidates governs ADOPTION of already-owned in_progress/open
+			// work (hookClaimExistingOrAssigned); it must be scoped to this
+			// session's OWN runtime identity, never the bare pool template. A
+			// suffixed pool worker resolves config via the GC_TEMPLATE fallback, so
+			// resolvedAgentName == a.QualifiedName() is the bare template, which is
+			// ALSO the [[named_session]] holder's identity — including it let a
+			// suffixed worker adopt the holder's in_progress bead (ga-80pen8). The
+			// bare template stays in RouteTargets, which governs FRESH claims of
+			// UNASSIGNED routed work. The canonical slot / named holder keep it via
+			// `alias` (GC_ALIAS == qualified bare name); only suffixed workers drop it.
 			IdentityCandidates: hookClaimIdentityCandidates(
 				assignee,
 				sessionID,
 				sessionName,
 				alias,
 				agentForQuery,
-				resolvedAgentName,
 			),
 			RouteTargets: hookClaimRouteTargets(hookClaimPrimaryRouteTarget(&a), resolvedAgentName, strings.TrimSpace(overrides["GC_TEMPLATE"])),
 			Env:          queryEnv,
@@ -399,12 +408,13 @@ func claimHookWork(workQuery, workDir string, queryEnv []string, stores []hookSt
 // against that store's captured rows, against that store's dir/env.
 //
 // When a selected store still reports ready work but every claimable row is lost
-// to another claimant before the mutation, the single-store claim drains as
-// "no work". That would strand routed work waiting in a LATER federated store
-// behind the lost race, so this loop drops the exhausted store and reselects
-// across the remaining stores. It writes the no-work drain exactly once, after
-// every store has been exhausted. emitFailure surfaces a work-query timeout on
-// the event bus when eligible.
+// to another claimant before the mutation, the single-store claim drains without
+// work. That would strand routed work waiting in a LATER federated store behind
+// the lost race, so this loop drops the exhausted store and reselects across the
+// remaining stores. It writes the shared drain exactly once, after every store
+// has been exhausted; the drain reason is claims_errored when any exhausted
+// store's eligible claims errored rather than merely lost the race, else no_work.
+// emitFailure surfaces a work-query timeout on the event bus when eligible.
 func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, stores []hookStore, claimOpts hookClaimOptions, ops hookClaimOps, run hookStoreRunner, emitFailure func(command string, err error), stdout, stderr io.Writer) int {
 	ops.applyDefaults()
 	// primary is the agent's own store (the first entry). It is captured once
@@ -417,6 +427,10 @@ func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, store
 		primary = stores[0]
 	}
 	remaining := stores
+	// claimsErrored aggregates the per-store signal that a store reported ready
+	// work but every eligible claim mutation errored, so the shared drain below can
+	// report claims_errored instead of laundering a write failure into no_work.
+	claimsErrored := false
 	for len(remaining) > 0 {
 		_, selected, err := firstStoreWithWork(workQuery, remaining, primary, run)
 		if err != nil {
@@ -451,13 +465,18 @@ func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, store
 		if res.terminal {
 			return res.code
 		}
-		// This store reported ready work but the claim acquired nothing (every
-		// claimable row was lost to another claimant, or none matched this
-		// session). Drop it and reselect from the remaining stores so routed work
-		// in a later federated store is not stranded behind it.
+		if res.claimsErrored {
+			claimsErrored = true
+		}
+		// This store reported ready work but the claim acquired nothing — every
+		// claimable row was lost to another claimant, none matched this session, or
+		// every claimable row's claim mutation errored and was skipped. Drop it and
+		// reselect from the remaining stores so routed work in a later federated
+		// store is not stranded behind it; claimsErrored carries any write-failure
+		// signal to the shared drain.
 		remaining = removeHookStore(remaining, claimStore)
 	}
-	return writeHookClaimNoWork(claimOpts, ops, stdout, stderr)
+	return writeHookClaimNoWork(claimOpts, ops, claimsErrored, stdout, stderr)
 }
 
 func hookClaimPrimaryRouteTarget(a *config.Agent) string {
@@ -643,10 +662,11 @@ func workQueryHasReadyWork(output string) bool {
 }
 
 // filterUnreadyHookCandidates strips beads from work_query output that fail
-// bd ready semantics: future defer_until, or any open blocking dep in the
-// row's blocked_by array. The work_query is expected to gate these, but
-// defensive filtering here prevents a single broken query from cascading
-// into agent action on a bead it cannot progress.
+// bd ready semantics: future defer_until, any open blocking dep in the row's
+// blocked_by array, or the row's own is_blocked / status=="blocked" marker.
+// The work_query is expected to gate these, but defensive filtering here
+// prevents a single broken query from cascading into agent action on a bead
+// it cannot progress.
 // Pure function over JSON; takes time.Time so tests stay deterministic.
 func filterUnreadyHookCandidates(output string, now time.Time) string {
 	if output == "" {
@@ -671,6 +691,9 @@ func filterUnreadyHookCandidates(output string, now time.Time) string {
 			continue
 		}
 		if isDepBlockedHookCandidate(obj) {
+			continue
+		}
+		if isSelfBlockedHookCandidate(obj) {
 			continue
 		}
 		filtered = append(filtered, obj)
@@ -716,6 +739,22 @@ func isDepBlockedHookCandidate(item map[string]any) bool {
 		if status != "" && !strings.EqualFold(status, "closed") {
 			return true
 		}
+	}
+	return false
+}
+
+// isSelfBlockedHookCandidate reports whether a candidate carries bd's own
+// is_blocked marker or an explicit status=="blocked", independent of the
+// blocked_by dependency array checked by isDepBlockedHookCandidate. An
+// absent is_blocked field is treated as NOT blocked — bd's denormalized
+// projection is not always populated, and over-filtering here would strand
+// otherwise-ready work.
+func isSelfBlockedHookCandidate(item map[string]any) bool {
+	if blocked, ok := item["is_blocked"].(bool); ok && blocked {
+		return true
+	}
+	if status, ok := item["status"].(string); ok && strings.EqualFold(strings.TrimSpace(status), "blocked") {
+		return true
 	}
 	return false
 }
