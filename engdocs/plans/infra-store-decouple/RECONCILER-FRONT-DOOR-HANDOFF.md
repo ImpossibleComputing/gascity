@@ -8,17 +8,26 @@ raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status (as of `59af3b856`):** Steps 0–5 DONE. Next actionable = **Step 6**
-(the finale: drop the raw `session.Metadata[k]=v` lockstep + remove the raw
-`ordered []beads.Bead`/`beadByID` working set + cut `refreshSessionInfo` over to
-`sessFront.Get`). Step 5 commits `aba514233` (session `CircuitState` foundation) +
-`59af3b856` (route the two Phase-0.5 CB reads + breaker signature). Reviewed by a
-5-lens fable red-team (byte-identical / field-key mapping / dropped-guards /
-routing / scope): **0 confirmed defects**, 2 findings both refuted (the
-`Store.CircuitState` "unused" and `hasSessionCircuitMetadata` "drift" flags are
-intentional Step-6 scaffolding / a pre-existing-and-net-reduced maintainability
-note, not defects).
-`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready for Step 6.
+**Status (as of `59af3b856`):** Steps 0–5 DONE. **Step 6 DESIGNED + re-sequenced**
+(see `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md`, fable 4-lens audit + opus synthesis);
+next actionable = **Step 6a (codec fidelity gaps)**. Step 5 commits `aba514233` +
+`59af3b856` (fable 5-lens red-team: 0 confirmed defects).
+
+**Step 6 sequencing correction (evidence-based, this session):** the naive keystone
+"flip `refreshSessionInfo` to `sessFront.Get` + two intra-tick overlays" was
+implemented and **REVERTED** — the unconditional per-iteration refresh at
+`session_reconciler.go:1876` makes it a per-tick Dolt Get storm AND consumes the
+`store.Get(sessionID)` errors ~13 reconciler tests inject for fail-safe paths (it
+failed `TestReconcileSessionBeads_ProgressStallDoesNotRecycleExemptOrSafeSessions/
+attachment_check_error_fails_safe`), for zero benefit while the lockstep still
+maintains the raw bead. Re-sequenced to: **6a** codec-gap `Info` mirrors
+(`session_id_flag`, `template_overrides`, raw `wake_attempts`) → **6b** convert the
+residual raw decision reads to `Info` (existing `*Info` siblings) → **6c** retire the
+raw `ordered[]`/`beadByID`/`circuitSessionByIdentity` working set → **6d** the cutover
+via **write-returns-`Info`** (not a blanket Get) bundled with the lockstep drop →
+**6e** join the guard. The confirmed Get-cutover exposure set is exactly
+`{reset_committed_at (frozen), restart_requested (overlay)}`.
+`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready for Step 6a.
 
 **Read first:** `RECONCILER-FRONT-DOOR-SPEC.md` (the design, review-hardened v2) and
 `OBJECT-MODEL-FRONT-DOOR-DESIGN.md` (the parent design; §3.1 session, §7 Phases 4–5).
