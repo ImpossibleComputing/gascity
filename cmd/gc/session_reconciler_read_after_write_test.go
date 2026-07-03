@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/runtime"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
@@ -31,6 +35,129 @@ import (
 // an OBSERVABLE outcome (a recycle / restart_requested / running state) that
 // flips iff the earlier write reached the later read through the snapshot, so it
 // fails loudly if a 6d conversion leaves the snapshot stale.
+//
+// Some sites (the zombie/heal helper-write refreshes) feed a WITHIN-iteration
+// read-after-write instead of a cross-session one: the write and the dependent
+// decision are both in the same session's own processing, so a single-session
+// bead placed at any index exercises it. TestReconcileSessionBeads_ZombieTerminalErrorReflectedOnSnapshot
+// is one — no second session is needed.
+
+// TestReconcileSessionBeads_ZombieTerminalErrorReflectedOnSnapshot guards the
+// zombie-capture refresh (session_reconciler.go ~1977): markProviderTerminalError
+// clears pending_create_claim (among other health/sleep metadata) on a zombie
+// session, and this tick folds that batch onto the snapshot via write-returns-Info
+// so the immediately-following post-zombie rollback read
+// (shouldRollbackPendingCreateInfo(infoPostZombie)) sees no claim and does NOT roll
+// the bead back.
+//
+// Scenario: a desired session (so it skips the heal and reaches the zombie block)
+// that is a zombie — tmux exists (running) but the process is dead (not alive) —
+// carrying pending_create_claim=true with an EXPIRED never-started lease and
+// terminal-error scrollback. With the fold working, the zombie batch's cleared
+// claim reaches infoPostZombie, the rollback is suppressed, and the bead stays
+// open. If the fold regresses (stale snapshot), infoPostZombie keeps the claim,
+// the expired lease fires the rollback, and the bead is closed — the assertion
+// below catches that.
+func TestReconcileSessionBeads_ZombieTerminalErrorReflectedOnSnapshot(t *testing.T) {
+	env, _, _ := newProgressStallTestEnv(t)
+
+	const zname = "worker-zombie-companion"
+	// Desired + registered with ProcessNames so the fake's ProcessAlive honors the
+	// zombie flag (running && !alive).
+	env.desiredState[zname] = TemplateParams{
+		Command:      "true",
+		SessionName:  zname,
+		TemplateName: "worker",
+		Hints:        agent.StartupHints{ProcessNames: []string{"true"}},
+		ResolvedProvider: &config.ResolvedProvider{
+			Name:          "zai",
+			SessionIDFlag: "--session-id",
+		},
+	}
+	// pending_create_claim with an EXPIRED never-started lease: if the claim
+	// survives to the post-zombie rollback read, the reconciler rolls the bead back
+	// and closes it.
+	startedAt := env.clk.Now().Add(-(pendingCreateNeverStartedTimeout + time.Second))
+	companion := env.createSessionBead(zname)
+	env.setSessionMetadata(&companion, map[string]string{
+		"state":                     "creating",
+		"pending_create_claim":      "true",
+		"pending_create_started_at": pendingCreateStartedAtNow(startedAt),
+	})
+
+	// Zombie: tmux session exists but the process is dead, with terminal-error
+	// scrollback so markProviderTerminalError fires and writes its batch.
+	if err := env.sp.Start(context.Background(), zname, runtime.Config{Command: "true"}); err != nil {
+		t.Fatalf("start zombie companion: %v", err)
+	}
+	env.sp.Zombies[zname] = true
+	env.sp.SetPeekOutput(zname, "model_not_found")
+
+	env.reconcileAtPath(t.TempDir(), []beads.Bead{companion})
+
+	got, err := env.store.Get(companion.ID)
+	if err != nil {
+		t.Fatalf("store.Get(%s): %v", companion.ID, err)
+	}
+	// Precondition: the zombie terminal-error path actually ran (otherwise the
+	// read-after-write is not exercised and the teeth-check would be vacuous).
+	if got.Metadata["provider_terminal_error"] == "" {
+		t.Fatalf("provider_terminal_error not recorded — the zombie terminal-error path did not run; scenario precondition unmet (metadata=%v)", got.Metadata)
+	}
+	// The read-after-write assertion: the zombie batch cleared pending_create_claim
+	// on the snapshot, so the post-zombie rollback read is suppressed and the bead
+	// is NOT closed.
+	if got.Status == "closed" {
+		t.Fatalf("zombie companion was rolled back and closed; markProviderTerminalError cleared pending_create_claim, so the folded post-zombie snapshot must suppress the rollback read — the terminal-error batch did not reach infoPostZombie (stale snapshot at the zombie refresh)")
+	}
+}
+
+// TestReconcileSessionBeads_HealStateReflectedOnSnapshot guards the heal refresh
+// (session_reconciler.go ~1706): healStateWithRollback projects a live
+// start-pending session to state=awake and mirrors that batch, and this tick folds
+// it onto the snapshot via write-returns-Info so the post-heal
+// pendingCreateSessionStillLeased guard (which reads MetadataState off infoPostHeal)
+// sees the healed state.
+//
+// This site became load-bearing in this same commit: the downstream zombie refresh
+// used to be a full raw re-projection that would repair a stale heal snapshot, but
+// it is now ApplyPatch(terminalErrBatch) — a no-op when there is no terminal error —
+// so the heal fold alone carries the healed state to the guard.
+//
+// Scenario: an undesired (not in desiredState), non-named session bead with
+// state=start-pending and a LIVE runtime. The heal rewrites state->awake; with the
+// fold working, infoPostHeal is awake (not "start requested"), the
+// pendingCreateSessionStillLeased guard is false, and the reconciler drains the live
+// orphan (a drain-tracker entry). With the fold stale, infoPostHeal keeps
+// start-pending, the guard treats the bead as a live pending-create, and it is kept
+// open with NO drain — the assertion below catches that.
+func TestReconcileSessionBeads_HealStateReflectedOnSnapshot(t *testing.T) {
+	env, _, _ := newProgressStallTestEnv(t)
+
+	const hname = "worker-heal-orphan-companion"
+	// Undesired, non-named (createSessionBead does not set the named-session
+	// metadata), state=start-pending, with a live runtime so providerAlive is true
+	// (the heal projects an alive session to awake, and the undesired orphan is
+	// drainable).
+	companion := env.createSessionBead(hname)
+	env.setSessionMetadata(&companion, map[string]string{
+		"state": string(sessionpkg.StateStartPending),
+	})
+	if err := env.sp.Start(context.Background(), hname, runtime.Config{Command: "true"}); err != nil {
+		t.Fatalf("start live companion: %v", err)
+	}
+
+	env.reconcileAtPath(t.TempDir(), []beads.Bead{companion})
+
+	// Read-after-write: the heal's state=awake batch folded onto the snapshot, so
+	// the pendingCreateSessionStillLeased guard sees awake (not start-requested) and
+	// the undesired live orphan is drained (drain-tracker entry). If the heal fold
+	// regresses (stale snapshot), the guard sees start-pending, treats the bead as a
+	// live pending-create, and keeps it open — no drain.
+	if env.dt.get(companion.ID) == nil {
+		t.Fatalf("orphan companion was not drained; the heal's state=awake must fold onto the snapshot so the pendingCreateSessionStillLeased guard does not keep a live start-pending orphan open — the heal fold did not reach infoPostHeal (stale snapshot at the heal refresh). stdout=%q", env.stdout.String())
+	}
+}
 
 // TestReconcileSessionBeads_MinFloorCountReflectsMidTickClose guards the
 // cross-session min-floor read: the progress-stall recycler exempts a stalled

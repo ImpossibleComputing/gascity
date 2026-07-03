@@ -1687,18 +1687,30 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				healBatch,
 			)
 			// Post-heal refresh: healStateWithRollback (above) persists through
-			// sessFront and mirrors the batch onto session.Metadata in lockstep, so
+			// sessFront and mirrors healBatch onto session.Metadata in lockstep, so
 			// the top-of-loop `info` (from the snapshot at loop entry) is now stale
-			// for this switch. Refresh this session's snapshot entry from the
-			// lockstep-updated bead and read the post-heal Info off it. The trace call above takes the
-			// bead by value (cannot mutate), and Go switch cases do not fall through,
-			// so both the preserveNamed body and the pendingCreateSessionStillLeased
-			// guard/body below read the same unmutated post-heal snapshot —
-			// `infoPostHeal` is byte-identical for them. The `default` block's own
-			// reads stay raw for now (later sub-cluster): it interleaves mutations
-			// (markDrainAckStopPending, beginSessionDrain, finalize/close) with reads
-			// and needs a per-mutation refresh.
-			refreshSessionInfo(session.ID)
+			// for this switch. Fold that same healBatch onto the snapshot via
+			// write-returns-Info (Step 6d) instead of re-projecting the raw bead:
+			// healStateWithRollback returns exactly the batch it mirrored (even on a
+			// persist error the mirror runs, so the returned batch always matches the
+			// bead), and nil when it healed nothing (ApplyPatch(nil) is a no-op). This
+			// is byte-identical to the raw refresh because infoByID[session.ID] is
+			// coherent here: the top-of-loop snapshot entry, unmutated on the path
+			// that reaches the heal (the pre-heal checkRateLimitStability/rollback/
+			// failed-create-close sites all `continue`). The trace call above takes
+			// the bead by value (cannot mutate), and Go switch cases do not fall
+			// through, so both the preserveNamed body and the
+			// pendingCreateSessionStillLeased guard/body below read the same
+			// post-heal snapshot. This fold is LOAD-BEARING (and newly so in this
+			// commit): the pendingCreateSessionStillLeasedInfo guard below reads the
+			// healed MetadataState off infoPostHeal, and the downstream zombie refresh
+			// is now ApplyPatch(terminalErrBatch) — a no-op when there is no terminal
+			// error — rather than the old raw re-projection that would have repaired a
+			// stale heal snapshot, so the healed state must reach that guard (and the
+			// post-zombie rollback read on the preserveNamed fall-through) through this
+			// fold alone. Guarded by
+			// TestReconcileSessionBeads_HealStateReflectedOnSnapshot.
+			infoByID[session.ID] = infoByID[session.ID].ApplyPatch(healBatch)
 			infoPostHeal := infoByID[session.ID]
 			switch {
 			case preserveNamed:
@@ -1933,12 +1945,17 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		recordResetStallIfDue(*session, tp.TemplateName, name, alive, startupTimeout, clk.Now().UTC(), dt, rec, stderr, trace)
 
 		// Zombie capture: session exists but process dead — grab scrollback for forensics.
+		// terminalErrBatch carries the markProviderTerminalError mirror (if it ran) out
+		// to the snapshot refresh below; nil when nothing was written.
+		var terminalErrBatch map[string]string
 		if running && !alive {
 			if output, err := peek(rateLimitPeekLines); err == nil && output != "" {
 				if reason := runtime.ProviderTerminalErrorReason(output); reason != "" {
-					if markErr := markProviderTerminalError(session, sessFront, clk, reason); markErr != nil {
+					markBatch, markErr := markProviderTerminalError(session, sessFront, clk, reason)
+					if markErr != nil {
 						fmt.Fprintf(stderr, "session reconciler: marking terminal provider error for %s: %v\n", name, markErr) //nolint:errcheck
 					}
+					terminalErrBatch = markBatch
 					if trace != nil {
 						trace.recordDecision("reconciler.session.terminal_provider_error", tp.TemplateName, name, reason, "unhealthy", traceRecordPayload{
 							"session_bead_id": session.ID,
@@ -1957,19 +1974,29 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				}
 			}
 		}
-		// Refresh the snapshot after the zombie-capture block: the alive-gated read
-		// just below can never see a markProviderTerminalError mutation (that runs
-		// only under `running && !alive`, mutually exclusive with `alive`), but the
-		// !alive rollback reads (the block below) run on the post-capture bead —
-		// markProviderTerminalError persists through sessFront and mirrors the batch
-		// onto session.Metadata in lockstep, so one refresh here captures it (the
-		// only bead mutation reachable since loop entry: recordResetStallIfDue above
-		// writes only to the drain tracker / recorder, never session.Metadata) and
-		// the whole rollback fast-path reuses it. Between the three reads the only
-		// further mutations sit on `continue` paths (attemptRollbackPendingCreate;
-		// checkRateLimitStability on hit) and runningSessionMatchesPendingCreate is
-		// read-only, so infoPostZombie stays byte-identical throughout.
-		refreshSessionInfo(session.ID)
+		// Refresh the snapshot after the zombie-capture block by folding the
+		// markProviderTerminalError batch onto it via write-returns-Info (Step 6d),
+		// instead of re-projecting the raw bead. markProviderTerminalError mirrors
+		// terminalErrBatch onto session.Metadata in lockstep and returns exactly that
+		// batch (nil when it wrote nothing — not a zombie, empty reason, or a persist
+		// error), so ApplyPatch(terminalErrBatch) reproduces the raw refresh: nil ⇒
+		// no-op. This is byte-identical because infoByID[session.ID] is coherent here
+		// — terminalErrBatch is the only session.Metadata mutation on the paths that
+		// reach this point. Only two path shapes arrive: the desired fast path (skips
+		// the `if !desired` block and mutates nothing but the drain tracker via
+		// recordResetStallIfDue, which takes the bead by value), and the ONE
+		// non-continue arm of that block — the post-heal `case preserveNamed:` — whose
+		// body sets local tp/desired and records a trace only, and which was
+		// heal-folded just above (~1713). (Every drain/drain-ack/orphan-close arm of
+		// the switch `continue`s, so no drained bead reaches this fold.) The
+		// alive-gated read just below never sees a
+		// markProviderTerminalError mutation (that runs only under `running && !alive`,
+		// mutually exclusive with `alive`); the !alive rollback reads below run on the
+		// folded snapshot, and the further mutations between them sit on `continue`
+		// paths (attemptRollbackPendingCreate; checkRateLimitStability on hit), so
+		// infoPostZombie stays byte-identical throughout. Guarded by
+		// TestReconcileSessionBeads_ZombieTerminalErrorReflectedOnSnapshot.
+		infoByID[session.ID] = infoByID[session.ID].ApplyPatch(terminalErrBatch)
 		infoPostZombie := infoByID[session.ID]
 		if alive && shouldRollbackPendingCreateInfo(infoPostZombie) && !runningSessionMatchesPendingCreate(session, name, sp) {
 			attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)

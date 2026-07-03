@@ -1996,7 +1996,7 @@ func commitStartFailure(result startResult, sessFront *sessionpkg.Store, clk clo
 	tp := result.prepared.candidate.tp
 	fmt.Fprintf(stderr, "session reconciler: starting %s: %s\n", name, formatLifecycleError(result.err)) //nolint:errcheck
 	if reason := runtime.ProviderTerminalErrorReason(result.err.Error()); reason != "" {
-		if err := markProviderTerminalError(session, sessFront, clk, reason); err != nil {
+		if _, err := markProviderTerminalError(session, sessFront, clk, reason); err != nil {
 			fmt.Fprintf(stderr, "session reconciler: marking terminal provider error for %s: %v\n", name, err) //nolint:errcheck
 		}
 		if trace != nil {

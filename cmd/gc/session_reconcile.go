@@ -684,7 +684,7 @@ func checkRateLimitStability(session *beads.Bead, cfg *config.City, alive bool, 
 		facts.Screen = sessionpkg.ScreenOther
 		if content, err := peek(rateLimitPeekLines); err == nil {
 			if reason := runtime.ProviderTerminalErrorReason(content); reason != "" {
-				if markErr := markProviderTerminalError(session, sessFront, clk, reason); markErr != nil {
+				if _, markErr := markProviderTerminalError(session, sessFront, clk, reason); markErr != nil {
 					return false, markErr
 				}
 				return true, nil
@@ -751,13 +751,21 @@ func recordRateLimitQuarantine(session *beads.Bead, sessFront *sessionpkg.Store,
 	return nil
 }
 
-func markProviderTerminalError(session *beads.Bead, sessFront *sessionpkg.Store, clk clock.Clock, reason string) error {
+// markProviderTerminalError records the terminal-provider-error health/sleep
+// metadata on a zombie session bead. It returns the batch it mirrored onto
+// session.Metadata (so the reconciler can fold it onto the typed Info snapshot
+// via write-returns-Info, front-door migration Step 6d) and any persist error.
+// The returned batch is nil on every path that mirrors nothing — a nil/empty
+// argument, an empty reason, or a persist failure (the mirror below runs only
+// after a successful ApplyPatch) — so ApplyPatch(returnedBatch) is a no-op
+// exactly when the raw bead was left unchanged.
+func markProviderTerminalError(session *beads.Bead, sessFront *sessionpkg.Store, clk clock.Clock, reason string) (map[string]string, error) {
 	if session == nil || sessFront == nil {
-		return nil
+		return nil, nil
 	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return nil
+		return nil, nil
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string)
@@ -779,12 +787,12 @@ func markProviderTerminalError(session *beads.Bead, sessFront *sessionpkg.Store,
 		sessionProviderTerminalErrorAtKey:       now.Format(time.RFC3339),
 	}
 	if err := sessFront.ApplyPatch(session.ID, batch); err != nil {
-		return err
+		return nil, err
 	}
 	for k, v := range batch {
 		session.Metadata[k] = v
 	}
-	return nil
+	return batch, nil
 }
 
 func sessionHasProviderTerminalError(session beads.Bead) bool {
