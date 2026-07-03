@@ -51,9 +51,9 @@ the `reset_committed_at` freeze overlay is UNNEEDED — only `restart_requested`
 write @~2130) needs an explicit ApplyPatch + clear-on-persisted; (b) the close sites split by
 whether the close helper mirrors a ClosePatch onto the raw bead: **store-only closes
 (`closeFailedCreateBead`@1890, `closeBead`@2387 — both take an `id`, never a `*beads.Bead`) → the
-only raw-bead change is `session.Status="closed"` → the byte-identical refresh is `markClosed`
+only raw-bead change is `session.Status="closed"` → the byte-identical refresh is `MarkClosed`
 ONLY** (Closed=true, State=""); the **`finalizeDrainAckStoppedSession` closes DO mirror a
-`ClosePatch`** (@~372) → those need `ApplyPatch(closeBatch) + markClosed`.
+`ClosePatch`** (@~372) → those need `ApplyPatch(closeBatch) + MarkClosed`.
 
 **Confirm a green baseline (use an ISOLATED GOCACHE — shared-cache stale-object hazard):**
 ```
@@ -67,25 +67,21 @@ git checkout go.sum
 **DO — the 6d wiring, ONE small commit per site (KEEP the raw `session.Metadata[k]=v` mirror on
 every one until the final deletion; each is byte-identical + gets a read-after-write test):**
 
-**START HERE — Commit 1 (the model; @1590 is ALREADY guarded, so it's the safest first):**
-Add `func (Info) markClosed() Info` (internal/session; returns the receiver with `Closed=true`,
-`State=""` — exactly what `InfoFromPersistedBead` yields for a status-closed bead, since only
-`State` is blanked on close; add a tiny oracle case). Convert the two **store-only** close
-refreshes from `refreshSessionInfo(session.ID)` to `infoByID[session.ID] =
-infoByID[session.ID].markClosed()`:
-- **@~1590** failed-create close (`closeSessionBeadIfReachableStoreUnassigned`→`closeFailedCreateBead`).
-  **Already guarded** by `TestReconcileSessionBeads_MinFloorCountReflectsMidTickClose` — verify it
-  stays green (no new test needed).
-- **@~1834** orphan close (same helper → `closeBead`). Add a sibling harness test: an orphan
-  companion (open, unassigned, not-desired, no live runtime) at slice index 0 that closes mid-tick,
-  same min-floor assertion.
-Byte-identical because both closes are store-only (the ClosePatch goes to the store, not the raw
-bead, so today's raw reproject already only sees `Status=closed`). KEEP `session.Status="closed"`.
+**Commit 1 DONE (`cfd6893fb`).** Added `Info.MarkClosed()` (Closed=true, State=""; oracle
+`TestInfoMarkClosedMatchesReprojection`) and converted the two **store-only** close refreshes
+(`@~1590` failed-create, `@~1834` orphan) from `refreshSessionInfo(id)` to `infoByID[id] =
+infoByID[id].MarkClosed()`, keeping the raw `session.Status="closed"` lockstep. Byte-identical
+(store-only closes stamp their ClosePatch on the store, not the raw bead). Both teeth-verified
+(`…MinFloorCountReflectsMidTickClose` + new `…Orphan`). **Line numbers shifted +~11 after
+Commit 1 — re-grep every anchor below before editing.**
 
-**Commit 2 — the drain-ack finalize closes (@~1456, @~1735, @~2045).** `finalizeDrainAckStoppedSession`
-DOES mirror a `ClosePatch` (@~372), so change it to return its applied close batch and convert the
-refresh to `infoByID[id] = infoByID[id].ApplyPatch(closeBatch).markClosed()`. Add a drain-ack
-mid-tick-close harness test.
+**START HERE — Commit 2 — the drain-ack finalize closes (pre-Commit-1 `@~1456, @~1735, @~2045`;
+re-grep).** Unlike the store-only closes, `finalizeDrainAckStoppedSession` DOES mirror a
+`ClosePatch` (@~372), so change it to return its applied close batch and convert each refresh to
+`infoByID[id] = infoByID[id].ApplyPatch(closeBatch).MarkClosed()`. Add a drain-ack
+mid-tick-close harness test (a drain-acked, no-live-runtime pool companion at slice index 0 that
+`finalizeDrainAckStoppedSession` closes mid-tick, same min-floor exemption assertion as the
+Commit-1 orphan test). Teeth-verify: disabling the converted refresh fails the new test.
 
 **Commit 3 — the nested-helper-write refreshes.** `markProviderTerminalError` (@~1886, feeds
 `infoPostZombie`) already builds `batch` locally → change it to return `(sessionpkg.MetadataPatch,
@@ -147,7 +143,7 @@ ground truth. **DO NOT** delete `evaluateWakeReasons`/`wakeReasons`/`computeWake
 read-after-write harness (`TestReconcileSessionBeads_MinFloorCountReflectsMidTickClose` + the new
 sibling for this commit)** + whole-tick `TestReconcileSessionBeads*` + circuit/named/pool/wake/
 sleep/drain/trace (heavy suites in the background). **For every conversion, before committing,
-prove the new test has TEETH: temporarily break the refresh (e.g. delete the `markClosed`/ApplyPatch
+prove the new test has TEETH: temporarily break the refresh (e.g. delete the `MarkClosed`/ApplyPatch
 line) and confirm the sibling test FAILS, then restore.** **Run oracles under an isolated GOCACHE.**
 `git checkout go.sum` after. Commit AND push `--no-verify`. Trailer:
 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.

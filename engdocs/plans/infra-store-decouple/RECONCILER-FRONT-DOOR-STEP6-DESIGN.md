@@ -374,11 +374,22 @@ the four raw aggregates confirmed `clearMissingIdleProbes` was the SOLE pure rea
   raw `*beads.Bead` for the `persistSleepPolicyMetadata` write @2853, so these are 6d, not
   part of the 6c four-aggregate scope.
 
-## 8. 6d execution plan (foundation LANDED `b031a356d`; wiring is the next unit)
+## 8. 6d execution plan (foundation + Commit 1 LANDED; wiring continues)
 
 **Owner decision (this session): mechanism = write-returns-`Info`** (not the
 targeted-`Get`-everywhere variant, not a snapshot meta-accumulator). Scope directive:
 "drive as far as gates stay green."
+
+**Commit 1 LANDED (`cfd6893fb`).** Added `Info.MarkClosed()` (Closed=true, State="";
+oracle `TestInfoMarkClosedMatchesReprojection`) — the status-close counterpart to
+`ApplyPatch` — and converted the two **store-only** close refreshes (`closeFailedCreateBead`
+@~1590 and `closeBead`/orphan @~1834) from `refreshSessionInfo(id)` to `infoByID[id] =
+infoByID[id].MarkClosed()`, keeping the raw `session.Status="closed"` lockstep. Byte-identical
+(store-only closes stamp their ClosePatch on the store, not the raw bead, so the raw reproject
+already only saw `Status=closed`). Both sites teeth-verified by sibling read-after-write tests
+(`…MinFloorCountReflectsMidTickClose` + new `…Orphan`). **Next: Commit 2 = the drain-ack
+`finalize*` closes (deletion-order step 1 continues) — they DO mirror a ClosePatch, so
+`ApplyPatch(closeBatch).MarkClosed()`.** Line numbers shifted +~11 after Commit 1; re-grep.
 
 **Foundation LANDED (`b031a356d`):** `Info.ApplyPatch(patch MetadataPatch) Info`
 (internal/session/info_apply_patch.go) — folds a patch onto a projected `Info` by
@@ -426,21 +437,21 @@ NO by-construction status-close shortcut (the close helpers stamp a `ClosePatch`
     id, …)` (store-only, take an `id`, do NOT touch the raw bead). So TODAY the raw
     reproject reflects ONLY the `Status=closed` set at the call site, NOT their
     state=failed_create / cleared keys. Byte-identical conversion for those sites is
-    **markClosed ONLY** (do NOT ApplyPatch their store-only batch). The `finalize*` /
+    **MarkClosed ONLY** (do NOT ApplyPatch their store-only batch). The `finalize*` /
     `completeDrain` closes DO mirror a ClosePatch onto the raw bead, so those need
-    `ApplyPatch(closeBatch)` + markClosed. Match each site to its close family exactly.
+    `ApplyPatch(closeBatch)` + MarkClosed. Match each site to its close family exactly.
 - **aggregating** — @2553 `infoAsleepDrift` and the wakeTargets refresh @2799 reflect
   cumulative prior-block mutations; they resolve once the writers before them self-refresh.
 - **blanket pre-pass** — @2775 `for i := range ordered { refreshSessionInfo }` is the
   linchpin: it exists ONLY to catch un-self-refreshed forward-pass mutations (the
   restart_requested marker + the pending-create rollback that `continue`s). Once every
-  forward-pass writer self-refreshes (via ApplyPatch/markClosed) AND restart_requested@2130
+  forward-pass writer self-refreshes (via ApplyPatch/MarkClosed) AND restart_requested@2130
   ApplyPatches, it is redundant → delete it (with a read-after-write test that the awake
   scan sees the self-refreshed values).
 
 **Deletion order (final commits):**
 1. Thread batches out of every nested helper; convert each refresh site to
-   `ApplyPatch`/markClosed (KEEP the raw mirror throughout — byte-identical, whole-tick
+   `ApplyPatch`/MarkClosed (KEEP the raw mirror throughout — byte-identical, whole-tick
    suite + the ApplyPatch oracle as evidence, PLUS a bespoke same-tick read-after-write
    test per site since the write oracle is blind to stale reads).
 2. ApplyPatch the `restart_requested`@2130 in-memory write onto the snapshot (+ clear-on-persisted).
