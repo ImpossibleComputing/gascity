@@ -1,4 +1,4 @@
-# Next-session prompt — reconciler front-door Step 6c/6d (retire raw working set, then cutover)
+# Next-session prompt — reconciler front-door Step 6d (the cutover) / 6e (join the guard)
 
 Paste the block below into a fresh session.
 
@@ -10,19 +10,24 @@ Continue the **session reconciler front-door migration** on **PR #3839** (branch
 
 **Read first, in order:**
 1. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` — the
-   Step-6 design + backlog. **Read §5 (fable red-team constraints) AND §6 (6b audit
-   corrections + landed commits).** READ THIS FIRST.
+   Step-6 design + backlog. **Read §2 (intra-tick model + why the Get-cutover is
+   write-returns-`Info`, not a blanket `Get`), §5 (fable red-team constraints — the
+   9-refresh-site set, ~15 nested-helper writers, the restart_requested overlay
+   lifecycle, the store-only-close family), AND §7 (6c execution + the 6d
+   carry-forward landmines).** READ THIS FIRST.
 2. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-HANDOFF.md` — status.
-   Steps 0–5 DONE, 6a DONE, **6b substantively DONE**; you are on **6c** (then 6d/6e).
+   Steps 0–5 DONE, 6a/6b/6c DONE; you are on **6d** (then 6e).
 3. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-SPEC.md` — §2 governing
-   principle.
+   principle (never drop a lockstep before its same-tick reads are on the snapshot).
 
-**Where things stand.** 6b landed the flippable-in-6b decision-read conversions
-(`lifecycleTimerBlocker` `7b5dbc64d`, `isDrainAckStopPending` `9a7bfe650`, template-override
-consumers `bd9da510a`, oracle guard `5968a1a32`), all validated by a fable review/red-team
-(0 confirmed defects). The reconciler decision path is now ~fully on `Info`; what remains
-raw is the frozen forward-pass loop, the wakeTargets loops, and the write-path helpers —
-i.e. **6c/6d territory.**
+**Where things stand.** The reconciler decision path is fully on `Info`. 6b landed the
+flippable decision-read conversions; **6c** (`3b7795598`) converted the sole remaining pure
+read-side raw-working-set consumer (`clearMissingIdleProbes`→`infoByID` presence,
+byte-identical), verified by an opus audit + a 4-lens fable adversarial panel (0 defects).
+What remains raw is exactly the **write/lockstep machinery**: the forward-pass loop
+`for i := range ordered`/`&ordered[i]`, the CB persist, the blanket refresh pre-pass @2774,
+the wakeTargets loop, `sessionLookup`→drain mutations, and `refreshSessionInfo`'s raw
+source. Removing all of it is **6d — the LANDMINE cutover.**
 
 **Confirm a green baseline (use an ISOLATED GOCACHE — the shared cache on this host has a
 documented stale-object hazard that flaked the oracle during 6b review):**
@@ -33,29 +38,48 @@ ISO=$(mktemp -d); GOCACHE=$ISO go test ./cmd/gc/ -run 'TestSessionClassifierInfo
 git checkout go.sum
 ```
 
-**DO STEP 6c (this session): retire the raw working set — READ-SIDE aggregate consumers
-only.** Convert the three aliased consumers off `ordered []beads.Bead`/`beadByID` onto
-`infoByID`/ID-lists WITHOUT touching any lockstep: `advanceSessionDrains`,
-`clearMissingIdleProbes`, `computeNamedSessionProgressSignatures`,
-`openPoolSessionCountForTemplate`, `circuitSessionByIdentity`. **HARD INVARIANT (fable §5):**
-`for i := range ordered`, `&ordered[i]`, `beadByID`, the `refreshSessionInfo` raw source,
-and EVERY lockstep mirror (`for k,v := range batch { session.Metadata[k]=v }` at ~2130/2191/
-2668/2742 and the wakeTargets loop) stay UNTOUCHED until 6d. Keep
-`computeNamedSessionProgressSignatures` on per-bead `InfoFromPersistedBead` (its scan @~1300
-precedes the snapshot build @~1359 after the CB mutates `ordered[i]`) unless you hoist the
-snapshot with a post-CB refresh + oracle.
+**DO STEP 6d (this session — the LANDMINE cutover).** Drop the raw lockstep, remove the raw
+working set (`ordered []beads.Bead` / `beadByID` / `circuitSessionByIdentity` /
+`sessionLookup`), and cut `refreshSessionInfo` off the raw bead — done as a sequence of small
+per-lockstep commits, each with a **multi-session / read-after-write same-tick test** (the
+byte-identical write oracle is BLIND to same-tick stale reads — SPEC §2). Do NOT do it as one
+mass edit. Governing constraints, all specified in STEP6-DESIGN §2/§5/§7 — re-derive them
+against live line numbers at implementation time:
 
-**Then 6d** (the write-returns-`Info` cutover + lockstep drop — the LANDMINE; re-derive the
-COMPLETE 9-refresh-site / ~15-writer set + the store-only-close family + the two intra-tick
-overlays `reset_committed_at`-freeze / `restart_requested` per §2 and §5 at implementation
-time; NO unconditional per-iteration `Get` on the forward pass) and **6e** (extend
-`snapshotInfoOnlyFiles` to forbid raw session `.Metadata[` and add the reconciler files).
+- **Mechanism = write-returns-`Info` for adjacent-single-write refreshes + a TARGETED store
+  re-read for the status-close and aggregating refreshes** (`Info.Closed` derives from
+  `Status`, not a metadata key, so a returned patch cannot reconstruct it). **NO unconditional
+  per-iteration `Get` on the forward pass** — the refresh @~1854 is unconditional and a `Get`
+  there consumes the injected attachment-check errors (3 fail-safe tests: session_reconciler_test.go
+  :7661,:7833; session_reconciler_progress_test.go:202) → the reverted-attempt failure returns.
+- **Before deleting the blanket pre-pass @~2774, regenerate the COMPLETE forward-pass writer
+  set** that writes an `Info`-read key without a per-site refresh (§5 lists ~15 writers, many
+  2–3 helper layers deep → add a "nested-helper-write" bucket; `SleepPatch`@2631/@2705,
+  `RestartRequestPatch`@2144, the 1424 drain-ack finalize, etc.).
+- **Two intra-tick overlays:** `reset_committed_at` freeze-to-tick-start-value at snapshot
+  build; `restart_requested` in-memory overlay set @~2098 that must CLEAR whenever a persisted
+  batch carrying `restart_requested` lands (else #2574 phantom-restart) — needs a
+  kill-success-then-refresh test asserting it reads empty.
+- **Store-only-close family** (`closeFailedCreateBead`, `rollbackPendingCreate`): their close is
+  masked by `Info.Closed` eviction from `AwakeInput.SessionBeads` — 6d must bless that eviction
+  as its own tested commit.
+
+**6d carry-forward from the 6c audit (STEP6-DESIGN §7):** the `ordered` domain params on
+`openPoolSessionCountForTemplate` (safe domain-switch — unique IDs proven) and
+`buildAwakeInputFromReconciler` (**NOT** safe — `input.SessionBeads` slice order is load-bearing
+for `SessionName`-keyed last-write-wins in `ComputeAwakeSet`; keep the ordered domain) and
+`advanceSessionDrains` (dead `ordered` param in the prod call) all retire WITH the working set,
+not before. The derived `wakeTargets` aggregate keeps a raw `*beads.Bead` for the
+`persistSleepPolicyMetadata` write @~2853.
+
+**Then 6e** (extend `snapshotInfoOnlyFiles` in frontdoor_di_guard_test.go to forbid raw session
+`.Metadata[` and add the reconciler files once raw-free).
 
 **Optional 6d-prep siblings (additive, byte-identical; land only if useful):**
 `freshRestartSessionKeyInfo` (reads `SessionIDFlag`/`ResumeFlag`/`ResumeStyle`/`ResumeCommand`
 — all already on `Info`, NO codec gap), `recentlyDeferredSessionAttachedConfigDriftInfo`
 (pure read), wire the existing `resetPendingCommittedAtInfo`. Their call sites are frozen
-(forward pass / write-path) so the sibling lands in 6b-style but the flip is 6d.
+(forward pass / write-path) so the sibling lands in 6b-style but the flip is part of 6d.
 
 **DO NOT** delete the raw classifier siblings (`lifecycleTimerBlocker`,
 `isDrainAckStopPending`, `ParseTemplateOverrides`) — they are the oracle's byte-identity

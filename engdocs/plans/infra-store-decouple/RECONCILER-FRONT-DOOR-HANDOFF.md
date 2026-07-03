@@ -1,7 +1,7 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `59af3b856`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `3b7795598`**.
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
@@ -9,9 +9,8 @@ raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
 **Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a DONE + 6b
-substantively DONE.** Next actionable = **Step 6c** (retire the raw working set,
-read-side aggregate consumers) then **6d** (the write-returns-`Info` cutover + lockstep
-drop). Design + sub-phase backlog: `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
+substantively DONE + 6c DONE.** Next actionable = **Step 6d** (the write-returns-`Info`
+cutover + lockstep drop + raw working-set removal) then **6e** (join the guard). Design + sub-phase backlog: `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
 audit + opus synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team**
 GO_WITH_CHANGES folded into §5; §6 has the 6b audit corrections + landed commits). Step 6
 commits so far: `212581818` (fix the 1424 drain-ack min-floor snapshot divergence),
@@ -263,8 +262,13 @@ same-tick test**. Non-`continue` read-after-write sites: `infoPostHeal` (~1545),
       wake/sleep/drain/trace suite green (86s). **Fable 5-lens red-team: 0 confirmed
       defects.** This was the LAST raw session-metadata read cluster on the
       reconciler decision path.
-- [ ] **Step 6 — drop the lockstep + remove the raw working set + cut refresh over
-      to `Get`.** Now that all dependent reads are on the snapshot: drop every
+- [~] **Step 6 — drop the lockstep + remove the raw working set + cut refresh over
+      to `Get`.** Sub-phases 6a/6b/6c DONE; **6d/6e remain** (STEP6-DESIGN §3, §7).
+      **6c** (`3b7795598`) converted the sole pure read-side raw-working-set consumer
+      (`clearMissingIdleProbes`→`infoByID` presence, byte-identical) after an
+      opus+4-lens-fable audit confirmed nothing else was read-side-convertible; the raw
+      working set itself (`ordered`/`beadByID`/`circuitSessionByIdentity`/`sessionLookup`)
+      and every lockstep stay until 6d. **6d must** (STEP6-DESIGN §5/§7): drop every
       `session.Metadata[k]=v` lockstep, remove the raw `ordered []beads.Bead` +
       `beadByID` / `circuitSessionByIdentity` aliasing, and switch
       `refreshSessionInfo` from the raw-bead projection to `sessFront.Get` (its sole

@@ -134,12 +134,23 @@ aggregating refreshes** — not a pure returned-patch model. The two overlays
   siblings, delete dead raw siblings. Each a small, oracle-backed commit. Trace
   payloads that need the raw verbatim string (`pending_create_claim` bool gap) keep
   a named raw accessor (spec §4.1).
-- [ ] **6c — retire the raw working set** (Audit C, hardest). Convert the three
-  aliased consumers: the Phase-1 forward-pass loop (`for i := range ordered`,
-  `&ordered[i]`), the wakeTargets loop (@2809), and startCandidates →
-  executePlannedStarts. Route `advanceSessionDrains` + `clearMissingIdleProbes` +
-  `computeNamedSessionProgressSignatures` + `openPoolSessionCountForTemplate` +
-  `circuitSessionByIdentity` off `infoByID`/ID-lists. LANDMINE — multi-commit.
+- [x] **6c — retire the raw working set's READ-SIDE consumers** (DONE, commit
+  `3b7795598`). Per §5 this is READ-SIDE ONLY. After Steps 4/5/6b landed the
+  decision-read conversions, an exhaustive audit (opus + a 4-lens fable panel, §7)
+  found the raw working set (`ordered`/`beadByID`/`circuitSessionByIdentity`/
+  `sessionLookup`) had **exactly one** pure read-side consumer left:
+  `clearMissingIdleProbes`, which used `beadByID` only as a presence oracle. It now
+  reads `infoByID` (presence-identical: same 1:1 `ordered` build, no deletes, refresh
+  only overwrites existing keys). Every other consumer is already on `Info`
+  (raw-as-domain-only: `computeNamedSessionProgressSignatures`,
+  `openPoolSessionCountForTemplate`, `buildAwakeInputFromReconciler`,
+  `advanceSessionDrains`), a write/lockstep/invariant site (the forward-pass loop,
+  the wakeTargets loop, the CB persist, `sessionLookup`→drain mutations,
+  `refreshSessionInfo`), or the whole-bead template subsystem
+  (`resolvePreservedConfiguredNamedSessionTemplate`). Those conversions §3's original
+  text bundled into 6c are all write/lockstep and **belong to 6d** (they cannot be
+  done read-side without dropping a lockstep early). So the raw working-set *deletion*
+  (`ordered`/`beadByID`/`circuitSessionByIdentity` removal) is 6d, not 6c.
 - [ ] **6d — the cutover: `refreshSessionInfo` off the raw bead + drop the lockstep +
   remove `ordered []beads.Bead`/`beadByID`.** Primarily **write-returns-`Info`** (§2)
   for adjacent-single-write refreshes, PLUS a **targeted store re-read for the
@@ -312,3 +323,53 @@ files) landed two corrections and a scope refinement that override earlier §5 w
 - `bd9da510a` **6b-B** template-override consumers → `ParseTemplateOverridesFromInfo`
   (shared decode core + `internal/session` byte-identity test; leaf-helper local
   projection, read-side only).
+
+## 7. 6c execution (DONE, commit `3b7795598`)
+
+**Deliverable: one read-side conversion.** `clearMissingIdleProbes(dt, beadByID)` →
+`clearMissingIdleProbes(dt, infoByID)`. The helper used `beadByID[id]==nil` purely as
+a working-set presence test; it now checks `_, ok := infoByID[id]`. Presence-identical
+by construction: both maps are built 1:1 from `ordered` (`beadByID`@1344,
+`infoByID`@1359), neither is ever `delete`d, `refreshSessionInfo` only overwrites
+existing `infoByID` keys (guarded by `beadByID[id]!=nil`), and every `beadByID` value
+is a non-nil `&ordered[i]` — so `keys(infoByID)==keys(beadByID)` at the call site @3100.
+Guarded by `TestClearMissingIdleProbes` (session_wake_test.go). The raw working set is
+NOT deleted — `beadByID` is still built and still consumed by `sessionLookup`@3096 and
+`refreshSessionInfo`@1377 (both 6d).
+
+**Audit (opus + a 4-lens fable adversarial panel — byte-identity, invariant-compliance,
+test-adequacy, scope-completeness — 0 defects, all high confidence).** Full inventory of
+the four raw aggregates confirmed `clearMissingIdleProbes` was the SOLE pure read-side
+(bucket-B) consumer. Everything else classifies as:
+- **A (already-on-Info, raw-as-domain-only):** `computeNamedSessionProgressSignatures`
+  @1324 (per-bead `InfoFromPersistedBead`, pre-snapshot), `openPoolSessionCountForTemplate`
+  @2090 (reads `infoByID`), `buildAwakeInputFromReconciler` @2779 (reads `sessionInfoByID`),
+  `advanceSessionDrains` @3099 (per-bead `InfoFromPersistedBead(*session)` for decisions).
+- **C (write/lockstep/invariant — 6d):** the forward-pass loop `for i := range ordered`,
+  the CB Phase-0.5 `persistSessionCircuitBreakerMetadata(&ordered[i])` @1326, the blanket
+  refresh pre-pass @2774, the wakeTargets loop @2790, `sessionLookup`→`completeDrain`/
+  `cancelSessionDrainFor*` mutations, `refreshSessionInfo`'s raw source @1377.
+- **D (whole-bead template subsystem):** `resolvePreservedConfiguredNamedSessionTemplate`
+  @1539 (feeds `newSessionBeadSnapshot`; second caller session_lifecycle_parallel.go:809).
+
+**6d carry-forward notes surfaced by the audit (do NOT lose these):**
+- **`openPoolSessionCountForTemplate`'s `ordered` param is a SAFE domain-switch** to
+  `range infoByID` (proven unique IDs: `ListAllSessionBeads` dedupes by ID, and neither
+  `retireDuplicateConfiguredNamedSessionBeads` nor `topoOrder` re-introduces dup IDs; the
+  count is order-independent) — but it is domain-only raw, so retire it *with* the working
+  set in 6d, not as a read-side conversion.
+- **`buildAwakeInputFromReconciler`'s `ordered` param must NOT be domain-switched** to
+  `range infoByID`: it appends to `input.SessionBeads` in slice order, and that order is
+  load-bearing downstream — `ComputeAwakeSet` does `SessionName`-keyed last-write-wins and
+  first-match `resolveNamedSessionBeadName`/`findBeadBySessionName` over it, and
+  `SessionName` is NON-unique across a retired-duplicate + winner pair. Map iteration would
+  reorder and could flip an outcome. Keep the ordered domain; retire in 6d with the loop.
+- **`advanceSessionDrainsWithSessionsTraced`'s `ordered`/`sessionBeads` param is DEAD in the
+  production call** (`wakeEvals` is always non-nil there, so the `computeWakeEvaluations`
+  fallback @session_wake.go:443 never fires), but cannot be dropped in 6c because non-prod
+  callers pass `wakeEvals==nil`. Retire with the working set in 6d.
+- **Derived `wakeTargets` aggregate still reads raw** (`sleep_intent`@4125,
+  `session_name`@2845/@4090/@4179, and `shouldProbeAttachmentForAwakeInput`'s
+  state/detached_at/template at compute_awake_bridge.go:200-210). `wakeTarget` must keep a
+  raw `*beads.Bead` for the `persistSleepPolicyMetadata` write @2853, so these are 6d, not
+  part of the 6c four-aggregate scope.
