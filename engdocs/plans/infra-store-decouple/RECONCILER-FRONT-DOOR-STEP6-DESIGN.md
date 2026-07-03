@@ -374,11 +374,29 @@ the four raw aggregates confirmed `clearMissingIdleProbes` was the SOLE pure rea
   raw `*beads.Bead` for the `persistSleepPolicyMetadata` write @2853, so these are 6d, not
   part of the 6c four-aggregate scope.
 
-## 8. 6d execution plan (foundation + Commits 1–2 LANDED; wiring continues)
+## 8. 6d execution plan (foundation + Commits 1–3 LANDED; wiring continues)
 
 **Owner decision (this session): mechanism = write-returns-`Info`** (not the
 targeted-`Get`-everywhere variant, not a snapshot meta-accumulator). Scope directive:
 "drive as far as gates stay green."
+
+**Commit 3 LANDED (`a7edb1edc`).** The two nested-helper-write refreshes → `ApplyPatch(batch)`:
+HEAL (`healStateWithRollback` already returns its mirrored batch) and ZOMBIE
+(`markProviderTerminalError` changed to return `(map[string]string, error)`; reconciler
+captures `terminalErrBatch`, nil when the zombie path didn't run; 2 non-reconciler callers
+take `_`). Byte-identical (each helper returns exactly its mirror, incl. on persist error;
+coherence verified). Two teeth-verified per-site tests (`…ZombieTerminalErrorReflectedOnSnapshot`,
+`…HealStateReflectedOnSnapshot`). **LANDMINE surfaced by the fable review (wf_1cfcf522): the
+heal fold is NEWLY load-bearing** — the old zombie-site refresh was a full raw re-projection
+that masked a stale heal snapshot, but the zombie fold is now `ApplyPatch(nil)` on the
+no-terminal-error path, so the heal fold alone carries the healed state to the post-zombie
+rollback read on the `case preserveNamed` fall-through. The first draft's "no heal observable"
+claim was empirically FALSE (reviewers reproduced a close-vs-open flip in scratch copies); the
+missing heal teeth test + 2 inaccurate coherence comments were fixed. 0 byte-identity/coherence
+defects in the code. **Next: Commit 4 = the `restart_requested` in-memory write** (~2247):
+it's written in-memory only (not a mirrored ApplyPatch batch), so it must also
+`ApplyPatch(MetadataPatch{"restart_requested":"true"})` and CLEAR on a persisted
+`restart_requested` batch (else #2574 phantom-restart); add a kill-success-then-refresh test.
 
 **Commit 2 LANDED (`e2f1f4adf`).** The three drain-ack `finalize*` closes wired via
 `drainAckFinalizeResult{batch, closed, witnessInfo}` + `result.applyTo(infoByID[id])`.
@@ -397,11 +415,8 @@ tests** (site 1 `…DrainAck`, site 2 `…DrainAckOrphan`, site 3 `…DrainAckRe
 `reconcileAtPathWithDrainOps` harness helper. **6-lens fable adversarial panel
 (wf_3d1f12c0): 0 byte-identity/coherence defects**; the one confirmed finding (sites 2/3
 lacked per-site guards) is closed. Design/analysis in `raw/step6d-commit2-analysis.md`.
-**Next: Commit 3 = the nested-helper-write refreshes** — `healStateWithRollback`@1676
-(feeds the heal refresh@1701 `infoPostHeal`) and `markProviderTerminalError`@1939 (feeds
-the zombie refresh@1972 `infoPostZombie`) return their applied batch; each refresh becomes
-a conditional `ApplyPatch(batch)` (nil→no-op), which ALSO dodges the injected-error hazard.
-Line numbers below are pre-Commit-2 — re-grep.
+**Commit 3 (`a7edb1edc`) LANDED the nested-helper-write refreshes** — see the Commit-3
+note at the top of this section. Line numbers below are pre-Commit-2 — re-grep.
 
 **Commit 1 LANDED (`cfd6893fb`).** Added `Info.MarkClosed()` (Closed=true, State="";
 oracle `TestInfoMarkClosedMatchesReprojection`) — the status-close counterpart to

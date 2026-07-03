@@ -1,4 +1,4 @@
-# Next-session prompt — reconciler front-door Step 6d WIRING (Commits 1–2 done; Commit 3 next)
+# Next-session prompt — reconciler front-door Step 6d WIRING (Commits 1–3 done; Commit 4 next)
 
 Paste the block below into a fresh session.
 
@@ -83,20 +83,27 @@ two statement-call sites discard the new return. THREE teeth-verified per-site t
 `reconcileAtPathWithDrainOps` helper. 6-lens fable panel (wf_3d1f12c0): 0 defects.
 **Line numbers shifted after Commit 2 — re-grep every anchor below before editing.**
 
-**START HERE — Commit 3 — the nested-helper-write refreshes (re-grep).** `markProviderTerminalError`
-(feeds the zombie refresh `refreshSessionInfo`@1972 `infoPostZombie`) already builds `batch`
-locally → change it to return `(sessionpkg.MetadataPatch, error)` (3 callers: session_reconcile.go,
-session_reconciler.go ~1939, session_lifecycle_parallel.go — only the reconciler caller uses the
-batch, the others take `_`); the @1972 refresh becomes conditional `infoByID[id] =
-infoByID[id].ApplyPatch(terminalErrBatch)` (nil→no-op). This ALSO removes the
-`Get`-consumes-injected-errors hazard (ApplyPatch never touches the store). Same for
-`healStateWithRollback`@1676 (feeds the heal refresh@1701 `infoPostHeal`). Same-session
-read-after-write tests (single-template harness, following the Commit-2 sites).
+**Commit 3 DONE (`a7edb1edc`).** The two **nested-helper-write refreshes** → `ApplyPatch(batch)`:
+HEAL (`healStateWithRollback` already returns its mirrored batch) and ZOMBIE
+(`markProviderTerminalError` changed to `(map[string]string, error)`; reconciler captures
+`terminalErrBatch`, nil when the zombie path didn't run; 2 callers take `_`). Byte-identical +
+coherence-verified. Two teeth-verified tests (`…ZombieTerminalErrorReflectedOnSnapshot`,
+`…HealStateReflectedOnSnapshot`). **LANDMINE the fable panel (wf_1cfcf522) caught: the heal fold
+is NEWLY load-bearing** — the old zombie-site full re-projection masked a stale heal snapshot, but
+the zombie fold is now `ApplyPatch(nil)` on the no-terminal-error path, so the heal fold alone
+carries the healed state to the post-zombie rollback read on the `case preserveNamed` fall-through.
+The first draft's "no heal observable" claim was empirically FALSE; the missing heal test + 2
+inaccurate comments were fixed. **Line numbers shifted after Commit 3 — re-grep every anchor.**
 
-**Commit 4 — `restart_requested` @~2130** (in-memory-only write): `infoByID[id] =
-infoByID[id].ApplyPatch(MetadataPatch{"restart_requested":"true"})`, and CLEAR it (empty) when a
-persisted `restart_requested` batch lands (the 2144 consume / drain-ack clear / fresh-cycle) — else
-#2574 phantom-restart. Add a kill-success-then-refresh test asserting it reads empty.
+**START HERE — Commit 4 — `restart_requested` @~2247** (in-memory-only write; re-grep):
+`session.Metadata["restart_requested"] = "true"` is written in-memory only (NOT via a mirrored
+ApplyPatch batch), so it must ALSO do `infoByID[id] =
+infoByID[id].ApplyPatch(sessionpkg.MetadataPatch{"restart_requested":"true"})`, and CLEAR it
+(empty) when a persisted `restart_requested` batch lands (the ~472 drain-ack consume /
+fresh-cycle) — else #2574 phantom-restart. Add a kill-success-then-refresh test asserting it
+reads empty. (Note: Commit 2's Path-C `finalizeDrainAckStoppedSession` already folds the
+drain-ack `restart_requested=""` clear via ApplyPatch — this commit handles the in-memory SET
++ the progress-stall clear.)
 
 **Commit 5+ — retire the blanket pre-pass + working set (the deletions).** Once every forward-pass
 writer self-refreshes, delete the blanket pre-pass `for i := range ordered { refreshSessionInfo }`

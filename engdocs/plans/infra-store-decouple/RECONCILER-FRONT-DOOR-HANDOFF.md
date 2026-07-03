@@ -1,8 +1,8 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `e2f1f4adf`** (6d Commit 2 —
-the three drain-ack `finalize*` closes wired via `drainAckFinalizeResult.applyTo`).
+worktree `.claude/worktrees/object-front-doors`, **HEAD `a7edb1edc`** (6d Commit 3 —
+the heal + zombie helper-write refreshes wired via `ApplyPatch(batch)`).
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
@@ -43,15 +43,31 @@ byte-identity/coherence defects; the sole confirmed finding — sites 2/3 lacked
 guards — is closed by the two added tests.** Gates green (build/vet/lint 0/gofmt/oracles/
 all five harness tests -count=5/whole reconciler+drain+pool+named+wake+circuit suites).
 
-**NEXT ACTIONABLE = 6d Commit 3 — the nested-helper-write refreshes** (re-grep — line
-numbers shifted after Commit 2): `healStateWithRollback` @1676 feeds the heal refresh
-`refreshSessionInfo`@1701 (`infoPostHeal`); `markProviderTerminalError` @1939 feeds the
-zombie refresh @1972 (`infoPostZombie`). Change each to return its applied batch and
-convert the refresh to a conditional `infoByID[id] = infoByID[id].ApplyPatch(batch)`
-(nil→no-op) — this ALSO removes the `Get`-consumes-injected-errors hazard (ApplyPatch
-never touches the store). Then commit 4 = `restart_requested` in-memory write (ApplyPatch
-+ clear-on-persisted), commit 5+ = delete the blanket pre-pass @2865 + the aggregating
-refreshes (`infoAsleepDrift`@2643, wakeTargets@2889) + convert
+**6d Commit 3 DONE (`a7edb1edc`).** Converted the two **nested-helper-write refreshes**
+to `ApplyPatch(batch)`: the HEAL refresh (`healStateWithRollback` already returns its
+mirrored batch → `infoByID[id] = infoByID[id].ApplyPatch(healBatch)`) and the ZOMBIE
+refresh (`markProviderTerminalError` changed to return `(map[string]string, error)`; the
+reconciler captures `terminalErrBatch`, nil when the zombie path didn't run; 2 other
+callers take `_`). Both byte-identical (each helper returns exactly its mirror; coherence
+verified — heal: top-of-loop unmutated because pre-heal mutating sites `continue`; zombie:
+desired fast path + the sole non-continue `case preserveNamed` arm, heal-folded above).
+**Two teeth-verified per-site tests** (`…ZombieTerminalErrorReflectedOnSnapshot` via
+pending-create rollback suppression; `…HealStateReflectedOnSnapshot` via a live
+start-pending orphan drain). **KEY: the heal fold is NEWLY load-bearing** — the old
+zombie-site full re-projection used to mask a stale heal snapshot, but the zombie fold is
+now `ApplyPatch(nil)` on the no-terminal-error path. A first draft claimed the heal fold
+had no observable + shipped no test; the **6-lens fable panel (wf_1cfcf522) empirically
+refuted that** (0 byte-identity/coherence defects, but a CONFIRMED missing heal teeth test
++ 2 inaccurate coherence comments — all fixed).
+
+**NEXT ACTIONABLE = 6d Commit 4 — the `restart_requested` in-memory write** (re-grep — line
+numbers shifted after Commit 3): the direct `session.Metadata["restart_requested"] = "true"`
+at ~2247 (progress-stall handoff) is written in-memory only (NOT via a mirrored ApplyPatch
+batch), so it must ALSO do `infoByID[id] = infoByID[id].ApplyPatch(sessionpkg.MetadataPatch{"restart_requested":"true"})`,
+and CLEAR it (empty) when a persisted `restart_requested` batch later lands (the ~472 drain-ack
+consume / fresh-cycle) — else the #2574 phantom-restart. Add a kill-success-then-refresh test
+asserting it reads empty. Then commit 5+ = delete the blanket pre-pass @2892 + the aggregating
+refreshes (`infoAsleepDrift`@2670, wakeTargets@2916) + convert
 `advanceSessionDrains`/`newSessionBeadSnapshot` + drop the lockstep and raw working set,
 then **6e** (join the guard). **The full per-site wiring plan is STEP6-DESIGN §8; the
 paste-ready sequenced prompt is `RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md`.**
