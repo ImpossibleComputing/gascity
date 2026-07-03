@@ -29,6 +29,21 @@ What remains raw is exactly the **write/lockstep machinery**: the forward-pass l
 the wakeTargets loop, `sessionLookup`→drain mutations, and `refreshSessionInfo`'s raw
 source. Removing all of it is **6d — the LANDMINE cutover.**
 
+**6d foundation is LANDED (`b031a356d`) and the mechanism is OWNER-LOCKED = write-returns-`Info`.**
+`Info.ApplyPatch(patch) Info` (internal/session/info_apply_patch.go) folds a metadata patch
+onto a projected `Info` byte-identically to a full re-projection (oracle
+`TestInfoApplyPatchMatchesReprojection`, normalizer-branch coverage mutation-verified; a
+3-lens fable panel found 0 impl defects). It is UNWIRED. **The authoritative, verified
+per-site wiring plan for what remains is STEP6-DESIGN §8 — read it first; it supersedes the
+generic mechanism notes below.** Key §8 findings: (a) under write-returns-`Info` the snapshot
+only ever receives MIRRORED batches, so the `reset_committed_at` freeze overlay is UNNEEDED
+(only `restart_requested`, the in-memory-only write @~2130, still needs an ApplyPatch + a
+clear-on-persisted); (b) every refresh site is a nested-helper-write (thread the batch out of
+the helper) — there is NO by-construction status-close shortcut (the close helpers stamp a
+ClosePatch too), and the store-only closes (`closeFailedCreateBead`/`rollbackPendingCreate`)
+are markClosed-ONLY (they don't mirror the raw bead, so the current raw reproject doesn't see
+their metadata either).
+
 **Confirm a green baseline (use an ISOLATED GOCACHE — the shared cache on this host has a
 documented stale-object hazard that flaked the oracle during 6b review):**
 ```

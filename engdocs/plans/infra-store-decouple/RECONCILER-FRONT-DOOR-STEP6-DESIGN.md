@@ -373,3 +373,97 @@ the four raw aggregates confirmed `clearMissingIdleProbes` was the SOLE pure rea
   state/detached_at/template at compute_awake_bridge.go:200-210). `wakeTarget` must keep a
   raw `*beads.Bead` for the `persistSleepPolicyMetadata` write @2853, so these are 6d, not
   part of the 6c four-aggregate scope.
+
+## 8. 6d execution plan (foundation LANDED `b031a356d`; wiring is the next unit)
+
+**Owner decision (this session): mechanism = write-returns-`Info`** (not the
+targeted-`Get`-everywhere variant, not a snapshot meta-accumulator). Scope directive:
+"drive as far as gates stay green."
+
+**Foundation LANDED (`b031a356d`):** `Info.ApplyPatch(patch MetadataPatch) Info`
+(internal/session/info_apply_patch.go) — folds a patch onto a projected `Info` by
+re-deriving only the patched keys' fields (from the raw patch value, mirroring
+`InfoFromPersistedBead` per-key), carrying the rest forward, never flipping `Closed`
+(status close is a separate refresh case). Byte-identical to a full re-projection, proven
+by `TestInfoApplyPatchMatchesReprojection` (set+clear for every projected key + coupling
+edges). Unwired (no reconciler behavior change), landed exactly as Step 5 landed
+`Store.CircuitState`.
+
+**KEY SIMPLIFICATION discovered (vs the reverted Get-cutover): under write-returns-`Info`
+the snapshot only ever receives MIRRORED batches (via `ApplyPatch`).** So the
+persisted-WITHOUT-mirror keys never enter the snapshot on their own — the
+**`reset_committed_at` freeze overlay is UNNEEDED** here (it was only needed under the
+Get-cutover, where `Get` reads the store copy that carries it; §1/§2). `started_live_hash`
+likewise. The ONLY intra-tick carrier still needed is **`restart_requested`**: it is
+written in-memory-only as a direct `session.Metadata["restart_requested"]="true"` (@~2130),
+NOT via a mirrored `ApplyPatch` batch, so the snapshot won't see it unless that write ALSO
+does `infoByID[id] = infoByID[id].ApplyPatch(MetadataPatch{"restart_requested":"true"})`
+(and it must CLEAR when a persisted `restart_requested` batch later lands — the 2144
+consume / drain-ack clear / fresh-cycle — else #2574 phantom-restart).
+
+**Refresh-site classification (VERIFIED this session, live HEAD `b031a356d` line numbers —
+re-grep before editing).** Every site is a nested-helper-write: the batch/close is NOT
+visible at the `refreshSessionInfo` call, so the helper must return what it wrote. There is
+NO by-construction status-close shortcut (the close helpers stamp a `ClosePatch` too).
+- **markProviderTerminalError refresh** — @1886 `infoPostZombie`. `markProviderTerminalError`
+  (session_reconcile.go:754) already builds `batch` locally → change it to return
+  `(sessionpkg.MetadataPatch, error)`; 3 callers (session_reconcile.go:687,
+  session_reconciler.go:1853, session_lifecycle_parallel.go:1999) — only the 1853 caller
+  needs the batch, the other two take `_`. The unconditional @1886 refresh becomes a
+  conditional `ApplyPatch(terminalErrBatch)` (nil→no-op when it didn't run). This is §5's
+  model conversion AND it dodges the injected-error hazard (ApplyPatch never touches the
+  store, unlike the reverted `Get`).
+- **heal refresh** — @1628 `infoPostHeal` ← `healState`/`healStateWithRollback` (state,
+  pending_create_claim, …). Helper must return its applied batch.
+- **status-close family (ClosePatch batch + `Status=closed` — refresh =
+  `ApplyPatch(closeBatch)` then a new tiny `Info` close helper `Closed=true; State=""`):**
+  @1456 (`reconcileDrainAckStopPending`→`finalizeDrainAckStoppedSession`, ClosePatch
+  "drained" @372), @1735 / @2045 (`finalizeDrainAckStoppedSession`), @1590
+  (`closeSessionBeadIfReachableStoreUnassigned`→`closeFailedCreateBead`/`closeBead` +
+  `session.Status="closed"` @1589), @1834 (same, reason path, @1833).
+  - **SUBTLE — the store-only closes diverge from the raw-mirror closes.**
+    `closeFailedCreateBead` / `rollbackPendingCreate` persist via `setMetaBatch(sessFront,
+    id, …)` (store-only, take an `id`, do NOT touch the raw bead). So TODAY the raw
+    reproject reflects ONLY the `Status=closed` set at the call site, NOT their
+    state=failed_create / cleared keys. Byte-identical conversion for those sites is
+    **markClosed ONLY** (do NOT ApplyPatch their store-only batch). The `finalize*` /
+    `completeDrain` closes DO mirror a ClosePatch onto the raw bead, so those need
+    `ApplyPatch(closeBatch)` + markClosed. Match each site to its close family exactly.
+- **aggregating** — @2553 `infoAsleepDrift` and the wakeTargets refresh @2799 reflect
+  cumulative prior-block mutations; they resolve once the writers before them self-refresh.
+- **blanket pre-pass** — @2775 `for i := range ordered { refreshSessionInfo }` is the
+  linchpin: it exists ONLY to catch un-self-refreshed forward-pass mutations (the
+  restart_requested marker + the pending-create rollback that `continue`s). Once every
+  forward-pass writer self-refreshes (via ApplyPatch/markClosed) AND restart_requested@2130
+  ApplyPatches, it is redundant → delete it (with a read-after-write test that the awake
+  scan sees the self-refreshed values).
+
+**Deletion order (final commits):**
+1. Thread batches out of every nested helper; convert each refresh site to
+   `ApplyPatch`/markClosed (KEEP the raw mirror throughout — byte-identical, whole-tick
+   suite + the ApplyPatch oracle as evidence, PLUS a bespoke same-tick read-after-write
+   test per site since the write oracle is blind to stale reads).
+2. ApplyPatch the `restart_requested`@2130 in-memory write onto the snapshot (+ clear-on-persisted).
+3. Delete the blanket pre-pass @2775.
+4. Convert the remaining raw consumers: `advanceSessionDrains` mutations (`completeDrain`
+   etc. off the raw bead) so `sessionLookup` retires, and feed `newSessionBeadSnapshot`
+   (via `resolvePreservedConfiguredNamedSessionTemplate`, bucket D) from a store source
+   rather than `ordered` — the HARDEST, may need a store `List`.
+5. Now nothing reads the raw bead → drop every `session.Metadata[k]=v` lockstep, delete
+   `refreshSessionInfo` (raw source), `beadByID`, `circuitSessionByIdentity`, and `ordered
+   []beads.Bead`. Replace `ordered` as the iteration domain with an ORDER-PRESERVING
+   `[]Info`/`[]string` (NOT map iteration): `buildAwakeInputFromReconciler` appends to
+   `input.SessionBeads` in slice order and `ComputeAwakeSet` does `SessionName`-keyed
+   last-write-wins over it (6c-audit landmine). `openPoolSessionCountForTemplate` may
+   domain-switch to `infoByID` (unique IDs proven).
+6. **6e** — extend `snapshotInfoOnlyFiles` (frontdoor_di_guard_test.go) to forbid raw
+   session `.Metadata[`; add the reconciler files.
+
+**Why the wiring did not proceed piecemeal this session:** every conversion above is a
+nested-helper-batch-threading whose byte-identity is INVISIBLE to the current gates (the
+byte-identical write oracle is blind to same-tick stale reads — SPEC §2 governing
+principle; the whole-tick suite only catches COVERED stale-read scenarios). Doing it one
+fragile site at a time gives false "green" confidence and deletes nothing until step 5. The
+right unit is a cohesive conversion of all refresh sites + a per-site read-after-write test
+harness, landed together — a proper next-session scope. The foundation primitive it all
+rests on is landed and adversarially verified.

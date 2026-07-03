@@ -1,16 +1,23 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `3b7795598`**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `b031a356d`** (6d foundation).
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 **supersedes** `SPINE-FLIP-HANDOFF.md` / `SPINE-FLIP-NEXT-SESSION-PROMPT.md` (the
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
-**Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a DONE + 6b
-substantively DONE + 6c DONE.** Next actionable = **Step 6d** (the write-returns-`Info`
-cutover + lockstep drop + raw working-set removal) then **6e** (join the guard). Design + sub-phase backlog: `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
+**Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a/6b/6c DONE + 6d
+FOUNDATION DONE (`b031a356d`).** Owner locked the 6d mechanism = **write-returns-`Info`**
+(not targeted-`Get`, not a meta-accumulator). The `Info.ApplyPatch(patch)` primitive +
+its equivalence oracle are landed (unwired). Next actionable = **the 6d WIRING** (thread
+batches out of the nested helpers, convert every refresh site to `ApplyPatch`/markClosed,
+ApplyPatch the `restart_requested` in-memory write, delete the blanket pre-pass, convert
+`advanceSessionDrains`/`newSessionBeadSnapshot`, then drop the lockstep + raw working set)
+then **6e** (join the guard). **The full per-site wiring plan is STEP6-DESIGN §8** (derived
++ verified this session — read it first). Design + sub-phase backlog:
+`RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
 audit + opus synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team**
 GO_WITH_CHANGES folded into §5; §6 has the 6b audit corrections + landed commits). Step 6
 commits so far: `212581818` (fix the 1424 drain-ack min-floor snapshot divergence),
