@@ -459,11 +459,27 @@ NO by-construction status-close shortcut (the close helpers stamp a `ClosePatch`
 6. **6e** — extend `snapshotInfoOnlyFiles` (frontdoor_di_guard_test.go) to forbid raw
    session `.Metadata[`; add the reconciler files.
 
+**Read-after-write test harness LANDED (`4f0a6ea8b`).** The per-site read-after-write test
+harness the wiring needs is built: `cmd/gc/session_reconciler_read_after_write_test.go`. It
+runs the REAL tick over a single-template multi-session working set and exploits topoOrder's
+determinism (session_reconcile.go:1289 — empty `deps` returns `sessions` unchanged, so
+processing order == input slice order) to place a write before a dependent read in one tick,
+then asserts an OBSERVABLE outcome that flips iff the write reached the read through the
+`infoByID` snapshot. First test `TestReconcileSessionBeads_MinFloorCountReflectsMidTickClose`
+guards the cross-session min-floor read (openPoolSessionCountForTemplate @~2090): a
+failed-create worker closed earlier in the tick (slice index 0) must drop the open count so a
+stalled worker (index 1) is min-floor exempt. This is the mid-tick-close integration test 4D
+deferred as "impractical — topoOrder hides processing order"; single-template ordering makes
+it deterministic. **Teeth verified** — removing the failed-create close-refresh @~1590 flips
+the stalled worker to wrongly-recycled and fails the test; stable under `-count=50`. Each 6d
+lockstep drop lands its sibling read-after-write test following this pattern (a mutation
+earlier in the slice, a dependent decision later, outcome-observable).
+
 **Why the wiring did not proceed piecemeal this session:** every conversion above is a
-nested-helper-batch-threading whose byte-identity is INVISIBLE to the current gates (the
-byte-identical write oracle is blind to same-tick stale reads — SPEC §2 governing
-principle; the whole-tick suite only catches COVERED stale-read scenarios). Doing it one
-fragile site at a time gives false "green" confidence and deletes nothing until step 5. The
-right unit is a cohesive conversion of all refresh sites + a per-site read-after-write test
-harness, landed together — a proper next-session scope. The foundation primitive it all
-rests on is landed and adversarially verified.
+nested-helper-batch-threading whose byte-identity is INVISIBLE to the byte-identical write
+oracle (blind to same-tick stale reads — SPEC §2 governing principle). The harness above is
+what closes that gap; with it in place the wiring is now a tractable, guarded sequence (each
+site: thread the batch out, convert the refresh, add its read-after-write test), but it must
+still be landed as a cohesive unit ending in the lockstep+working-set removal (nothing is
+deleted until then). The foundation primitive and the test harness it rests on are landed and
+adversarially verified.

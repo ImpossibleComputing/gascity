@@ -1,7 +1,8 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `b031a356d`** (6d foundation).
+worktree `.claude/worktrees/object-front-doors`, **HEAD `4f0a6ea8b`** (6d foundation +
+read-after-write test harness).
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
@@ -9,9 +10,13 @@ raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
 `InfoFromPersistedBead(*session)` re-derive approach — retired; see below).
 
 **Status:** Steps 0–5 DONE. **Step 6 DESIGNED (dual-reviewed) + 6a/6b/6c DONE + 6d
-FOUNDATION DONE (`b031a356d`).** Owner locked the 6d mechanism = **write-returns-`Info`**
-(not targeted-`Get`, not a meta-accumulator). The `Info.ApplyPatch(patch)` primitive +
-its equivalence oracle are landed (unwired). Next actionable = **the 6d WIRING** (thread
+FOUNDATION DONE (`b031a356d`) + 6d READ-AFTER-WRITE TEST HARNESS DONE (`4f0a6ea8b`).**
+Owner locked the 6d mechanism = **write-returns-`Info`** (not targeted-`Get`, not a
+meta-accumulator). The `Info.ApplyPatch(patch)` primitive + its equivalence oracle are
+landed (unwired), and the multi-session read-after-write test harness
+(`cmd/gc/session_reconciler_read_after_write_test.go`, single-template deterministic
+ordering, teeth-verified) is landed — the two things the wiring rests on. Next actionable =
+**the 6d WIRING** (thread
 batches out of the nested helpers, convert every refresh site to `ApplyPatch`/markClosed,
 ApplyPatch the `restart_requested` in-memory write, delete the blanket pre-pass, convert
 `advanceSessionDrains`/`newSessionBeadSnapshot`, then drop the lockstep + raw working set)
