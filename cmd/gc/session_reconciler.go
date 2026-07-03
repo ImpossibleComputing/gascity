@@ -1422,6 +1422,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		}
 
 		if reconcileDrainAckStopPending(cityPath, cfg, sp, store, rigStores, session, tp, desired, dops, dt, asyncStopTracker, clk, rec, stderr) {
+			// finalizeDrainAckStoppedSession may close the bead in memory
+			// (Status=closed) on this true/continue path; refresh the snapshot so the
+			// cross-session min-floor scan (openPoolSessionCountForTemplate, !Info.Closed)
+			// excludes a pool session closed this tick. Mirrors the close-refresh
+			// discipline applied to the other finalizeDrainAckStoppedSession call sites
+			// (Step 4D P2); this path was missed, so the count over-included a
+			// drain-ack-finalized pool worker as open for the rest of the tick.
+			refreshSessionInfo(session.ID)
 			continue
 		}
 
