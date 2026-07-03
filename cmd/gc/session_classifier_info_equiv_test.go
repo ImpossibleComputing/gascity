@@ -769,6 +769,13 @@ func TestSessionClassifierInfoEquivalence(t *testing.T) {
 			func(b beads.Bead) string { return b.Metadata["held_until"] },
 			func(i session.Info) string { return i.HeldUntil },
 		},
+		// lifecycleTimerBlocker feeds the max-age / idle-timeout blocker fact in
+		// the reconciler forward pass; its Info sibling reads Info.HeldUntil /
+		// Info.QuarantinedUntil (clk captured for the metadataTimeInFuture rule).
+		"lifecycleTimerBlocker": {
+			func(b beads.Bead) string { return lifecycleTimerBlocker(b.Metadata, clk.Now()) },
+			func(i session.Info) string { return lifecycleTimerBlockerInfo(i, clk.Now()) },
+		},
 		"sessionWaitHold": {
 			func(b beads.Bead) string { return b.Metadata["wait_hold"] },
 			func(i session.Info) string { return i.WaitHold },

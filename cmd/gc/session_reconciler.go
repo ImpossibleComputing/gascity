@@ -50,6 +50,21 @@ func lifecycleTimerBlocker(metadata map[string]string, now time.Time) string {
 	}
 }
 
+// lifecycleTimerBlockerInfo is the session.Info sibling of lifecycleTimerBlocker:
+// it reports the active lifecycle timer blocker (user hold / quarantine) from the
+// typed Info.HeldUntil / Info.QuarantinedUntil mirrors, using the same
+// metadataTimeInFuture rule. Equivalence-proven (TestSessionClassifierInfoEquivalence).
+func lifecycleTimerBlockerInfo(info sessionpkg.Info, now time.Time) string {
+	switch {
+	case metadataTimeInFuture(info.HeldUntil, now):
+		return "user_hold"
+	case metadataTimeInFuture(info.QuarantinedUntil, now):
+		return "quarantine"
+	default:
+		return ""
+	}
+}
+
 func isDrainAckStopPending(session beads.Bead) bool {
 	return strings.TrimSpace(session.Metadata["state"]) == string(sessionpkg.StateDraining) &&
 		strings.TrimSpace(session.Metadata["state_reason"]) == sessionpkg.DrainAckStopPendingReason
@@ -2587,7 +2602,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				Triggered: hasAnchor && maxAgeTr.shouldRestart(name, tp.TemplateName, creationCompleteAt, clk.Now()),
 			}
 			if facts.Triggered {
-				facts.Blocker = lifecycleTimerBlocker(session.Metadata, clk.Now())
+				facts.Blocker = lifecycleTimerBlockerInfo(infoByID[session.ID], clk.Now())
 			}
 			dec := sessionpkg.DecideMaxSessionAge(facts)
 			for dec.Action == sessionpkg.TimerActionGatherPending || dec.Action == sessionpkg.TimerActionGatherAssignedWork {
@@ -2659,7 +2674,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				Triggered: it.checkIdle(name, tp.TemplateName, sp, clk.Now()),
 			}
 			if facts.Triggered {
-				facts.Blocker = lifecycleTimerBlocker(session.Metadata, clk.Now())
+				facts.Blocker = lifecycleTimerBlockerInfo(infoByID[session.ID], clk.Now())
 			}
 			dec := sessionpkg.DecideIdleTimeout(facts)
 			for dec.Action == sessionpkg.TimerActionGatherPending {
