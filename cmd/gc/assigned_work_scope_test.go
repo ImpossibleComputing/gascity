@@ -710,3 +710,71 @@ func TestSessionHasOpenAssignedWorkGraphOnlyMatchesWorkerExecutionScope(t *testi
 		t.Fatal("Dolt/rig work a graph-only worker can't execute must NOT count — counting it livelocks the worker (kept alive, never works)")
 	}
 }
+
+// readyOnlyGraphStore models the pre-Group-A production wrapper: it forwards the
+// graph-only Ready capability but DROPS the List capability (beadPolicyStore
+// forwarded ReadyGraphOnlyHandle but not ListGraphOnlyHandle). The embedded
+// MemStore stands in for the federated read the in-progress fallback must use.
+type readyOnlyGraphStore struct {
+	beads.Store
+	ready []beads.Bead
+}
+
+func (s *readyOnlyGraphStore) ReadyGraphOnlyHandle() (beads.GraphOnlyReadyStore, bool) {
+	return graphOnlyAssignedReader{ready: s.ready}, true
+}
+
+// TestGraphOnlyAwakeCheckFallsBackToFederatedListWithoutListCapability guards the
+// drain-guard hardening rider: when the graph-only Ready capability is present
+// (so the reconciler takes the graph-only awake path) but the List capability is
+// absent, an in-progress (claimed) bead is not in the ready set, so skipping the
+// in-progress leg would report the worker idle and drain it mid-step. The fallback
+// must consult the federated List for the in-progress leg instead of skipping it.
+func TestGraphOnlyAwakeCheckFallsBackToFederatedListWithoutListCapability(t *testing.T) {
+	mem := beads.NewMemStore()
+	step, err := mem.Create(beads.Bead{Title: "mid-step graph work", Type: "task", Assignee: "worker-session"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := mem.Update(step.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// Ready set empty: a claimed (in_progress) bead is never ready.
+	store := &readyOnlyGraphStore{Store: mem, ready: nil}
+
+	has, err := graphOnlyHasAwakeAssignedWork(store, []string{"worker-session"})
+	if err != nil {
+		t.Fatalf("graphOnlyHasAwakeAssignedWork: %v", err)
+	}
+	if !has {
+		t.Fatal("in-progress assigned work must keep the worker awake even when the graph-only List capability is absent — skipping the leg drains a worker mid-step")
+	}
+}
+
+// TestGraphOnlyAwakeCheckFallbackSkipsSessionBeads guards that the drain-guard
+// fallback does not count a session-lifecycle bead assigned to the worker's own
+// identity as awake work — otherwise a stale in-progress session bead would pin a
+// dead worker awake forever.
+func TestGraphOnlyAwakeCheckFallbackSkipsSessionBeads(t *testing.T) {
+	mem := beads.NewMemStore()
+	sess, err := mem.Create(beads.Bead{Title: "own session bead", Type: sessionBeadType, Assignee: "worker-session"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := mem.Update(sess.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	store := &readyOnlyGraphStore{Store: mem, ready: nil}
+
+	has, err := graphOnlyHasAwakeAssignedWork(store, []string{"worker-session"})
+	if err != nil {
+		t.Fatalf("graphOnlyHasAwakeAssignedWork: %v", err)
+	}
+	if has {
+		t.Fatal("an in-progress session bead assigned to the worker's own identity must NOT count as awake work — it would pin a dead worker awake forever")
+	}
+}

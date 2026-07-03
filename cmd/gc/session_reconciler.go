@@ -2735,7 +2735,15 @@ func sessionHasOpenAssignedWorkForReachableStore(
 	session beads.Bead,
 ) (bool, error) {
 	identifiers := sessionAssignmentIdentifiersForConfig(session, cfg)
-	if gol, ok := beads.GraphOnlyListFor(store); ok {
+	// Take the graph-only close/recycle scope only when the store carries a
+	// DISTINCT ClassGraph backend (GraphIDPrefix != ""). In the identity phase —
+	// including the degraded mode where OpenSQLiteStore failed and graph beads
+	// stayed on the work backend — the Router advertises the List capability but
+	// its GraphIDPrefix is "" and its federation reaches only Router backends, not
+	// the rig stores; falling into the graph-only branch there would approve
+	// closing a session that still has live rig work. Mirror the orphan-heal and
+	// liveListForRoot gates (both check GraphIDPrefix != "").
+	if gol, ok := beads.GraphOnlyListFor(store); ok && gol.GraphIDPrefix() != "" {
 		return graphOnlyHasAssignedWork(gol, identifiers, []string{"open", "in_progress"})
 	}
 	stores, err := reachableStoresForSession(cityPath, cfg, store, rigStores, session)
@@ -2843,6 +2851,32 @@ func graphOnlyHasAwakeAssignedWork(store beads.Store, identifiers []string) (boo
 	if gol, ok := beads.GraphOnlyListFor(store); ok {
 		if has, err := graphOnlyHasAssignedWork(gol, assignees, []string{"in_progress"}); err != nil || has {
 			return has, err
+		}
+	} else {
+		// Capability-asymmetry fail-safe: we are on the graph-only awake path
+		// (Ready capability present — the caller's gate), but the List capability
+		// is absent, so the graph backend's in-progress set is unreachable through
+		// GraphOnlyListFor. Skipping it would make a worker mid-step look idle and
+		// drain it mid-step. Fall back to the full federated List for the
+		// in-progress leg only; a superset (Dolt work counted) merely keeps a
+		// worker alive, the safe direction for a drain decision. Unreachable once
+		// the policy wrapper forwards ListGraphOnlyHandle; defense in depth against
+		// any future wrapper that forwards Ready but not List. Query at parity with
+		// the sibling in-progress probes: Live (observe external claims immediately)
+		// + TierBoth (no-history/ephemeral wisp steps), and skip session-lifecycle
+		// beads so a session bead assigned to the identity can't pin a dead worker.
+		list, err := store.List(beads.ListQuery{Assignees: assignees, Status: "in_progress", Live: true, TierMode: beads.TierBoth})
+		if err != nil {
+			return false, err
+		}
+		for _, b := range list {
+			if _, ok := idset[b.Assignee]; !ok || b.Status != "in_progress" {
+				continue
+			}
+			if sessionpkg.IsSessionBeadOrRepairable(b) {
+				continue
+			}
+			return true, nil
 		}
 	}
 	gor, ok := beads.GraphOnlyReadyFor(store)

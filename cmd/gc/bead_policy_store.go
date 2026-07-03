@@ -36,6 +36,8 @@ type beadPolicyGraphStore struct {
 }
 
 var _ beads.ConditionalAssignmentReleaser = (*beadPolicyStore)(nil)
+var _ beads.GraphOnlyReadyProvider = (*beadPolicyStore)(nil)
+var _ beads.GraphOnlyListProvider = (*beadPolicyStore)(nil)
 
 func wrapStoreWithBeadPolicies(store beads.Store, cfg *config.City) beads.Store {
 	if store == nil {
@@ -119,6 +121,35 @@ type policyGraphOnlyReader struct {
 
 func (r policyGraphOnlyReader) ReadyGraphOnly(query ...beads.ReadyQuery) ([]beads.Bead, error) {
 	return r.inner.ReadyGraphOnly(expandPolicyReadyQuery(query...))
+}
+
+// ListGraphOnlyHandle forwards the graph-only-list capability to the backing
+// store (the Router under graph_store=sqlite), mirroring ReadyGraphOnlyHandle.
+// The embedded Store interface does not promote optional capabilities, so the
+// delegation is explicit; without it beads.GraphOnlyListFor is false on every
+// production store and the orphan heal, close/recycle graph scope, liveListForRoot,
+// and the reconciler's in-progress drain guard all silently probe the federated
+// leg instead of the graph backend. Policy read-tier expansion is preserved:
+// graph steps are no-history tier, so an unexpanded query would never see them.
+func (s *beadPolicyStore) ListGraphOnlyHandle() (beads.GraphOnlyListStore, bool) {
+	inner, ok := beads.GraphOnlyListFor(s.Store)
+	if !ok {
+		return nil, false
+	}
+	return policyGraphOnlyLister{inner: inner}, true
+}
+
+type policyGraphOnlyLister struct {
+	inner beads.GraphOnlyListStore
+}
+
+func (l policyGraphOnlyLister) ListGraphOnly(query beads.ListQuery) ([]beads.Bead, error) {
+	return l.inner.ListGraphOnly(expandPolicyReadTier(query))
+}
+
+// GraphIDPrefix is a pure pass-through: the prefix is a routing fact, not policy.
+func (l policyGraphOnlyLister) GraphIDPrefix() string {
+	return l.inner.GraphIDPrefix()
 }
 
 type beadPolicyCachedReader struct {
