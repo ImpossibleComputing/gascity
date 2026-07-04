@@ -591,6 +591,21 @@ func TestJSONContractAllowsBdPassthrough(t *testing.T) {
 	}
 }
 
+func TestJSONContractAllowsBdShimPassthrough(t *testing.T) {
+	root := &cobra.Command{Use: "gc"}
+	root.AddCommand(&cobra.Command{Use: "bd-shim [bd-args...]"})
+
+	var stdout, stderr bytes.Buffer
+	// `gc bd-shim mol current <id> --json` emits its own JSON via writeReadyJSON
+	// and must be exempt from the gc JSON-schema contract (the workflows pack's
+	// graph-aware molecule read depends on it), even when the contract enforces.
+	t.Setenv("GC_JSON_CONTRACT_STRICT", "1")
+	handled, code := handleJSONContractRequest(root, []string{"bd-shim", "mol", "current", "gcg-1", "--json"}, &stdout, &stderr)
+	if handled || code != 0 {
+		t.Fatalf("bd-shim --json must pass through the contract: handled=%v code=%d stdout=%q", handled, code, stdout.String())
+	}
+}
+
 func TestJSONContractAllowsHookClaimJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	root := newRootCmd(&stdout, &stderr)

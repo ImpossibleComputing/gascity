@@ -284,6 +284,14 @@ func isContractExemptBareJSONPath(commandPath []string) bool {
 	if isBDCommandPath(commandPath) {
 		return true
 	}
+	// `gc bd-shim` is the bd-compatible shim: routed verbs emit their own JSON
+	// via writeReadyJSON and passthrough verbs exec the real bd (which owns its
+	// JSON). Like `gc bd`, it is exempt from the gc JSON-schema contract — else
+	// `gc bd-shim mol current <id> --json` (the workflows pack's graph-aware
+	// molecule read) is rejected as json_unsupported when the contract enforces.
+	if len(commandPath) > 0 && commandPath[0] == "bd-shim" {
+		return true
+	}
 	return len(commandPath) == 1 && commandPath[0] == "ready"
 }
 
