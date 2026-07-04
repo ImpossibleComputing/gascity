@@ -1,16 +1,17 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `0d694acee`+**.
+worktree `.claude/worktrees/object-front-doors`, **HEAD `347bcd0e1`+**.
 
-> **CURRENT PHASE: the LOCKSTEP DROP** (6d pre-pass deletion was complete at `3375f7cc3`).
-> Steps **1** (`ec6127ead` circuit persist → drop `circuitSessionByIdentity`), **2a**
-> (`4bcec563b` `completeDrain` store-only), **2b** (`1d2ea2028` `advanceSessionDrains` off the
-> raw bead → `beadByID`/`sessionLookup` retired), and **3** (`0d694acee` `buildAwakeInputFromReconciler`
-> domain → order-preserving `[]session.Info`; awake scan no longer touches a raw session bead) are
-> DONE + fable-reviewed + pushed. **NEXT = Step 3.5** (the `wakeTargets`/`sleep_intent` raw
-> reads+mirror). The authoritative per-step plan + paste-ready prompt for this
-> phase are **`RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md`** + **`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md`**.
+> **CURRENT PHASE: the LOCKSTEP DROP — finish line.** The ENTIRE decision-path READ conversion is
+> DONE (Steps 1–5a, all fable-reviewed + pushed; the 5a review caught + fixed a real MEDIUM). What
+> remains is the delete-the-scaffolding phase: **Steps 5b (drain-ack finalize) → 5c (delete raw mirror
+> writes — riskiest, start-execution census) → 5d (drop dead param) → 5e (demote `ordered`) → 6e
+> (guard)**. The authoritative finish-line docs are
+> **`RECONCILER-FRONT-DOOR-LOCKSTEP-DROP-FINISH.md`** (handoff) +
+> **`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md`** (paste-ready) +
+> **`RECONCILER-FRONT-DOOR-REMAINING-PLAN.md`** (per-site fable design) +
+> **`RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md`** (progress + commit hashes).
 > The rest of this file is the deeper history/design record.
 
 ---
