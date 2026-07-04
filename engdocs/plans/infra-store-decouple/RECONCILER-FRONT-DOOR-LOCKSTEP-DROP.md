@@ -92,14 +92,43 @@ worktree `.claude/worktrees/object-front-doors`, **HEAD `97fd6fbc6`** (re-grep
       Byte-identical on decision/store/lifecycle (fable 5-lens wf_fdf44eb5: 4 clean; the trace finding resolved
       by the precursor above). LOW residual: drain-ack sessions that CLOSE this tick trace their pre-close state
       (closed → snapshot-excluded → open fallback → mirror-free), consistent with store-only closes.
-- [ ] **Steps 5c–5e, 6e remain** (see `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` §Step 5 / 6e). **The trace
-      precursor above unblocks the mirror deletions** — the trace no longer reads `open[i].Metadata` for open
-      sessions, so deleting the remaining forward-pass mirror WRITES (5c) no longer stales the trace (except the
-      same closed-this-tick fallback residual). 5c still needs the per-key census INCL `buildPreparedStart`
-      start-execution coupling: mirrors whose keys the start path reads via `startCandidate` SURVIVE. Then drop
-      the dead `sessionBeads` param (5d), demote `ordered` (5e), and the 6e guard. Step 5 is re-scoped to
-      DEMOTE `ordered` (not delete — start-execution `startCandidate`/`buildPreparedStart` is raw-by-design
-      consumer #7, out of scope).
+- [x] **Step 5c — delete the read-dead raw lockstep mirror WRITES (per-key census)**. Grepped the 9
+      `session.Metadata[...] = ...` write sites and ran the per-key census (does any THIS-TICK reader — incl.
+      the start-execution path — read the key off the RAW bead?). The start boundary: `startCandidate.session`
+      (the raw `&ordered[i]`) escapes into `executePlannedStartsTraced`; `prepareStartCandidateForCity`
+      (`session_lifecycle_parallel.go:766-783`) does `store.Get` and REPLACES `candidate.session=&current`
+      before `buildPreparedStart` reads metadata — so those reads are store-sourced. But THREE reads hit the
+      ORIGINAL pre-re-Get raw bead: `wakeFairnessTime` (:161, `last_woke_at`), `name()`/`namedSessionIdentity`
+      (`session_name`), `logicalTemplate` (`template`). So a mirror is **START-COUPLED iff it writes
+      `last_woke_at`/`session_name`/`template` AND the session can reach `startCandidates` this tick.**
+      Census verdict:
+      - **DELETED (4)** — keys read by NO raw same-tick reader; each keeps its `infoByID` fold + store write:
+        (D1) `restart_requested="true"` progress-stall (was in-memory-only, consumed+cleared same tick by S1);
+        (D2) `sleep_intent=""` in the shouldWake&&alive arm (alive → never `startCandidates`; SetMarker + fold
+        kept); (D4) the config-hash loop in `silentRebaselineSessionHashes`; (D5) the config-hash loop in
+        `rebaselineLaunchDriftHashesWithBatch`. Also removed the now-dead `if session.Metadata==nil` guards.
+      - **KEPT as documented survivors (5)** — in-code `START-EXECUTION COUPLING` / `CROSS-TICK EMIT-ONCE`
+        comments: (S1) restartFold `RestartRequestPatch` (`last_woke_at`, runtime-dead fall-through);
+        (S2) SleepPatch max-age; (S3) SleepPatch idle; (S4) `ConfigDriftResetPatch` in
+        `resetConfiguredNamedSessionForConfigDrift` (start-pending caller falls through, no `continue`) —
+        all four write `last_woke_at` and reach `startCandidates`; (S5) the stranded `strandedEventEmittedKey`
+        write — **CROSS-TICK emit-once guard, NOT start-coupled**: set BEFORE the durable SetMarker so a
+        store-write failure + carried-forward `*Bead` cannot re-emit
+        (`TestReconcileSessionBeads_PoolSlotStrandedThrottleSurvivesSetMetadataFailure`). **The census tried to
+        delete S5 first; the test caught it and the mirror was restored** — the corrected model: production
+        reloads `loadSessionBeadSnapshot` each tick (so D1/D2/D4/D5 have no cross-tick role the store write
+        misses), but the stranded emit-once storm is guarded against the worst-case carried-forward bead.
+      Gates: gofmt clean, `go build`/`go vet` clean, `golangci-lint` 0, full reconciler subset green (206s).
+      Fable 3-lens adversarial review (wf_38565cae, deletion-safety / fold+guard / survivor+trace; ~345K tokens,
+      103 tool calls): **0 findings**.
+- [ ] **Steps 5d, 5e, 6e remain** (see `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` §Step 5 / 6e). Drop the dead
+      `sessionBeads` param on `advanceSessionDrainsWithSessionsTraced` (5d), demote `ordered` (5e), then the 6e
+      guard. **6e caveat sharpened by 5c:** the guard cannot blanket-forbid `session.Metadata[` in
+      `session_reconciler.go` — the raw-by-design classifier helpers (`isDrainAckStopPending`,
+      `pendingCreateStartInFlight`, …) legitimately read it, and the 5 survivor mirrors (S1-S5) legitimately
+      write it. Scope the needle or relocate per the FINISH-doc caveat. Step 5 stays re-scoped to DEMOTE
+      `ordered` (not delete — start-execution `startCandidate`/`buildPreparedStart` is raw-by-design consumer #7,
+      out of scope).
 
 ## Where things stand
 

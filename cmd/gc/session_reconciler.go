@@ -2265,21 +2265,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					}
 				}
 				if sessionProgressStalled(threshold, holdsClaim, providerHealthy, exempt, lastActivity, clk.Now()) {
-					if session.Metadata == nil {
-						session.Metadata = map[string]string{}
-					}
-					session.Metadata["restart_requested"] = "true"
-					// Reflect the restart_requested marker on the snapshot (Step 6d
-					// write-returns-Info). Unlike every other forward-pass mutation this
-					// one is written IN-MEMORY ONLY — it is not persisted through a
-					// mirrored ApplyPatch batch — so the awake scan (which reads
-					// Info.RestartRequested off infoByID) would otherwise see it only via
-					// the blanket pre-pass re-projection. Folding it here is a
-					// prerequisite for dropping that pre-pass: the restart-request
-					// consume below then clears it on the snapshot (else #2574). The base
-					// is coherent (infoByID[session.ID] == InfoFromPersistedBead(*session)
-					// here — the zombie fold synced it and every intervening mutating
-					// block `continue`s).
+					// Record the restart request on the typed snapshot only. This
+					// marker is decision-state consumed by the restart-request block
+					// below (which reads Info.RestartRequested off infoByID) and never
+					// read off the raw session bead — not by the start-execution path —
+					// so Step 5c dropped its raw session.Metadata mirror. The consume
+					// clears it on the snapshot (else #2574 re-fires a phantom second
+					// restart). The base is coherent here (the zombie fold synced
+					// infoByID and every intervening mutating block `continue`s).
 					infoByID[session.ID] = infoByID[session.ID].ApplyPatch(sessionpkg.MetadataPatch{"restart_requested": "true"})
 					fmt.Fprintf(stderr, "session reconciler: %s progress-stalled (no progress for >%s, no open claim, provider healthy); requesting fresh restart\n", name, threshold) //nolint:errcheck
 				}
@@ -2344,6 +2337,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				// like the in-memory mirror above: the durable reset marker is for the
 				// next tick, and admitting it here would force-wake on-demand sessions
 				// without demand (#2345).
+				//
+				// START-EXECUTION COUPLING (Step 5c): the raw session.Metadata mirror
+				// is RETAINED. On the runtime-already-dead fall-through below this
+				// session can reach startCandidates this same tick, and the start
+				// executor reads last_woke_at (cleared by RestartRequestPatch) off the
+				// raw bead via wakeFairnessTime BEFORE it re-Gets the bead from the
+				// store — dropping the mirror would perturb the wake-fairness ordering.
 				restartFold := make(sessionpkg.MetadataPatch, len(batch))
 				for key, value := range batch {
 					if key == sessionpkg.ResetCommittedAtKey {
@@ -2915,6 +2915,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					// snapshot must carry the sleep. Base is coherent (the aggregating
 					// refresh @~2692 synced it and the intervening drift blocks `continue`).
 					// A pre-pass-masked writer (STEP6-PREPASS-AUDIT group 11).
+					//
+					// START-EXECUTION COUPLING (Step 5c): the raw session.Metadata mirror
+					// loop above is RETAINED. The same-tick re-wake can reach
+					// startCandidates, and the start executor reads last_woke_at (cleared
+					// by SleepPatch) off the raw bead via wakeFairnessTime before it
+					// re-Gets from the store; dropping the mirror would perturb ordering.
 					infoByID[session.ID] = infoByID[session.ID].ApplyPatch(batch)
 					alive = false
 				}
@@ -2995,6 +3001,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					// awake-scan read of state=asleep drives a same-tick re-wake. Base
 					// coherent (aggregating refresh @~2692 + intervening `continue`s). A
 					// pre-pass-masked writer (STEP6-PREPASS-AUDIT group 12).
+					//
+					// START-EXECUTION COUPLING (Step 5c): the raw session.Metadata mirror
+					// loop above is RETAINED — same rationale as the max-age kill: the
+					// same-tick re-wake reads last_woke_at (cleared by SleepPatch) off the
+					// raw bead via wakeFairnessTime before the start executor re-Gets it.
 					infoByID[session.ID] = infoByID[session.ID].ApplyPatch(batch)
 					alive = false
 				}
@@ -3228,8 +3239,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			cancelSessionDrainInfo(info, sp, dt)
 			clearCompletedIdleProbe(target.session.ID, dt)
 			if info.SleepIntent == "idle-stop-pending" {
+				// Persist the intent clear to the store and the typed snapshot. This
+				// runs on an ALIVE session (the shouldWake && alive arm), which never
+				// enters startCandidates, and sleep_intent is not read off the raw
+				// session bead anywhere downstream this tick — so Step 5c dropped the
+				// raw session.Metadata mirror.
 				_ = sessionFrontDoor(store).SetMarker(target.session.ID, "sleep_intent", "")
-				target.session.Metadata["sleep_intent"] = ""
 				infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(sessionpkg.MetadataPatch{"sleep_intent": ""})
 			}
 		}
@@ -3685,9 +3700,13 @@ func emitSessionStrandedDiagnostic(
 		SessionID: session.ID,
 		Payload:   api.SessionStrandedPayloadJSON(session.ID, session.Metadata["session_name"], template, ids),
 	})
-	// Set the in-memory marker first so a SetMetadata failure below
-	// can't cause the next tick (still seeing this same *Bead value or
-	// a re-fetch with the durable write missing) to emit again.
+	// CROSS-TICK EMIT-ONCE COUPLING (Step 5c): the raw session.Metadata mirror is
+	// RETAINED. Set the in-memory marker BEFORE the durable SetMarker write so a
+	// transient store-write failure cannot cause the next tick — still holding this
+	// same *Bead value (the controller may carry a bead forward across ticks) or a
+	// re-fetch whose durable write is missing — to re-emit and produce a
+	// duplicate-emission storm. Regression-guarded by
+	// TestReconcileSessionBeads_PoolSlotStrandedThrottleSurvivesSetMetadataFailure.
 	session.Metadata[strandedEventEmittedKey] = now.Format(time.RFC3339)
 	if err := sessionFrontDoor(store).SetMarker(session.ID, strandedEventEmittedKey, now.Format(time.RFC3339)); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: stamping stranded throttle marker on %s: %v\n", session.ID, err) //nolint:errcheck
@@ -4349,6 +4368,11 @@ func resetConfiguredNamedSessionForConfigDrift(
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, len(batch))
 	}
+	// START-EXECUTION COUPLING (Step 5c): the raw session.Metadata mirror loop is
+	// RETAINED. The start-pending caller (the alive lane) falls through without a
+	// `continue`, so the repaired session can reach startCandidates this same tick,
+	// and the start executor reads last_woke_at (cleared by ConfigDriftResetPatch)
+	// off the raw bead via wakeFairnessTime before it re-Gets from the store.
 	for key, value := range batch {
 		session.Metadata[key] = value
 	}
@@ -4740,12 +4764,11 @@ func silentRebaselineSessionHashes(session *beads.Bead, sessFront *sessionpkg.St
 	if err := sessFront.ApplyPatch(session.ID, patch); err != nil {
 		return nil, fmt.Errorf("rebaselining hashes: %w", err)
 	}
-	if session.Metadata == nil {
-		session.Metadata = make(map[string]string, len(patch))
-	}
-	for k, v := range patch {
-		session.Metadata[k] = v
-	}
+	// The caller folds the returned patch onto the typed snapshot (write-returns-
+	// Info). The rebaselined hash fields are never read off the raw session bead
+	// this tick — the drift decision reads Info.StartedConfigHash and the start
+	// path re-reads started_config_hash off a fresh store.Get — so Step 5c dropped
+	// the raw session.Metadata mirror.
 	return patch, nil
 }
 
@@ -4854,12 +4877,11 @@ func rebaselineLaunchDriftHashesWithBatch(session *beads.Bead, sessFront *sessio
 	if err := sessFront.ApplyPatch(session.ID, patch); err != nil {
 		return nil, fmt.Errorf("rebaselining launch-drift hashes: %w", err)
 	}
-	if session.Metadata == nil {
-		session.Metadata = make(map[string]string, len(patch))
-	}
-	for k, v := range patch {
-		session.Metadata[k] = v
-	}
+	// The caller folds the returned patch onto the typed snapshot (write-returns-
+	// Info). These rebaselined hash fields are never read off the raw session bead
+	// this tick — the drift decision reads Info and the start path re-reads the
+	// hash off a fresh store.Get — so Step 5c dropped the raw session.Metadata
+	// mirror.
 	return patch, nil
 }
 
