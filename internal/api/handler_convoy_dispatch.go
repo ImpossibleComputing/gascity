@@ -172,7 +172,7 @@ func (s *Server) snapshotFromStore(info workflowStoreInfo, root beads.Bead, fall
 			Metadata:      map[string]string{beadmeta.RootBeadIDMetadataKey: root.ID},
 			IncludeClosed: true,
 		})
-		if err != nil {
+		if err != nil && !(beads.IsPartialResult(err) && len(all) > 0) {
 			return nil, err
 		}
 

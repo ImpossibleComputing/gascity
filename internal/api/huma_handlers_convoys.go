@@ -89,10 +89,16 @@ func (s *Server) humaHandleConvoyList(ctx context.Context, input *ConvoyListInpu
 		pa.attempt()
 		list, err := store.List(beads.ListQuery{Type: "convoy"})
 		if err != nil {
-			pa.record("rig "+rigName, err)
-			continue
+			if beads.IsPartialResult(err) && len(list) > 0 {
+				pa.record("rig "+rigName, err)
+				pa.success()
+			} else {
+				pa.record("rig "+rigName, err)
+				continue
+			}
+		} else {
+			pa.success()
 		}
-		pa.success()
 		convoys = append(convoys, list...)
 	}
 	if pa.totalOutage() {

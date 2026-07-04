@@ -21,6 +21,8 @@ import (
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/coordclass"
+	"github.com/gastownhall/gascity/internal/coordrouter"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -242,6 +244,55 @@ func (s *partialAssignedWorkStore) Ready(query ...beads.ReadyQuery) ([]beads.Bea
 		return rows, &beads.PartialResultError{Op: "bd ready", Err: errors.New("skipped corrupt ready bead")}
 	}
 	return rows, nil
+}
+
+// failingGraphLeg is a ClassGraph backend whose reads hard-fail, used to prove
+// Group D's PartialResultError survives the real policy-wrapped Router stack.
+type failingGraphLeg struct {
+	*beads.MemStore
+	err error
+}
+
+func (s *failingGraphLeg) List(beads.ListQuery) ([]beads.Bead, error)     { return nil, s.err }
+func (s *failingGraphLeg) Ready(...beads.ReadyQuery) ([]beads.Bead, error) { return nil, s.err }
+func (s *failingGraphLeg) IDPrefix() string                                { return "gcg" }
+
+// Group D end-to-end: compose the REAL wired stack — a failing ClassGraph leg
+// behind coordrouter.Router behind wrapStoreWithBeadPolicies — and prove the
+// federated PartialResultError survives through beadPolicyStore + HandlesFor
+// into the collector, arming StoreQueryPartial while retaining the survivor row.
+// Every other partial test uses a hand-rolled fake that returns the error
+// directly; this is the "wrong store shape" gap the audit named as why the
+// original bug hid — a future regression in the wiring silently disarms
+// drain-suppression, and only this test catches it.
+func TestCollectAssignedWorkBeads_WiredRouterPartialArmsStorePartial(t *testing.T) {
+	workMem := beads.NewMemStore()
+	wb, err := workMem.Create(beads.Bead{Title: "in-progress work", Assignee: "worker"})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	if err := workMem.Update(wb.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("mark in_progress: %v", err)
+	}
+
+	graph := &failingGraphLeg{MemStore: beads.NewMemStoreFrom(1000, nil, nil), err: errors.New("graph leg down")}
+	r := coordrouter.New(workMem)
+	r.Register(coordclass.ClassGraph, graph)
+	store := wrapStoreWithBeadPolicies(r, &config.City{})
+
+	got, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, nil)
+	if !partial {
+		t.Fatal("StoreQueryPartial not armed: PartialResultError lost through the wired router+policy stack")
+	}
+	found := false
+	for _, b := range got {
+		if b.ID == wb.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("survivor dropped: got %#v, want work bead %s retained", got, wb.ID)
+	}
 }
 
 // Group F Phase 1: a failed query is attributed to the store scope it came

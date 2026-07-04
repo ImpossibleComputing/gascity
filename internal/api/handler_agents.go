@@ -330,7 +330,11 @@ func (s *Server) findActiveBeadForAssigneesWithFreshness(rig string, live bool, 
 				}
 			}
 			matches, err := stores[rn].List(query)
-			if err != nil {
+			// A partial-with-rows federated read (a flaky leg on a
+			// graph_store=sqlite city) still holds the agent's active bead; only
+			// drop it on a hard error or a rows-less partial, else the active-bead
+			// column blanks out during a transient leg flake.
+			if err != nil && !(beads.IsPartialResult(err) && len(matches) > 0) {
 				continue
 			}
 			if len(matches) > 0 {

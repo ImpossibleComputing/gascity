@@ -3957,7 +3957,7 @@ func resolveTaskWorkDir(store beads.Store, assignees ...string) string {
 			TierMode: beads.TierBoth,
 			Sort:     beads.SortCreatedDesc,
 		})
-		if err != nil {
+		if err != nil && !(beads.IsPartialResult(err) && len(assigned) > 0) {
 			continue
 		}
 		for _, b := range assigned {
@@ -4002,7 +4002,7 @@ func resolveTaskOptionOverrides(store beads.Store, rp *config.ResolvedProvider, 
 			TierMode: beads.TierBoth,
 			Sort:     beads.SortCreatedDesc,
 		})
-		if err != nil {
+		if err != nil && !(beads.IsPartialResult(err) && len(assigned) > 0) {
 			continue
 		}
 		for _, b := range assigned {

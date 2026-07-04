@@ -26,6 +26,7 @@ func exactMetadataSessionCandidates(store beads.Store, includeClosed bool, statu
 	seenQueries := make(map[string]bool, len(filters))
 	seenBeads := make(map[string]bool)
 	candidates := make([]beads.Bead, 0, len(filters))
+	var firstPartialErr error
 	for _, filter := range filters {
 		if len(filter) != 1 {
 			continue
@@ -53,7 +54,12 @@ func exactMetadataSessionCandidates(store beads.Store, includeClosed bool, statu
 		}
 		items, err := store.List(query)
 		if err != nil {
-			return nil, err
+			if !beads.IsPartialResult(err) || len(items) == 0 {
+				return nil, err
+			}
+			if firstPartialErr == nil {
+				firstPartialErr = err
+			}
 		}
 		for _, b := range items {
 			if seenBeads[b.ID] || !IsSessionBeadOrRepairable(b) {
@@ -64,5 +70,5 @@ func exactMetadataSessionCandidates(store beads.Store, includeClosed bool, statu
 			candidates = append(candidates, b)
 		}
 	}
-	return candidates, nil
+	return candidates, firstPartialErr
 }

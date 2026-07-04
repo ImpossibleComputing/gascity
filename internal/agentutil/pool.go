@@ -53,7 +53,7 @@ func findSessionNameByTemplate(store beads.Store, qualifiedName string) string {
 		Label:  "gc.session",
 		Status: "open",
 	})
-	if err != nil {
+	if err != nil && !(beads.IsPartialResult(err) && len(beadList) > 0) {
 		return ""
 	}
 	for _, b := range beadList {

@@ -368,7 +368,7 @@ func collectBeadGraph(store beads.Store, root beads.Bead) ([]beads.Bead, []workf
 		Metadata:      map[string]string{beadmeta.RootBeadIDMetadataKey: root.ID},
 		IncludeClosed: true,
 	})
-	if err != nil {
+	if err != nil && !(beads.IsPartialResult(err) && len(metadataChildren) > 0) {
 		return nil, nil, fmt.Errorf("listing metadata children for bead %q: %w", root.ID, err)
 	}
 	for _, child := range metadataChildren {
@@ -423,7 +423,7 @@ func collectBeadGraph(store beads.Store, root beads.Bead) ([]beads.Bead, []workf
 			AllowScan:     true,
 			Sort:          beads.SortCreatedAsc,
 		})
-		if err != nil {
+		if err != nil && !(beads.IsPartialResult(err) && len(children) > 0) {
 			return nil, nil, fmt.Errorf("listing child beads for graph %q: %w", root.ID, err)
 		}
 		var next []string

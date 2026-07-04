@@ -596,7 +596,7 @@ func (s *Server) humaHandleBeadDeps(_ context.Context, input *BeadDepsInput) (*I
 			ParentID: id,
 			Sort:     beads.SortCreatedAsc,
 		})
-		if err != nil {
+		if err != nil && !(beads.IsPartialResult(err) && len(children) > 0) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		children = appendMetadataAttachedChildren(store, parent, children)

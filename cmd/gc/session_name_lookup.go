@@ -498,7 +498,7 @@ func findSessionNameByTemplate(store beads.Store, template string) string {
 
 func findSessionNameByAgentLabel(store beads.Store, template string) string {
 	items, err := store.List(beads.ListQuery{Label: "agent:" + template})
-	if err != nil {
+	if err != nil && !(beads.IsPartialResult(err) && len(items) > 0) {
 		return ""
 	}
 	return chooseSessionNameForTemplate(store, items, true, "", "", template)
@@ -506,7 +506,7 @@ func findSessionNameByAgentLabel(store beads.Store, template string) string {
 
 func findSessionNameByMetadata(store beads.Store, key, value string, agentNameMatch bool) string {
 	items, err := sessionpkg.ExactMetadataSessionCandidates(store, false, map[string]string{key: value})
-	if err != nil {
+	if err != nil && !(beads.IsPartialResult(err) && len(items) > 0) {
 		return ""
 	}
 	return chooseSessionNameForTemplate(store, items, agentNameMatch, key, value, value)

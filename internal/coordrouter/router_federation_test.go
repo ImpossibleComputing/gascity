@@ -167,3 +167,195 @@ func TestRouterReadyGraphOnlyIdentityPhaseFallsBack(t *testing.T) {
 		t.Fatalf("identity-phase ReadyGraphOnly must return the sole backend's bead %s: have %v", created.ID, ready)
 	}
 }
+
+// errBoom is the sentinel leg failure used by the Group D partial-result tests.
+var errBoom = errors.New("boom: leg unavailable")
+
+// failingReadStore embeds a MemStore and fails every federated read method with
+// a hard (non-partial) error. Used to simulate a locked/down Router leg.
+type failingReadStore struct {
+	*beads.MemStore
+	err error
+}
+
+func (s *failingReadStore) List(beads.ListQuery) ([]beads.Bead, error) { return nil, s.err }
+func (s *failingReadStore) ListOpen(...string) ([]beads.Bead, error)   { return nil, s.err }
+func (s *failingReadStore) Children(string, ...beads.QueryOpt) ([]beads.Bead, error) {
+	return nil, s.err
+}
+func (s *failingReadStore) ListByLabel(string, int, ...beads.QueryOpt) ([]beads.Bead, error) {
+	return nil, s.err
+}
+func (s *failingReadStore) ListByAssignee(string, string, int) ([]beads.Bead, error) {
+	return nil, s.err
+}
+func (s *failingReadStore) ListByMetadata(map[string]string, int, ...beads.QueryOpt) ([]beads.Bead, error) {
+	return nil, s.err
+}
+func (s *failingReadStore) Ready(...beads.ReadyQuery) ([]beads.Bead, error) { return nil, s.err }
+func (s *failingReadStore) DepList(string, string) ([]beads.Dep, error)     { return nil, s.err }
+
+// partialReadStore returns its MemStore rows alongside a PartialResultError, the
+// contract shape a CachingStore work leg forwards from a bd parse partial.
+type partialReadStore struct {
+	*beads.MemStore
+	err error
+}
+
+func (s *partialReadStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	rows, err := s.MemStore.List(q)
+	if err != nil {
+		return rows, err
+	}
+	return rows, s.err
+}
+
+// TestRouterFederatedReadReturnsPartialWhenOneLegFails proves a failing leg no
+// longer launders into a nil error: the survivor's rows come back WITH a
+// PartialResultError so completeness-sensitive callers can tell degraded from
+// complete.
+func TestRouterFederatedReadReturnsPartialWhenOneLegFails(t *testing.T) {
+	newRouter := func() (*Router, beads.Bead) {
+		work := beads.NewMemStore()
+		wb, err := work.Create(beads.Bead{Title: "work item", Type: "task", Status: "open", Assignee: "me", Labels: []string{"lbl"}, Metadata: map[string]string{"k": "v"}})
+		if err != nil {
+			t.Fatalf("create work: %v", err)
+		}
+		graph := &failingReadStore{MemStore: beads.NewMemStoreFrom(1000, nil, nil), err: errBoom}
+		r := New(work)
+		r.Register(coordclass.ClassGraph, graph)
+		return r, wb
+	}
+
+	cases := []struct {
+		name string
+		call func(*Router) ([]beads.Bead, error)
+	}{
+		{"List", func(r *Router) ([]beads.Bead, error) { return r.List(beads.ListQuery{AllowScan: true}) }},
+		{"ListOpen", func(r *Router) ([]beads.Bead, error) { return r.ListOpen() }},
+		{"ListByLabel", func(r *Router) ([]beads.Bead, error) { return r.ListByLabel("lbl", 0) }},
+		{"ListByAssignee", func(r *Router) ([]beads.Bead, error) { return r.ListByAssignee("me", "", 0) }},
+		{"ListByMetadata", func(r *Router) ([]beads.Bead, error) { return r.ListByMetadata(map[string]string{"k": "v"}, 0) }},
+		{"Ready", func(r *Router) ([]beads.Bead, error) { return r.Ready() }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, wb := newRouter()
+			rows, err := tc.call(r)
+			if err == nil {
+				t.Fatalf("%s: err = nil, want a partial-result error when a leg fails", tc.name)
+			}
+			if !beads.IsPartialResult(err) {
+				t.Fatalf("%s: err = %v, want IsPartialResult", tc.name, err)
+			}
+			if !errors.Is(err, errBoom) {
+				t.Fatalf("%s: err = %v, want Unwrap chain to reach errBoom", tc.name, err)
+			}
+			found := false
+			for _, b := range rows {
+				if b.ID == wb.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s: survivor rows = %v, want work bead %s retained", tc.name, rows, wb.ID)
+			}
+		})
+	}
+}
+
+// TestRouterDepListReturnsPartialWhenOneLegFails is the DepList analog.
+func TestRouterDepListReturnsPartialWhenOneLegFails(t *testing.T) {
+	work := beads.NewMemStore()
+	a, err := work.Create(beads.Bead{Title: "a", Type: "task"})
+	if err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	b, err := work.Create(beads.Bead{Title: "b", Type: "task"})
+	if err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	if err := work.DepAdd(a.ID, b.ID, "blocks"); err != nil {
+		t.Fatalf("dep add: %v", err)
+	}
+	graph := &failingReadStore{MemStore: beads.NewMemStoreFrom(1000, nil, nil), err: errBoom}
+	r := New(work)
+	r.Register(coordclass.ClassGraph, graph)
+
+	deps, err := r.DepList(a.ID, "down")
+	if err == nil || !beads.IsPartialResult(err) || !errors.Is(err, errBoom) {
+		t.Fatalf("DepList err = %v, want partial-result wrapping errBoom", err)
+	}
+	if len(deps) == 0 {
+		t.Fatalf("DepList deps = %v, want the surviving work-leg edge retained", deps)
+	}
+}
+
+// TestRouterFederatedReadAllLegsFailedHardFails pins the preserved hard-fail
+// path: when every leg fails with no rows, the bare leg error propagates and is
+// NOT a partial.
+func TestRouterFederatedReadAllLegsFailedHardFails(t *testing.T) {
+	work := &failingReadStore{MemStore: beads.NewMemStore(), err: errBoom}
+	graph := &failingReadStore{MemStore: beads.NewMemStoreFrom(1000, nil, nil), err: errBoom}
+	r := New(work)
+	r.Register(coordclass.ClassGraph, graph)
+
+	rows, err := r.List(beads.ListQuery{AllowScan: true})
+	if rows != nil {
+		t.Fatalf("rows = %v, want nil on total failure", rows)
+	}
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("err = %v, want errBoom", err)
+	}
+	if beads.IsPartialResult(err) {
+		t.Fatalf("err = %v, want a HARD failure, not a partial, when all legs fail", err)
+	}
+}
+
+// TestRouterFederatedReadMergesRowsFromPartialLeg proves a leg that itself
+// returned (rows, PartialResultError) contributes its rows to the union rather
+// than being dropped, and the union is still reported partial.
+func TestRouterFederatedReadMergesRowsFromPartialLeg(t *testing.T) {
+	work := beads.NewMemStore()
+	wb, err := work.Create(beads.Bead{Title: "work", Type: "task"})
+	if err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	graphMem := beads.NewMemStoreFrom(1000, nil, nil)
+	gb, err := graphMem.Create(beads.Bead{Title: "graph", Type: "task"})
+	if err != nil {
+		t.Fatalf("create graph: %v", err)
+	}
+	graph := &partialReadStore{MemStore: graphMem, err: &beads.PartialResultError{Op: "fake leg", Err: errBoom}}
+	r := New(work)
+	r.Register(coordclass.ClassGraph, graph)
+
+	rows, err := r.List(beads.ListQuery{AllowScan: true})
+	if err == nil || !beads.IsPartialResult(err) {
+		t.Fatalf("err = %v, want IsPartialResult", err)
+	}
+	ids := map[string]bool{}
+	for _, b := range rows {
+		ids[b.ID] = true
+	}
+	if !ids[wb.ID] || !ids[gb.ID] {
+		t.Fatalf("rows = %v, want BOTH the healthy work row %s and the partial leg's row %s", rows, wb.ID, gb.ID)
+	}
+}
+
+// TestRouterSingleBackendReadErrorPassesThroughUnwrapped pins the identity-phase
+// byte-identical guarantee: a sole backend's error is returned verbatim, never
+// re-wrapped as a PartialResultError.
+func TestRouterSingleBackendReadErrorPassesThroughUnwrapped(t *testing.T) {
+	r := New(&failingReadStore{MemStore: beads.NewMemStore(), err: errBoom})
+	rows, err := r.List(beads.ListQuery{AllowScan: true})
+	if rows != nil {
+		t.Fatalf("rows = %v, want nil", rows)
+	}
+	if err != errBoom {
+		t.Fatalf("err = %v, want the bare errBoom (no re-wrap on the sole-backend fast path)", err)
+	}
+	if beads.IsPartialResult(err) {
+		t.Fatalf("err = %v, want NOT a partial on the identity fast path", err)
+	}
+}

@@ -957,7 +957,7 @@ func verifyCanonicalBdScopeStoreReady(store beads.Store) error {
 	var lastErr error
 	for attempt := 0; attempt < 20; attempt++ {
 		_, err := store.List(beads.ListQuery{AllowScan: true, Limit: 1})
-		if err == nil {
+		if err == nil || beads.IsPartialResult(err) {
 			return nil
 		}
 		lastErr = err

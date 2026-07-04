@@ -86,7 +86,7 @@ func (r *Router) List(query beads.ListQuery) ([]beads.Bead, error) {
 	if b, ok := r.soleBackend(); ok {
 		return b.List(query)
 	}
-	return r.federateRead(query.Sort, query.Limit, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter List", query.Sort, query.Limit, func(s beads.Store) ([]beads.Bead, error) {
 		return s.List(query)
 	})
 }
@@ -96,7 +96,7 @@ func (r *Router) ListOpen(status ...string) ([]beads.Bead, error) {
 	if b, ok := r.soleBackend(); ok {
 		return b.ListOpen(status...)
 	}
-	return r.federateRead(beads.SortCreatedAsc, 0, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter ListOpen", beads.SortCreatedAsc, 0, func(s beads.Store) ([]beads.Bead, error) {
 		return s.ListOpen(status...)
 	})
 }
@@ -107,7 +107,7 @@ func (r *Router) Children(parentID string, opts ...beads.QueryOpt) ([]beads.Bead
 	if b, ok := r.soleBackend(); ok {
 		return b.Children(parentID, opts...)
 	}
-	return r.federateRead(beads.SortCreatedAsc, 0, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter Children", beads.SortCreatedAsc, 0, func(s beads.Store) ([]beads.Bead, error) {
 		return s.Children(parentID, opts...)
 	})
 }
@@ -117,7 +117,7 @@ func (r *Router) ListByLabel(label string, limit int, opts ...beads.QueryOpt) ([
 	if b, ok := r.soleBackend(); ok {
 		return b.ListByLabel(label, limit, opts...)
 	}
-	return r.federateRead(beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter ListByLabel", beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
 		return s.ListByLabel(label, limit, opts...)
 	})
 }
@@ -127,7 +127,7 @@ func (r *Router) ListByAssignee(assignee, status string, limit int) ([]beads.Bea
 	if b, ok := r.soleBackend(); ok {
 		return b.ListByAssignee(assignee, status, limit)
 	}
-	return r.federateRead(beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter ListByAssignee", beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
 		return s.ListByAssignee(assignee, status, limit)
 	})
 }
@@ -137,7 +137,7 @@ func (r *Router) ListByMetadata(filters map[string]string, limit int, opts ...be
 	if b, ok := r.soleBackend(); ok {
 		return b.ListByMetadata(filters, limit, opts...)
 	}
-	return r.federateRead(beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter ListByMetadata", beads.SortCreatedDesc, limit, func(s beads.Store) ([]beads.Bead, error) {
 		return s.ListByMetadata(filters, limit, opts...)
 	})
 }
@@ -152,7 +152,7 @@ func (r *Router) Ready(query ...beads.ReadyQuery) ([]beads.Bead, error) {
 	if len(query) > 0 {
 		limit = query[0].Limit
 	}
-	return r.federateRead(beads.SortCreatedAsc, limit, func(s beads.Store) ([]beads.Bead, error) {
+	return r.federateRead("coordrouter Ready", beads.SortCreatedAsc, limit, func(s beads.Store) ([]beads.Bead, error) {
 		return s.Ready(query...)
 	})
 }
@@ -201,7 +201,8 @@ func (r *Router) GraphIDPrefix() string {
 
 // DepList federates dependency reads: an edge touching id may be recorded in any
 // backend (a cross-class blocks edge lives in the Work store), so it unions and
-// dedups across backends.
+// dedups across backends. A failed leg with surviving deps returns the union
+// wrapped in beads.PartialResultError rather than posing as a complete edge set.
 func (r *Router) DepList(id, direction string) ([]beads.Dep, error) {
 	if b, ok := r.soleBackend(); ok {
 		return b.DepList(id, direction)
@@ -222,7 +223,11 @@ func (r *Router) DepList(id, direction string) ([]beads.Dep, error) {
 		deps, err := backend.DepList(id, direction)
 		if err != nil {
 			lastErr = err
-			continue
+			if !beads.IsPartialResult(err) {
+				continue
+			}
+			// A partial leg returned usable deps alongside its error: merge
+			// them and keep the error so the union is reported partial.
 		}
 		for _, d := range deps {
 			if !seen[d] {
@@ -234,12 +239,24 @@ func (r *Router) DepList(id, direction string) ([]beads.Dep, error) {
 	if out == nil && lastErr != nil {
 		return nil, lastErr
 	}
+	if lastErr != nil {
+		// A hidden cross-store edge would corrupt readiness, tally, and cycle
+		// checks, so a degraded union is reported partial rather than complete.
+		return out, &beads.PartialResultError{Op: "coordrouter DepList", Err: lastErr}
+	}
 	return out, nil
 }
 
-// federateRead runs read on every backend, unions the results, dedups by id, and
-// re-sorts + re-limits over the combined set.
-func (r *Router) federateRead(order beads.SortOrder, limit int, read func(beads.Store) ([]beads.Bead, error)) ([]beads.Bead, error) {
+// federateRead runs read on every backend, unions the results, dedups by id,
+// and re-sorts + re-limits over the combined set. A failed leg never silently
+// truncates the union: when any leg errors but rows survive (from the other
+// legs, or from the failing leg itself when it returned usable rows alongside a
+// beads.PartialResultError), the merged rows are returned WITH a
+// beads.PartialResultError tagged op, so callers that need a complete picture —
+// drain suppression, orphan release, sweeps — can tell a degraded union from a
+// complete one. Only when every leg fails with no usable rows does the read
+// hard-fail with the last leg error, unchanged.
+func (r *Router) federateRead(op string, order beads.SortOrder, limit int, read func(beads.Store) ([]beads.Bead, error)) ([]beads.Bead, error) {
 	seen := make(map[string]bool)
 	var merged []beads.Bead
 	var lastErr error
@@ -247,7 +264,12 @@ func (r *Router) federateRead(order beads.SortOrder, limit int, read func(beads.
 		got, err := read(backend)
 		if err != nil {
 			lastErr = err
-			continue
+			if !beads.IsPartialResult(err) {
+				continue
+			}
+			// A partial leg returned usable rows alongside its error (the
+			// PartialResultError contract): merge them below and keep the error
+			// so the union is still reported partial.
 		}
 		for _, b := range got {
 			if seen[b.ID] {
@@ -263,6 +285,9 @@ func (r *Router) federateRead(order beads.SortOrder, limit int, read func(beads.
 	sortBeads(merged, order)
 	if limit > 0 && len(merged) > limit {
 		merged = merged[:limit]
+	}
+	if lastErr != nil {
+		return merged, &beads.PartialResultError{Op: op, Err: lastErr}
 	}
 	return merged, nil
 }
