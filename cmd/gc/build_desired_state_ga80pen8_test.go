@@ -183,3 +183,79 @@ func TestSharedTemplateAssignee_Tier1CrashRecoveryCrossAdopts(t *testing.T) {
 	t.Logf("Tier-1 crash-recovery surfaced a live sibling's shared-template claim %s (cross-adoption); "+
 		"a concrete-alias claim %s was correctly invisible", shared.ID, concrete.ID)
 }
+
+// TestBuildDesiredState_NamedSessionBareIdentityReaped_RecoversViaNamedTier is
+// the ga-p0u752 target scenario: a named+expanded-identity session's canonical
+// bead is gone (reaped/closed, or never materialized this tick) while it
+// still holds an in-progress work bead under its own bare identity. Same
+// fixture shape as TestBuildDesiredState_MultiSlotPoolNamedSession_OneRoutedBeadProvisionsTwoWorkers
+// (which only asserts the *count* stays 1), but this test asserts *which*
+// tier recovers it: after the fix, the named-session tier must recover the
+// bead (a session materializes with ConfiguredNamedIdentity set) and pool
+// must NOT also spin up a competing wake-known-identity worker for the same
+// bead — the actual double-provisioning ga-i1d0tr/ga-80pen8 was about.
+func TestBuildDesiredState_NamedSessionBareIdentityReaped_RecoversViaNamedTier(t *testing.T) {
+	cityPath := t.TempDir()
+	rigPath := filepath.Join(cityPath, "gascity")
+	if err := os.MkdirAll(rigPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+
+	b, err := rigStore.Create(beads.Bead{
+		Title:    "routed builder work, named session's canonical bead reaped",
+		Type:     "task",
+		Status:   "open",
+		Assignee: "gascity/builder",
+		Metadata: map[string]string{"gc.routed_to": "gascity/builder"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inProgress := "in_progress"
+	if err := rigStore.Update(b.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "gc"},
+		Rigs:      []config.Rig{{Name: "gascity", Path: rigPath}},
+		Agents: []config.Agent{{
+			Name:              "builder",
+			Dir:               "gascity",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(3), // multi-slot pool: not a canonical singleton
+			WorkQuery:         "printf ''",
+		}},
+		NamedSessions: []config.NamedSession{{
+			Template: "builder",
+			Dir:      "gascity",
+			Mode:     "on_demand",
+		}},
+	}
+
+	// No session beads at all: the named session's own canonical bead is gone.
+	dsResult := buildDesiredStateWithSessionBeads(
+		"gc", cityPath, time.Now().UTC(), cfg, runtime.NewFake(),
+		cityStore, map[string]beads.Store{"gascity": rigStore}, nil, nil, io.Discard,
+	)
+
+	var builderIdentities []string
+	namedCount := 0
+	for key, tp := range dsResult.State {
+		if tp.TemplateName == "gascity/builder" {
+			builderIdentities = append(builderIdentities, key+"(alias="+tp.Alias+",named="+tp.ConfiguredNamedIdentity+")")
+			if tp.ConfiguredNamedIdentity != "" {
+				namedCount++
+			}
+		}
+	}
+	if len(builderIdentities) != 1 {
+		t.Fatalf("got %d gascity/builder sessions, want exactly 1: %v", len(builderIdentities), builderIdentities)
+	}
+	if namedCount != 1 {
+		t.Fatalf("the one gascity/builder session was not recovered via the named-session tier "+
+			"(ConfiguredNamedIdentity unset) — pool spun up a competing worker instead: %v", builderIdentities)
+	}
+}
