@@ -79,27 +79,28 @@ func isDrainAckStopPendingInfo(info sessionpkg.Info) bool {
 		strings.TrimSpace(info.StateReason) == sessionpkg.DrainAckStopPendingReason
 }
 
-func markDrainAckStopPending(session *beads.Bead, sessFront *sessionpkg.Store, clk clock.Clock, stderr io.Writer) bool {
-	if session == nil || sessFront == nil || session.ID == "" {
+// markDrainAckStopPending persists the drain-ack stop-pending transition through
+// the session front door, reading the session identity/name from the typed Info
+// snapshot (front-door migration Step 5b). It no longer mirrors the patch onto a
+// raw *beads.Bead: the two reconciler callers reconstruct DrainAckStopPendingPatch
+// and fold it onto infoByID themselves, and no later this-tick reader consumes the
+// raw bead for these keys — a drain-acked session `continue`s before the
+// wakeTargets/startCandidates append, and the post-loop scans read only ordered[i].ID.
+func markDrainAckStopPending(info sessionpkg.Info, sessFront *sessionpkg.Store, clk clock.Clock, stderr io.Writer) bool {
+	if info.ID == "" || sessFront == nil {
 		return false
 	}
 	if stderr == nil {
 		stderr = io.Discard
 	}
 	batch := sessionpkg.DrainAckStopPendingPatch(clk.Now().UTC())
-	if err := sessFront.ApplyPatch(session.ID, batch); err != nil {
-		name := strings.TrimSpace(session.Metadata["session_name"])
+	if err := sessFront.ApplyPatch(info.ID, batch); err != nil {
+		name := strings.TrimSpace(info.SessionNameMetadata)
 		if name == "" {
-			name = session.ID
+			name = info.ID
 		}
 		fmt.Fprintf(stderr, "session reconciler: marking drain-ack stop-pending %s: %v\n", name, err) //nolint:errcheck
 		return false
-	}
-	if session.Metadata == nil {
-		session.Metadata = make(map[string]string, len(batch))
-	}
-	for key, value := range batch {
-		session.Metadata[key] = value
 	}
 	return true
 }
@@ -361,6 +362,7 @@ func finalizeDrainAckStoppedSession(
 	store beads.Store,
 	rigStores map[string]beads.Store,
 	session *beads.Bead,
+	info sessionpkg.Info,
 	template string,
 	closeIfUnassigned bool,
 	dops drainOps,
@@ -372,12 +374,18 @@ func finalizeDrainAckStoppedSession(
 	if session == nil || store == nil || session.ID == "" {
 		return drainAckFinalizeResult{}
 	}
-	name := strings.TrimSpace(session.Metadata["session_name"])
+	// Decision reads come off the typed Info snapshot (front-door migration Step
+	// 5b); the raw *session is retained only for the whole-bead raw-by-design
+	// helpers below (sessionHasOpenAssignedWorkForReachableStore,
+	// closeSessionBeadIfReachableStoreUnassigned, recordDrainAckAssignedWorkEvent,
+	// sessionAgentMetricIdentity) and the store.Get witness reprojection. Callers
+	// pass the coherent infoByID[session.ID] (== InfoFromPersistedBead(*session)).
+	name := strings.TrimSpace(info.SessionNameMetadata)
 	if template == "" {
-		template = normalizedSessionTemplate(*session, cfg)
+		template = normalizedSessionTemplateInfo(info, cfg)
 	}
 	if template == "" {
-		template = session.Metadata["template"]
+		template = info.Template
 	}
 	recordStopped := func(performedStop bool) {
 		// gc.agent.stops.total counts the stop action, so only the observer
@@ -410,13 +418,7 @@ func finalizeDrainAckStoppedSession(
 	if closeIfUnassigned && !hasAssignedWork {
 		if closeSessionBeadIfReachableStoreUnassigned(cityPath, cfg, store, rigStores, *session, "drained", clk.Now().UTC(), stderr) {
 			session.Status = "closed"
-			if session.Metadata == nil {
-				session.Metadata = make(map[string]string)
-			}
 			closePatch := sessionpkg.ClosePatch(clk.Now().UTC(), "drained")
-			for key, value := range closePatch {
-				session.Metadata[key] = value
-			}
 			if dops != nil {
 				_ = dops.clearDrain(name)
 			}
@@ -426,8 +428,10 @@ func finalizeDrainAckStoppedSession(
 			}
 			recordStopped(true)
 			// write-returns-Info (Step 6d): the snapshot fold is ApplyPatch(the
-			// ClosePatch just mirrored) + MarkClosed(the Status="closed"). The raw
-			// session.Metadata/Status lockstep above stays until the final lockstep drop.
+			// ClosePatch) + MarkClosed(the Status="closed"). The raw metadata mirror
+			// loop is dropped (Step 5b) — no later this-tick reader consumes the raw
+			// bead metadata; the raw session.Status="closed" set stays (a struct field,
+			// not a Metadata bracket write, and asserted by the telemetry close-path test).
 			return drainAckFinalizeResult{batch: closePatch, closed: true}
 		}
 		if latest, err := store.Get(session.ID); err == nil && latest.Status == "closed" {
@@ -458,9 +462,9 @@ func finalizeDrainAckStoppedSession(
 			hasAssignedWork = true
 		}
 	}
-	batch := sessionpkg.AcknowledgeDrainPatch(session.Metadata["wake_mode"] == "fresh")
+	batch := sessionpkg.AcknowledgeDrainPatch(info.WakeMode == "fresh")
 	if hasAssignedWork {
-		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), "idle", session.Metadata["wake_mode"] == "fresh")
+		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), "idle", info.WakeMode == "fresh")
 	}
 	// A drain-ack that completes a restart-request cycle (gc session reset →
 	// agent drain-ack) must also consume restart_requested. The drain-ack
@@ -469,21 +473,20 @@ func finalizeDrainAckStoppedSession(
 	// store, a later cache-reconcile re-emission resurrects it and the
 	// controller honors it as a fresh restart request — a phantom second
 	// restart that rotates session_key and destroys resume continuity (#2574).
-	if session.Metadata["restart_requested"] == "true" {
+	if info.RestartRequested == "true" {
 		batch["restart_requested"] = ""
 	}
 	if err := sessionFrontDoor(store).ApplyPatch(session.ID, batch); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: finalizing drain-ack stopped %s: %v\n", name, err) //nolint:errcheck
-		// Store write failed, so nothing was mirrored onto the raw bead — the
-		// snapshot must stay unchanged (zero result → applyTo no-op).
+		// Store write failed, so nothing changed — the snapshot must stay unchanged
+		// (zero result → applyTo no-op).
 		return drainAckFinalizeResult{}
 	}
-	if session.Metadata == nil {
-		session.Metadata = make(map[string]string, len(batch))
-	}
-	for key, value := range batch {
-		session.Metadata[key] = value
-	}
+	// The raw metadata mirror loop is dropped (Step 5b): the caller folds the
+	// returned batch onto infoByID, and no later this-tick reader consumes the raw
+	// bead metadata for these keys (a drain-acked session `continue`s before the
+	// wakeTargets/startCandidates append; recordStopped/recordDrainAckAssignedWorkEvent
+	// below read identity + store-query results, not the drain-ack batch keys).
 	if dops != nil {
 		_ = dops.clearDrain(name)
 	}
@@ -507,6 +510,7 @@ func reconcileDrainAckStopPending(
 	store beads.Store,
 	rigStores map[string]beads.Store,
 	session *beads.Bead,
+	info sessionpkg.Info,
 	tp TemplateParams,
 	desired bool,
 	dops drainOps,
@@ -516,10 +520,10 @@ func reconcileDrainAckStopPending(
 	rec events.Recorder,
 	stderr io.Writer,
 ) (bool, drainAckFinalizeResult) {
-	if session == nil || !isDrainAckStopPendingInfo(sessionpkg.InfoFromPersistedBead(*session)) {
+	if session == nil || !isDrainAckStopPendingInfo(info) {
 		return false, drainAckFinalizeResult{}
 	}
-	name := strings.TrimSpace(session.Metadata["session_name"])
+	name := strings.TrimSpace(info.SessionNameMetadata)
 	obs, err := workerObserveSessionTargetWithRuntimeHintsWithConfig(cityPath, store, sp, cfg, session.ID, tp.Hints.ProcessNames)
 	if err != nil || obs.Running || obs.Alive {
 		// Async-stop: queueDrainAckAsyncStop takes the session ID (not *session) and
@@ -530,7 +534,7 @@ func reconcileDrainAckStopPending(
 		return true, drainAckFinalizeResult{}
 	}
 	return true, finalizeDrainAckStoppedSession(
-		cityPath, cfg, store, rigStores, session, tp.TemplateName,
+		cityPath, cfg, store, rigStores, session, info, tp.TemplateName,
 		!desired || isPoolManagedSessionBead(*session),
 		dops, dt, clk, rec, stderr,
 	)
@@ -559,10 +563,14 @@ func finalizeDrainAckStopPendingSessions(
 	finalized := 0
 	for i := range sessions {
 		session := &sessions[i]
-		if !isDrainAckStopPendingInfo(sessionpkg.InfoFromPersistedBead(*session)) {
+		// Boundary per-bead projection (same pattern as the advanceSessionDrains
+		// wrappers): this non-reconciler pass loads its own []beads.Bead, so it
+		// projects Info here and feeds the drain-ack helpers off it.
+		info := sessionpkg.InfoFromPersistedBead(*session)
+		if !isDrainAckStopPendingInfo(info) {
 			continue
 		}
-		name := strings.TrimSpace(session.Metadata["session_name"])
+		name := strings.TrimSpace(info.SessionNameMetadata)
 		obs, err := workerObserveSessionTargetWithRuntimeHintsWithConfig(cityPath, store, sp, cfg, session.ID, nil)
 		if err != nil || obs.Running || obs.Alive {
 			queueDrainAckAsyncStop(cityPath, store, sp, cfg, session.ID, name, asyncStopTracker, stderr)
@@ -572,8 +580,8 @@ func finalizeDrainAckStopPendingSessions(
 		// state=drained: open pool session beads occupy slots in the next demand
 		// calculation, while closed beads remain only as lifecycle history.
 		finalizeDrainAckStoppedSession(
-			cityPath, cfg, store, rigStores, session,
-			normalizedSessionTemplate(*session, cfg),
+			cityPath, cfg, store, rigStores, session, info,
+			normalizedSessionTemplateInfo(info, cfg),
 			isPoolManagedSessionBead(*session),
 			dops, dt, clk, rec, stderr,
 		)
@@ -1483,7 +1491,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			dt.clearSuspendDeferral(session.ID)
 		}
 
-		if handled, result := reconcileDrainAckStopPending(cityPath, cfg, sp, store, rigStores, session, tp, desired, dops, dt, asyncStopTracker, clk, rec, stderr); handled {
+		if handled, result := reconcileDrainAckStopPending(cityPath, cfg, sp, store, rigStores, session, info, tp, desired, dops, dt, asyncStopTracker, clk, rec, stderr); handled {
 			// finalizeDrainAckStoppedSession (inside reconcileDrainAckStopPending)
 			// may close the bead in memory (Status=closed) on this true/continue
 			// path; fold that close onto the snapshot so the cross-session min-floor
@@ -1795,7 +1803,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							if template == "" {
 								template = infoPostHeal.Template
 							}
-							if markDrainAckStopPending(session, sessFront, clk, stderr) {
+							if markDrainAckStopPending(infoByID[session.ID], sessFront, clk, stderr) {
 								// Fold the stop-pending transition onto the snapshot (Step 6d):
 								// markDrainAckStopPending mirrors DrainAckStopPendingPatch only on
 								// this true return; its Info keys (state=draining,
@@ -1817,7 +1825,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							template = infoPostHeal.Template
 						}
 						result := finalizeDrainAckStoppedSession(
-							cityPath, cfg, store, rigStores, session, template,
+							cityPath, cfg, store, rigStores, session, infoByID[session.ID], template,
 							true, dops, dt, clk, rec, stderr,
 						)
 						// finalizeDrainAckStoppedSession may close the bead in memory; fold
@@ -2146,7 +2154,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						continue
 					}
 					if alive {
-						if markDrainAckStopPending(session, sessFront, clk, stderr) {
+						if markDrainAckStopPending(infoByID[session.ID], sessFront, clk, stderr) {
 							// Fold the stop-pending transition onto the snapshot (Step 6d);
 							// deterministic DrainAckStopPendingPatch reconstruction, same as the
 							// orphan-arm site above (STEP6-PREPASS-AUDIT group 3).
@@ -2164,7 +2172,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						finalizeDT = nil
 					}
 					result := finalizeDrainAckStoppedSession(
-						cityPath, cfg, store, rigStores, session, tp.TemplateName,
+						cityPath, cfg, store, rigStores, session, infoByID[session.ID], tp.TemplateName,
 						isPoolManagedSessionBead(*session),
 						dops, finalizeDT,
 						clk, rec, stderr,
