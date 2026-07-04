@@ -45,28 +45,48 @@ Enforcement mechanism (already in place, extend per class):
 
 ## Ranked by remaining delta (smallest first = best proof-of-concept for the swap)
 
-### 1. Nudge queue — `nudgequeue.Store` — **~sealed**
-- **Interface:** complete. `Save`/`Terminalize`/`Find*`/`DecodeShadow`; the bead is
-  a *shadow/observer* of a `state.json` authority (`internal/nudgequeue/state.go`).
-- **Access seam:** `nudgesBeadStore()` → `resolveNudgesStore`. `nudgeFrontDoor(`.
-- **Leak shape:** 1–2 read-only observation sites (`cmd/gc/nudge_beads.go` returns a
-  raw bead by design for inspectors). No raw bead construction outside the Store.
-- **Close work:** confirm the observation reads have typed equivalents or are
-  documented raw-by-design; add the nudge cmd files to the guard.
-- **Acceptance:** nudge files in a guard list; `resolveNudgesStore` relocation
-  captures 100% of nudge access. **Size: XS.**
+### 1. Nudge queue — `nudgequeue.Store` — **✅ VERIFIED SEALED (closed 2026-07-04)**
+- **Interface:** complete. `Save`/`Terminalize`/`Find*`/`FindBead`/`DecodeShadow`; the
+  bead is a *shadow/observer* of a `state.json` authority (`internal/nudgequeue/state.go`).
+- **Access seam:** `nudgesBeadStore()` → `resolveNudgesStore`; `nudgeFrontDoor(` (the
+  construction site, `cmd/gc/nudge_beads.go` — a thin adapter over the Store).
+- **Census result:** the nudge shadow bead is `Type:"chore"` + `nudge:<id>` label, and a
+  repo-wide grep finds **zero** raw construction/query/crack of it outside
+  `internal/nudgequeue` (all access is `nudgequeue.Store.Save/Terminalize/Find/FindBead`).
+  The residual `.Metadata["nudge_id"]` reads in `cmd_wait.go` / `nudge_mail_sweep.go` are
+  on **wait/mail** beads that *reference* a nudge — cross-class reads that belong to the
+  wait/mail buckets, NOT nudge-bead access, so they do not block a nudge backend swap.
+  One `doctor_backlog_depth.go:69` `title HasPrefix "nudge:"` classification heuristic is
+  a read-only diagnostic (acceptable raw-by-design).
+- **Outcome:** no code change required — `resolveNudgesStore` relocation already captures
+  100% of nudge-bead access. **This is the closure.** (The adapter can't join a store-free
+  guard list — it legitimately holds the `nudgeFrontDoor(` construction — so the guard
+  entry is N/A; the seal is structural.)
 
-### 2. Orders — `orders.Store` — **~95%**
+### 2. Orders — `orders.Store` — **re-scoped: an access-layer Store-routing refactor, not a label cleanup**
 - **Interface:** strong. `CreateRun`/`SetOutcome`/`SetCursor`/`CloseRun`/`RecentRuns`;
-  label-codec (`order-run:<scoped>` + outcome labels) confined to `decodeRun`.
+  label-codec (`order-run:<scoped>` + outcome labels) confined to `decodeRun`/`baseLabels`.
 - **Access seam:** `ordersBeadStore(scope)` → `resolveOrderStore` /
   `resolveOrderStoreTarget` (per-order federation for rig/pool scope).
-- **Leak shape:** a few raw label-construction / cursor-label sites in
-  `cmd/gc/order_dispatch.go` and one parse in `internal/api/orders_feed.go`.
-- **Close work:** add `Store.EventCursorLabels()` / `Store.IssueTrackingLabel()`
-  helpers; route the raw sites through them; guard the order files.
-- **Acceptance:** no `order-run:`/`order:` label literal outside `orders`/its Store
-  helpers; guard-enforced. **Size: S.**
+- **Census correction (2026-07-04):** the `order-run:`/`order:`/`order-tracking`/`seq:`
+  label literals are a **DELIBERATE, drift-test-guarded triple-declaration** — private
+  consts in `cmd/gc/order_dispatch.go` (canonical), `internal/orders/store.go` (codec), and
+  `internal/coordclass/classify.go` (classification), kept in sync by the coordclass drift
+  test to avoid import cycles. That is NOT a leak to centralize; leave it (touching it fights
+  the layering + the guard).
+- **The real leak = raw order-bead CRUD/query that bypasses `orders.Store`:**
+  - `cmd/gc/order_dispatch.go:1454` raw `store.Update(id, {Labels:["order-run:"+scoped]})`
+    (→ a Store outcome/label method); the `orders_feed.go:318/350/386` raw `ListQuery{Label:…}`
+    (→ `RecentRuns`/a Store query); `huma_handlers_orders.go:420/484` label-built queries;
+    `cmd_order.go:731` labels a **molecule wisp root** (rootID from `molecule.Instantiate`)
+    with order labels — a cross-concern with molecule, NOT a `CreateRun`.
+  - These are entangled with molecule/wisp-root labeling, the manual-vs-dispatcher paths,
+    and `resolveOrderStoreTarget` federation — a control-plane refactor, byte-identity-gated.
+- **Close work (own focused phase):** per-site, map each raw op to the `orders.Store` method
+  that is its byte-identical replacement (the store.go docstrings already name these), preserving
+  the wisp-root labeling + federation semantics; then guard raw order-bead ops outside `orders`.
+- **Acceptance:** order-bead CRUD/query only through `orders.Store`; guard-enforced.
+  **Size: M (control-plane; do as its own pass with fresh context, not a tail-end quick close).**
 
 ### 3. Mail — `mail.Provider` + `internal/mail/beadmail` — **strong seal, surgical leak**
 - **Interface:** complete for user-facing ops; one ~60-line conversion edge
