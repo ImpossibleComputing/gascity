@@ -165,7 +165,7 @@ func doImportCredentialAdd(rule gitcred.Rule, global bool, stdout, stderr io.Wri
 		return 1
 	}
 
-	pointer, pointerType, err := selectPointer(rule)
+	pointerType, err := selectPointer(rule)
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -218,7 +218,6 @@ func doImportCredentialAdd(rule gitcred.Rule, global bool, stdout, stderr io.Wri
 		return fail(err.Error())
 	}
 	fmt.Fprintf(stdout, "Added pack credential for %q (%s) to %s\n", normalizedMatch, pointerType, path) //nolint:errcheck
-	_ = pointer
 	return 0
 }
 
@@ -240,7 +239,7 @@ func doImportCredentialList(stdout, stderr io.Writer) int {
 		return 0
 	}
 	for _, lr := range loaded {
-		_, pointerType, _ := selectPointer(lr.Rule)
+		pointerType, _ := selectPointer(lr.Rule)
 		pointer := pointerValue(lr.Rule)
 		username := lr.Username
 		if strings.TrimSpace(username) == "" {
@@ -318,29 +317,29 @@ func findCredentialInOtherLayer(normalizedMatch, excludePath string) string {
 }
 
 // selectPointer validates that exactly one pointer field is set and returns its
-// value and its type name (helper|token_file|token_env|ssh_key_file).
-func selectPointer(rule gitcred.Rule) (value, pointerType string, err error) {
+// type name (helper|token_file|token_env|ssh_key_file).
+func selectPointer(rule gitcred.Rule) (pointerType string, err error) {
 	set := 0
 	if rule.Helper != "" {
 		set++
-		value, pointerType = rule.Helper, "helper"
+		pointerType = "helper"
 	}
 	if rule.TokenFile != "" {
 		set++
-		value, pointerType = rule.TokenFile, "token_file"
+		pointerType = "token_file"
 	}
 	if rule.TokenEnv != "" {
 		set++
-		value, pointerType = rule.TokenEnv, "token_env"
+		pointerType = "token_env"
 	}
 	if rule.SSHKeyFile != "" {
 		set++
-		value, pointerType = rule.SSHKeyFile, "ssh_key_file"
+		pointerType = "ssh_key_file"
 	}
 	if set != 1 {
-		return "", "", fmt.Errorf("exactly one of --helper, --token-file, --token-env, or --ssh-key-file is required")
+		return "", fmt.Errorf("exactly one of --helper, --token-file, --token-env, or --ssh-key-file is required")
 	}
-	return value, pointerType, nil
+	return pointerType, nil
 }
 
 func pointerValue(rule gitcred.Rule) string {

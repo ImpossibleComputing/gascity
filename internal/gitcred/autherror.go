@@ -1,3 +1,5 @@
+// Package gitcred resolves git credentials for private pack imports and injects
+// them into the network git seams via git's native credential-helper protocol.
 package gitcred
 
 import (

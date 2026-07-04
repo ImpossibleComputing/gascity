@@ -81,7 +81,7 @@ func TestImportCredentialAddDuplicateRejected(t *testing.T) {
 func TestImportCredentialAddNoPointer(t *testing.T) {
 	setupCredCity(t)
 	var stderr strings.Builder
-	if rc := doImportCredentialAdd(gitcred.Rule{Match: "github.com"}, false, io_discard(), &stderr); rc == 0 {
+	if rc := doImportCredentialAdd(gitcred.Rule{Match: "github.com"}, false, discardBuf(), &stderr); rc == 0 {
 		t.Fatalf("add with no pointer should fail")
 	}
 	if !strings.Contains(stderr.String(), "exactly one of") {
@@ -92,7 +92,7 @@ func TestImportCredentialAddNoPointer(t *testing.T) {
 func TestImportCredentialAddRejectsURLMatch(t *testing.T) {
 	setupCredCity(t)
 	var stderr strings.Builder
-	if rc := doImportCredentialAdd(gitcred.Rule{Match: "https://github.com/org", Helper: "x"}, false, io_discard(), &stderr); rc == 0 {
+	if rc := doImportCredentialAdd(gitcred.Rule{Match: "https://github.com/org", Helper: "x"}, false, discardBuf(), &stderr); rc == 0 {
 		t.Fatalf("URL match should fail")
 	}
 	if !strings.Contains(stderr.String(), "not a URL") {
@@ -103,7 +103,7 @@ func TestImportCredentialAddRejectsURLMatch(t *testing.T) {
 func TestImportCredentialAddRejectsUserinfoMatch(t *testing.T) {
 	setupCredCity(t)
 	var stderr strings.Builder
-	if rc := doImportCredentialAdd(gitcred.Rule{Match: "user@github.com", Helper: "x"}, false, io_discard(), &stderr); rc == 0 {
+	if rc := doImportCredentialAdd(gitcred.Rule{Match: "user@github.com", Helper: "x"}, false, discardBuf(), &stderr); rc == 0 {
 		t.Fatalf("userinfo match should fail")
 	}
 	if !strings.Contains(stderr.String(), "user info") {
@@ -114,7 +114,7 @@ func TestImportCredentialAddRejectsUserinfoMatch(t *testing.T) {
 func TestImportCredentialAddRefusesLiteralToken(t *testing.T) {
 	setupCredCity(t)
 	var stderr strings.Builder
-	if rc := doImportCredentialAdd(gitcred.Rule{Match: "github.com", Helper: "ghp_literaltoken"}, false, io_discard(), &stderr); rc == 0 {
+	if rc := doImportCredentialAdd(gitcred.Rule{Match: "github.com", Helper: "ghp_literaltoken"}, false, discardBuf(), &stderr); rc == 0 {
 		t.Fatalf("literal token should be refused")
 	}
 	if !strings.Contains(stderr.String(), "refusing a literal token") {
@@ -174,7 +174,7 @@ func TestImportCredentialListExactOutput(t *testing.T) {
 func TestImportCredentialListEmpty(t *testing.T) {
 	setupCredCity(t)
 	var stdout strings.Builder
-	if rc := doImportCredentialList(&stdout, io_discard()); rc != 0 {
+	if rc := doImportCredentialList(&stdout, discardBuf()); rc != 0 {
 		t.Fatalf("list rc")
 	}
 	if !strings.Contains(stdout.String(), "No pack credentials configured") {
@@ -186,7 +186,7 @@ func TestImportCredentialListCommandLayer(t *testing.T) {
 	setupCredCity(t)
 	t.Setenv(gitcred.EnvCredentialCommand, "my-helper get")
 	var stdout strings.Builder
-	if rc := doImportCredentialList(&stdout, io_discard()); rc != 0 {
+	if rc := doImportCredentialList(&stdout, discardBuf()); rc != 0 {
 		t.Fatalf("list rc")
 	}
 	if !strings.Contains(stdout.String(), "command=$GC_GIT_CREDENTIAL_COMMAND") {
@@ -216,9 +216,9 @@ func TestImportCredentialRemove(t *testing.T) {
 func TestImportCredentialRemoveNotFound(t *testing.T) {
 	setupCredCity(t)
 	var stderr strings.Builder
-	if rc := doImportCredentialRemove("github.com/none", false, io_discard(), &stderr); rc == 0 {
+	if rc := doImportCredentialRemove("github.com/none", false, discardBuf(), &stderr); rc == 0 {
 		t.Fatalf("remove of absent credential should fail")
 	}
 }
 
-func io_discard() *strings.Builder { return &strings.Builder{} }
+func discardBuf() *strings.Builder { return &strings.Builder{} }

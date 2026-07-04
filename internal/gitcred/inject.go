@@ -106,7 +106,7 @@ func isHTTPCloneURL(cloneURL string) bool {
 }
 
 // shellQuote single-quotes s for git's "!"-helper, which git runs via sh. A
-// single quote inside s is escaped as the standard '\'' sequence.
+// single quote inside s is escaped as the standard '\” sequence.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
