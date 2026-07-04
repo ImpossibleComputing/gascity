@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/git"
+	"github.com/gastownhall/gascity/internal/gitcred"
 )
 
 func deriveImportName(source string) string {
@@ -161,15 +162,27 @@ func lsRemoteHeadArgs(cloneURL string) []string {
 // git transports (git.UntrustedRemoteGitConfigArgs) so a fenced public host
 // cannot redirect the probe to an internal target once the URL is shelled to
 // git.
-func defaultHeadCommit(source string) (string, error) {
+func defaultHeadCommit(cityRoot, source string) (string, error) {
 	cloneURL := config.NormalizeRemoteSource(source)
-	cmd := exec.Command("git", lsRemoteHeadArgs(cloneURL)...)
+	inj, err := gitcred.CredentialedNetworkArgs("", cityRoot, cloneURL)
+	if err != nil {
+		return "", fmt.Errorf("loading git credentials for %s: %w", gitcred.RedactUserinfo(cloneURL), err)
+	}
+	// inj.CfgArgs go BEFORE the existing args, which already carry the
+	// untrusted-remote hardening (lsRemoteHeadArgs).
+	cmd := exec.Command("git", append(inj.CfgArgs, lsRemoteHeadArgs(cloneURL)...)...)
 	// Strip git-locating env vars so a leaked GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
 	// (or config injection) from a parent pre-commit hook or worktree tooling
-	// cannot perturb how this remote HEAD probe runs.
-	cmd.Env = git.SanitizedEnv()
+	// cannot perturb how this remote HEAD probe runs. The base env stays
+	// SanitizedEnv (not HermeticEnv) to preserve today's behavior byte-for-byte;
+	// the SanitizedEnv/HermeticEnv asymmetry with the cache clone is a known
+	// pre-existing concern flagged for a later unify.
+	cmd.Env = append(git.SanitizedEnv(), inj.Env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if authErr := gitcred.ClassifyAuthError(cloneURL, inj, string(out), err); authErr != nil {
+			return "", authErr
+		}
 		return "", fmt.Errorf("resolving HEAD for %q: %w", source, err)
 	}
 	fields := strings.Fields(string(out))

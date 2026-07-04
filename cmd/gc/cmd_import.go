@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/git"
+	"github.com/gastownhall/gascity/internal/gitcred"
 	"github.com/gastownhall/gascity/internal/importsvc"
 	"github.com/gastownhall/gascity/internal/packman"
 	"github.com/gastownhall/gascity/internal/pricing"
@@ -34,6 +35,10 @@ var (
 	defaultImportConstraint = packman.DefaultConstraint
 	resolveImportHeadCommit = defaultImportHeadCommit
 )
+
+// resolveImportVersion and resolveImportHeadCommit carry a leading cityRoot so
+// the network ls-remote can resolve per-city pack credentials. Command tests
+// stub these vars; the importsvc.Deps mapping in importSvcDeps threads them.
 
 const cityPackSchema = 1
 
@@ -1346,15 +1351,15 @@ func hasRepositoryRefInSource(source string) bool {
 	return strings.Contains(source, "#")
 }
 
-func defaultImportVersionForSource(source string) (string, error) {
-	resolved, err := resolveImportVersion(source, "")
+func defaultImportVersionForSource(cityRoot, source string) (string, error) {
+	resolved, err := resolveImportVersion(cityRoot, source, "")
 	if err == nil {
 		return defaultImportConstraint(resolved.Version)
 	}
 	if !errors.Is(err, packman.ErrNoSemverTags) {
 		return "", err
 	}
-	commit, err := resolveImportHeadCommit(source)
+	commit, err := resolveImportHeadCommit(cityRoot, source)
 	if err != nil {
 		return "", err
 	}
@@ -1399,15 +1404,26 @@ func localGitRepoRoot(targetDir string) (string, bool, error) {
 	return strings.TrimSpace(string(out)), true, nil
 }
 
-func defaultImportHeadCommit(source string) (string, error) {
+func defaultImportHeadCommit(cityRoot, source string) (string, error) {
 	cloneURL := config.NormalizeRemoteSource(source)
-	cmd := exec.Command("git", "ls-remote", cloneURL, "HEAD")
+	inj, err := gitcred.CredentialedNetworkArgs("", cityRoot, cloneURL)
+	if err != nil {
+		return "", fmt.Errorf("loading git credentials for %s: %w", gitcred.RedactUserinfo(cloneURL), err)
+	}
+	// inj.CfgArgs go before the subcommand. This site keeps its SanitizedEnv base
+	// and does NOT add the UntrustedRemoteGitConfigArgs hardening that the
+	// importsvc HEAD probe (site 3) carries — a pre-existing asymmetry preserved
+	// here for byte-identical behavior and flagged for a later unify.
+	cmd := exec.Command("git", append(inj.CfgArgs, "ls-remote", cloneURL, "HEAD")...)
 	// Strip git-locating env vars so a leaked GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
 	// (or config injection) from a parent pre-commit hook or worktree tooling
 	// cannot perturb how this remote HEAD probe runs.
-	cmd.Env = git.SanitizedEnv()
+	cmd.Env = append(git.SanitizedEnv(), inj.Env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if authErr := gitcred.ClassifyAuthError(cloneURL, inj, string(out), err); authErr != nil {
+			return "", authErr
+		}
 		return "", fmt.Errorf("resolving HEAD for %q: %w", source, err)
 	}
 	fields := strings.Fields(string(out))
