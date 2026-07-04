@@ -133,3 +133,41 @@ func TestMatchHostOnlyRuleMatchesAnyPath(t *testing.T) {
 		t.Fatalf("host-only rule should match any path on that host")
 	}
 }
+
+// TestMatchPortHostSymmetry guards the parent/helper agreement for a
+// non-default-port host. The parent resolves the rule via MatchSource, which
+// strips the port from the URL host; the helper resolves via Match, and git
+// supplies the request host WITH the port under credential.useHttpPath=true. A
+// credential is host-scoped, not port-scoped, so a single rule authored as the
+// bare host must match both call sites for the same URL.
+func TestMatchPortHostSymmetry(t *testing.T) {
+	rules := ruleset(Rule{Match: "git.corp.example", Helper: "token"})
+
+	parent, parentOK := rules.MatchSource("https://git.corp.example:8443/o/r")
+	if !parentOK {
+		t.Fatalf("parent MatchSource should match the bare-host rule for a :port URL")
+	}
+
+	// The helper receives req.Host with the port, exactly as git supplies it.
+	helper, helperOK := rules.Match("git.corp.example:8443", "o/r")
+	if !helperOK {
+		t.Fatalf("helper Match should match the bare-host rule when git supplies host:port")
+	}
+
+	if parent.Helper != helper.Helper || parent.Match != helper.Match {
+		t.Fatalf("parent/helper disagreement: parent=%+v helper=%+v", parent, helper)
+	}
+}
+
+// TestMatchRuleHostWithPortNormalized guards the other direction: a rule
+// authored with an explicit :port still matches both a bare-host URL and a
+// with-port URL, since the credential is host-scoped.
+func TestMatchRuleHostWithPortNormalized(t *testing.T) {
+	rules := ruleset(Rule{Match: "git.corp.example:8443/o", Helper: "token"})
+	if _, ok := rules.MatchSource("https://git.corp.example/o/r"); !ok {
+		t.Fatalf("a rule authored with :port should still match a bare-host URL")
+	}
+	if _, ok := rules.Match("git.corp.example:8443", "o/r"); !ok {
+		t.Fatalf("a rule authored with :port should match a with-port request host")
+	}
+}

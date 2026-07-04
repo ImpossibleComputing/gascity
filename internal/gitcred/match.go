@@ -46,7 +46,7 @@ func (r *Rules) MatchSource(source string) (LoadedRule, bool) {
 // with a transport-compatibility gate. Rules incompatible with tr are skipped
 // and matching continues to the next-best candidate.
 func (r *Rules) matchTransport(host, path string, tr transport) (LoadedRule, bool) {
-	host = strings.ToLower(strings.TrimSpace(host))
+	host = stripHostPort(strings.ToLower(strings.TrimSpace(host)))
 	if host == "" {
 		return LoadedRule{}, false
 	}
@@ -95,9 +95,36 @@ func splitMatch(match string) (host, path string) {
 	match = strings.TrimSuffix(match, "/*")
 	match = strings.TrimSuffix(match, "/")
 	if i := strings.IndexByte(match, '/'); i >= 0 {
-		return strings.ToLower(match[:i]), normalizeMatchPath(match[i+1:])
+		return stripHostPort(strings.ToLower(match[:i])), normalizeMatchPath(match[i+1:])
 	}
-	return strings.ToLower(match), ""
+	return stripHostPort(strings.ToLower(match)), ""
+}
+
+// stripHostPort removes a trailing ":port" from a host so a credential rule is
+// matched host-scoped, not port-scoped. Git supplies the request host WITH the
+// port under credential.useHttpPath=true, while the parent's URL parse strips
+// it via url.Hostname; normalizing both sides here keeps a bare-host rule
+// matching both. An IPv6 literal ("[::1]" or "[::1]:8443") keeps its bracketed
+// address; only the port suffix after the closing bracket is dropped.
+func stripHostPort(host string) string {
+	if host == "" {
+		return ""
+	}
+	if strings.HasPrefix(host, "[") {
+		// IPv6 literal: strip only a ":port" that follows the closing bracket.
+		if end := strings.IndexByte(host, ']'); end >= 0 {
+			return host[:end+1]
+		}
+		return host
+	}
+	// A bare IPv6 address (multiple colons, no brackets) has no port; leave it.
+	if strings.Count(host, ":") > 1 {
+		return host
+	}
+	if i := strings.LastIndexByte(host, ':'); i >= 0 {
+		return host[:i]
+	}
+	return host
 }
 
 // normalizeMatchPath trims leading/trailing slashes and strips a trailing
