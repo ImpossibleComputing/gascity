@@ -1,7 +1,19 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `366e203f3`+** (6d PRE-PASS DELETION
+worktree `.claude/worktrees/object-front-doors`, **HEAD `1d2ea2028`+**.
+
+> **CURRENT PHASE: the LOCKSTEP DROP** (6d pre-pass deletion was complete at `3375f7cc3`).
+> Steps **1** (`ec6127ead` circuit persist → drop `circuitSessionByIdentity`), **2a**
+> (`4bcec563b` `completeDrain` store-only), **2b** (`1d2ea2028` `advanceSessionDrains` off the
+> raw bead → `beadByID`/`sessionLookup` retired) are DONE + fable-reviewed + pushed. **NEXT =
+> Step 3** (awake-scan domain). The authoritative per-step plan + paste-ready prompt for this
+> phase are **`RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md`** + **`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md`**.
+> The rest of this file is the deeper history/design record.
+
+---
+
+_Historical header (pre-lockstep-drop):_ **HEAD `366e203f3`+** (6d PRE-PASS DELETION
 COMPLETE — all 22 folds + blanket pre-pass + both aggregating refreshes + `refreshSessionInfo` gone).
 
 This is the authoritative handoff for finishing the session reconciler's move off
