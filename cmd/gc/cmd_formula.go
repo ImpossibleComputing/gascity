@@ -919,15 +919,34 @@ func markCookSourceInProgress(store beads.Store, attachBeadID, rootID string) er
 		// no-assignee invariant is what keeps a worker off a formula source.
 		return nil
 	}
-	if !sling.ShouldPromoteWorkflowLaunchStatus(source.Status) {
+	rootID = strings.TrimSpace(rootID)
+	promote := sling.ShouldPromoteWorkflowLaunchStatus(source.Status)
+	// A re-cook of an already-in_progress source that root1 left stranded (root1
+	// terminated but, lacking gc.source_bead_id, could not transition the
+	// source) mints a fresh root2. The status is no longer promotable, so
+	// without this the marker would keep pointing at the closed root1 and the
+	// reconciler heal would resolve the source against root1 while root2 runs —
+	// then clear the marker, permanently orphaning source<->root2. So refresh
+	// the marker whenever the source ALREADY carries one, even when the status
+	// isn't promotable. Guarded on an existing marker so an unrelated
+	// in_progress bead is never stamped.
+	hasCookMarker := strings.TrimSpace(source.Metadata[beadmeta.CookAttachLaunchMetadataKey]) != ""
+	if !promote && !hasCookMarker {
 		return nil
 	}
-	inProgress := "in_progress"
-	opts := beads.UpdateOpts{Status: &inProgress}
-	// Stamp the launch marker atomically with the flip so the reconciler heal
-	// can always find the root of an in_progress cook source.
-	if rootID = strings.TrimSpace(rootID); rootID != "" {
+	opts := beads.UpdateOpts{}
+	if promote {
+		inProgress := "in_progress"
+		opts.Status = &inProgress
+	}
+	// Stamp/refresh the launch marker atomically with the flip so the reconciler
+	// heal always resolves an in_progress cook source against its CURRENT root.
+	if rootID != "" {
 		opts.Metadata = map[string]string{beadmeta.CookAttachLaunchMetadataKey: rootID}
+	}
+	if opts.Status == nil && opts.Metadata == nil {
+		// Nothing to change (already in_progress, and no new root to record).
+		return nil
 	}
 	if err := store.Update(attachBeadID, opts); err != nil {
 		return fmt.Errorf("marking cook attach source %s in_progress: %w", attachBeadID, err)

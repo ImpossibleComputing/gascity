@@ -790,6 +790,42 @@ func TestMarkCookSourceInProgress(t *testing.T) {
 			t.Fatalf("launch marker = %q, want empty (assigned bead must not be marked)", got.Metadata[beadmeta.CookAttachLaunchMetadataKey])
 		}
 	})
+	t.Run("refreshes the marker on a re-cook of an already in_progress source", func(t *testing.T) {
+		store := beads.NewMemStore()
+		src, _ := store.Create(beads.Bead{Title: "src", Type: "task"})
+		// First cook: flips to in_progress + marker=root1.
+		if err := markCookSourceInProgress(store, src.ID, "gcg-root-1"); err != nil {
+			t.Fatalf("first cook: %v", err)
+		}
+		// Re-cook after root1 closed but before the heal ran: source is still
+		// in_progress; the marker MUST advance to root2 so the heal resolves it
+		// against the live root, not the superseded one.
+		if err := markCookSourceInProgress(store, src.ID, "gcg-root-2"); err != nil {
+			t.Fatalf("re-cook: %v", err)
+		}
+		got, _ := store.Get(src.ID)
+		if got.Status != "in_progress" {
+			t.Fatalf("status = %q, want in_progress", got.Status)
+		}
+		if got.Metadata[beadmeta.CookAttachLaunchMetadataKey] != "gcg-root-2" {
+			t.Fatalf("launch marker = %q, want gcg-root-2 (must track the current root across a re-cook)", got.Metadata[beadmeta.CookAttachLaunchMetadataKey])
+		}
+	})
+	t.Run("never stamps an unrelated in_progress bead that carries no cook marker", func(t *testing.T) {
+		store := beads.NewMemStore()
+		src, _ := store.Create(beads.Bead{Title: "human work", Type: "task"})
+		inProgress := "in_progress"
+		if err := store.Update(src.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+			t.Fatalf("pre-set in_progress: %v", err)
+		}
+		if err := markCookSourceInProgress(store, src.ID, "gcg-root-1"); err != nil {
+			t.Fatalf("markCookSourceInProgress: %v", err)
+		}
+		got, _ := store.Get(src.ID)
+		if got.Metadata[beadmeta.CookAttachLaunchMetadataKey] != "" {
+			t.Fatalf("launch marker = %q, want empty (a non-cook in_progress bead must never be stamped)", got.Metadata[beadmeta.CookAttachLaunchMetadataKey])
+		}
+	})
 }
 
 func TestFormulaCookAttachGraphV2CreatesFreshRootForBareBeadTarget(t *testing.T) {
