@@ -163,16 +163,27 @@ func buildAwakeInputFromReconciler(
 
 	// Runtime liveness comes from wakeTargets. Attachment is probed only when
 	// it can affect the awake decision; the common active desired-session path
-	// is already awake and has no idle reference to suppress.
+	// is already awake and has no idle reference to suppress. Index the typed
+	// snapshot by (unique) session ID for the per-target reads — keying by ID is
+	// order-independent, so it does not disturb the SessionName last-write-wins
+	// ordering the session scan above depends on. Every wakeTarget's bead is one
+	// of the sessionInfos (both derive from the reconciler's `ordered` set), so a
+	// miss yields a zero Info whose empty SessionNameMetadata skips the target —
+	// the same skip the former empty-session_name read produced.
+	infoBy := make(map[string]session.Info, len(sessionInfos))
+	for _, in := range sessionInfos {
+		infoBy[in.ID] = in
+	}
 	for _, target := range wakeTargets {
-		name := strings.TrimSpace(target.session.Metadata["session_name"])
+		info := infoBy[target.session.ID]
+		name := strings.TrimSpace(info.SessionNameMetadata)
 		if name == "" {
 			continue
 		}
 		if target.alive {
 			input.RunningSessions[name] = true
 		}
-		if shouldProbeAttachmentForAwakeInput(target, cfg, poolDesired) {
+		if shouldProbeAttachmentForAwakeInput(info, target.alive, cfg, poolDesired) {
 			if attached, err := workerSessionTargetAttachedWithConfig("", nil, sp, nil, name); err == nil && attached {
 				input.AttachedSessions[name] = true
 			}
@@ -185,23 +196,24 @@ func buildAwakeInputFromReconciler(
 	return input
 }
 
-func shouldProbeAttachmentForAwakeInput(target wakeTarget, cfg *config.City, poolDesired map[string]int) bool {
-	if target.session == nil {
+func shouldProbeAttachmentForAwakeInput(info session.Info, alive bool, cfg *config.City, poolDesired map[string]int) bool {
+	if !alive {
 		return false
 	}
-	if !target.alive {
-		return false
-	}
-	state := target.session.Metadata["state"]
+	// MetadataState is the RAW state metadata (verbatim), matching the former
+	// target.session.Metadata["state"] read — NOT the normalized, closed-blanked
+	// Info.State, which would flip the probe verdict for a closed bead whose raw
+	// state is still "active".
+	state := info.MetadataState
 	if state != string(session.StateActive) && state != string(session.StateAwake) {
 		return true
 	}
-	if target.session.Metadata["detached_at"] != "" {
+	if info.DetachedAt != "" {
 		return true
 	}
-	template := normalizedSessionTemplate(*target.session, cfg)
+	template := normalizedSessionTemplateInfo(info, cfg)
 	if template == "" {
-		template = target.session.Metadata["template"]
+		template = info.Template
 	}
 	if template != "" && poolDesired[template] > 0 {
 		return false
