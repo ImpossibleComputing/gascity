@@ -7,8 +7,19 @@ Paste the block below into a fresh session.
 Continue and FINISH the **session reconciler front-door "lockstep drop"** on **PR #3839** (branch
 `upstream/object-front-doors-cleanup`, base `main`, DRAFT, worktree
 `/data/projects/gascity/.claude/worktrees/object-front-doors`; run `git rev-parse HEAD`, expect
-`347bcd0e1` or later). The **entire decision-path READ conversion is DONE (Steps 1–5a)**. What remains is
-the delete-the-scaffolding phase: **Steps 5b → 5c → 5d → 5e → 6e.** Do them in order, one commit each.
+`b98725a35` or later). The **entire decision-path READ conversion is DONE (Steps 1–5a)** and **Step 5b is
+DONE** (`97fd6fbc6` drain-ack family). What remains: **Steps 5c → 5d → 5e → 6e.** Do them in order, one commit each.
+
+**READ THIS FIRST — a systemic blocker was found & resolved in the 5b session (LOCKSTEP-DROP.md CONT / memory
+CONT-31):** the raw metadata mirror WRITES are NOT read-dead — the controller's post-reconcile
+`recordReconcileTraceResults` (city_runtime.go `beadReconcileTick`) reads `open[i].Metadata["state"]/["sleep_reason"]`
+for the always-on gc-trace, and `open` shares Metadata maps with the reconciler's `ordered` set, so deleting a
+mirror stales that trace. There is NO byte-identical replacement (an infoByID-return fix was fable-refuted:
+`preWakeCommit` mirrors onto a discarded `store.Get` copy → stale for woken sessions). **Owner-approved fix
+already landed (`245a86b4a`):** the gc-trace terminal read now sources from the authoritative post-reconcile
+store snapshot (reusing the dispatch snapshot, no added query) — an intentional accuracy improvement, trace-only.
+**This UNBLOCKS 5c:** deleting the remaining mirror WRITES no longer stales the trace for open sessions (only the
+closed-this-tick fallback residual, LOW). Do NOT re-litigate this; build on it.
 
 **Read first, in order:**
 1. `engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-LOCKSTEP-DROP-FINISH.md` — START HERE. The
@@ -31,12 +42,13 @@ git checkout go.sum
 ```
 
 **DO, in order (re-grep every line anchor — they drift):**
-- **5b** — drain-ack finalize family off the raw bead: `finalizeDrainAckStoppedSession`
-  (`session_reconciler.go:358`) + `markDrainAckStopPending` (`:82`) drop their `*beads.Bead` param, read
-  `Info.WakeMode`/`RestartRequested`; the NDI witness arm builds `InfoFromPersistedBead(latest)`; the
-  mirror loops (`:102`/`:418`/`:485`) die with the params. Keep the non-reconciler
-  `finalizeDrainAckStopPendingSessions` boundary projection.
-- **5c** — **THE riskiest.** DELETE the raw lockstep mirror WRITE loops (re-grep
+- ~~**5b**~~ **DONE** (`97fd6fbc6`): drain-ack family off raw reads + its 3 mirror loops deleted.
+  `markDrainAckStopPending` took `session.Info` (dropped the bead); `finalizeDrainAckStoppedSession` gained an
+  `Info` param but **KEPT its `*beads.Bead`** (the plan's "drop the param" was infeasible — the whole-bead
+  raw-by-design helpers `sessionHasOpenAssignedWorkForReachableStore`/`closeSessionBeadIfReachableStoreUnassigned`/
+  `recordDrainAckAssignedWorkEvent`/`sessionAgentMetricIdentity` + the store.Get witness need the raw bead).
+  Kept the `session.Status="closed"` struct write + witness swap (non-bracket, telemetry-test-asserted).
+- **5c** — **THE riskiest. START HERE.** DELETE the raw lockstep mirror WRITE loops (re-grep
   `session\.Metadata\[.*\] *=[^=]`) — but ONLY after a **per-key census**: mirrors whose keys the
   START-EXECUTION path reads off the raw bead (`buildPreparedStart` reads session_key/instance_token/
   last_woke_at/currently_processing_bead_id via `startCandidate.session`) **SURVIVE** and must be

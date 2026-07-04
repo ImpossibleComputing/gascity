@@ -1,7 +1,18 @@
 # Reconciler front-door LOCKSTEP DROP — finish line (Steps 5b–5e + 6e)
 
+> **STATUS UPDATE (2026-07-04, HEAD `b98725a35`): Step 5b is DONE + a systemic blocker was found & resolved.**
+> A trace-decouple **precursor** (`245a86b4a`) landed first: the raw mirror WRITES are NOT read-dead — the
+> post-reconcile gc-trace read (`recordReconcileTraceResults`) reads `open[i].Metadata` via maps shared with the
+> reconciler's `ordered`, so deleting a mirror stales the trace, and there's no byte-identical replacement. Owner
+> chose to source that read from the authoritative post-reconcile store snapshot (accuracy improvement, trace-only)
+> — which UNBLOCKS the mirror deletions. Step 5b (`97fd6fbc6`) then took the drain-ack family off raw reads +
+> deleted its mirrors, KEEPING `finalizeDrainAckStoppedSession`'s `*beads.Bead` param (the "drop the param"
+> instruction below is INFEASIBLE — raw-by-design whole-bead helpers). **RESUME AT 5c.** Full detail + the 5c
+> unblock are in `RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md` progress + memory CONT-31. The 5b/5c framing below is
+> historical; read it for the census discipline, not the exact param mechanics.
+
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`, worktree
-`.claude/worktrees/object-front-doors`, **HEAD `347bcd0e1`** (re-grep `git rev-parse HEAD`; every
+`.claude/worktrees/object-front-doors`, **HEAD `b98725a35`** (re-grep `git rev-parse HEAD`; every
 line number below drifts as you edit — ALWAYS re-grep before touching).
 
 ## Where things stand
