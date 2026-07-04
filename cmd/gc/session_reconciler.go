@@ -3065,8 +3065,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		wakeEvals[target.session.ID] = eval
 	}
 
-	idleProbeTargets := selectIdleProbeTargets(wakeTargets, wakeEvals, dt)
-	launchIdleProbes(ctx, idleProbeTargets, wakeTargets, dt, sp, clk)
+	idleProbeTargets := selectIdleProbeTargets(wakeTargets, wakeEvals, dt, infoByID)
+	launchIdleProbes(ctx, idleProbeTargets, wakeTargets, dt, sp, clk, infoByID)
 	recordPhase(TraceSiteSessionReconcileAwakeSet, "session_reconcile.compute_awake_set_and_idle_probes", phaseStart, map[string]any{
 		"wake_target_count":      len(wakeTargets),
 		"idle_probe_target_cnt":  len(idleProbeTargets),
@@ -3080,7 +3080,15 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		if ctx != nil && ctx.Err() != nil {
 			return 0
 		}
-		name := target.session.Metadata["session_name"]
+		// Typed projection for this iteration's decision reads. infoByID is
+		// coherent here: every forward-pass mutation folds onto it, and this
+		// loop's own mutations fold back before any later read observes them.
+		// The whole-bead helpers below (persistSleepPolicyMetadata,
+		// sessionHasOpenAssignedWorkForReachableStore, pruneAgentHomeWorktreeIfSafe,
+		// collectSessionAssignedWork inside emitSessionStrandedDiagnostic) stay raw
+		// by design.
+		info := infoByID[target.session.ID]
+		name := info.SessionNameMetadata
 		decision, hasDec := awakeDecisions[name]
 		shouldWake := hasDec && decision.ShouldWake
 
@@ -3092,22 +3100,22 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 
 		if shouldWake && !target.alive {
 			// Session should be awake but isn't — wake it.
-			if isFailedCreateSessionBead(*target.session) {
+			if isFailedCreateSessionInfo(info) {
 				if trace != nil {
 					trace.recordDecision("reconciler.session.wake", target.tp.TemplateName, name, "wake", "failed_create", traceRecordPayload{
-						"pending_create_claim": strings.TrimSpace(target.session.Metadata["pending_create_claim"]),
+						"pending_create_claim": strings.TrimSpace(info.PendingCreateClaimMetadata),
 					}, nil, "")
 				}
 				continue
 			}
-			if sessionIsQuarantined(*target.session, clk) {
+			if sessionIsQuarantinedInfo(info, clk) {
 				continue // crash-loop protection
 			}
-			if pendingCreateStartInFlight(*target.session, clk, startupTimeout) {
+			if pendingCreateStartInFlightInfo(info, clk, startupTimeout) {
 				if trace != nil {
 					trace.recordDecision("reconciler.session.wake", target.tp.TemplateName, name, "wake", "start_in_flight", traceRecordPayload{
-						"pending_create_claim": strings.TrimSpace(target.session.Metadata["pending_create_claim"]),
-						"last_woke_at":         target.session.Metadata["last_woke_at"],
+						"pending_create_claim": strings.TrimSpace(info.PendingCreateClaimMetadata),
+						"last_woke_at":         info.LastWokeAt,
 					}, nil, "")
 				}
 				continue
@@ -3117,7 +3125,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// already-OPEN breakers; restart accounting happens at the
 			// prepared-start boundary after dependency and wake-budget gates.
 			if cbEnabled {
-				identity := namedSessionIdentity(*target.session)
+				identity := namedSessionIdentityInfo(info)
 				if identity != "" {
 					if cb.IsOpen(identity, cbNow) {
 						if err := persistSessionCircuitBreakerMetadata(sessFront, target.session.ID, cb, identity, cbNow); err != nil {
@@ -3161,7 +3169,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					"should_wake": shouldWake,
 				}, nil, "")
 			}
-			recordCurrentBeadIDOnWake(target.session, sessFront, decision.AssignedWorkBeadID, stderr)
+			if fold := recordCurrentBeadIDOnWake(target.session, sessFront, decision.AssignedWorkBeadID, stderr); fold != nil {
+				infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(fold)
+			}
 			startCandidates = append(startCandidates, startCandidate{
 				session: target.session,
 				tp:      target.tp,
@@ -3178,8 +3188,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// restart-handoff machinery as `gc runtime request-restart`.
 			// See #1893 (controller: alive on_demand session ignores
 			// bd update --assignee).
-			if decision.RequiresFreshCycle && target.session.Metadata["wake_mode"] == "fresh" {
-				if cycleAliveSessionForFreshReassign(target.session, target.tp, sp, store, cfg, cb, name, decision.AssignedWorkBeadID, clk.Now(), stdout, stderr, trace) {
+			if decision.RequiresFreshCycle && info.WakeMode == "fresh" {
+				if ran, fold := cycleAliveSessionForFreshReassign(target.session, target.tp, sp, store, cfg, cb, name, decision.AssignedWorkBeadID, clk.Now(), stdout, stderr, trace); ran {
+					if fold != nil {
+						infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(fold)
+					}
 					continue
 				}
 			}
@@ -3187,20 +3200,23 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// check has a baseline. Backfills legacy sessions that were
 			// already alive before this metadata existed and refreshes the
 			// record after the agent picks up its next bead in resume mode.
-			recordCurrentBeadIDOnWake(target.session, sessFront, decision.AssignedWorkBeadID, stderr)
+			if fold := recordCurrentBeadIDOnWake(target.session, sessFront, decision.AssignedWorkBeadID, stderr); fold != nil {
+				infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(fold)
+			}
 			// Session is correctly awake. Cancel any non-drift drain
 			// (handles scale-back-up: agent returns to desired set while draining).
-			cancelSessionDrain(*target.session, sp, dt)
+			cancelSessionDrainInfo(info, sp, dt)
 			clearCompletedIdleProbe(target.session.ID, dt)
-			if target.session.Metadata["sleep_intent"] == "idle-stop-pending" {
+			if info.SleepIntent == "idle-stop-pending" {
 				_ = sessionFrontDoor(store).SetMarker(target.session.ID, "sleep_intent", "")
 				target.session.Metadata["sleep_intent"] = ""
+				infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(sessionpkg.MetadataPatch{"sleep_intent": ""})
 			}
 		}
 
 		if !shouldWake && target.alive {
 			// No reason to be awake — begin drain.
-			intent := target.session.Metadata["sleep_intent"]
+			intent := info.SleepIntent
 			var reason string
 			switch {
 			case intent == "idle-stop-pending":
@@ -3218,17 +3234,19 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				clearCompletedIdleProbe(target.session.ID, dt)
 			}
 			if reason == "idle" && dt.get(target.session.ID) == nil {
-				if intent != "idle-stop-pending" && !shouldBeginIdleDrain(target.session, eval, dt, sp) {
+				if intent != "idle-stop-pending" && !shouldBeginIdleDrainInfo(info, eval, dt, sp) {
 					continue
 				}
 				if intent != "idle-stop-pending" {
-					markIdleSleepPending(target.session, sessFront)
+					if fold := markIdleSleepPending(target.session, sessFront); fold != nil {
+						infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(fold)
+					}
 				}
 			}
-			if beginSessionDrain(*target.session, sp, dt, reason, clk, defaultDrainTimeout) {
-				fmt.Fprintf(stdout, "Draining session '%s': %s\n", target.session.Metadata["session_name"], reason) //nolint:errcheck
+			if beginSessionDrainInfo(info, sp, dt, reason, clk, defaultDrainTimeout) {
+				fmt.Fprintf(stdout, "Draining session '%s': %s\n", name, reason) //nolint:errcheck
 				if trace != nil {
-					trace.recordDecision("reconciler.session.drain", target.tp.TemplateName, target.session.Metadata["session_name"], reason, "drain", traceRecordPayload{
+					trace.recordDecision("reconciler.session.drain", target.tp.TemplateName, name, reason, "drain", traceRecordPayload{
 						"sleep_intent": intent,
 					}, nil, "")
 				}
@@ -3250,12 +3268,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// keep the same bead so later wake/restart happens in place instead
 		// of minting a fresh canonical owner.
 		hasAssignedWork := false
-		poolFreeable := !shouldWake && !target.alive && isPoolSessionSlotFreeable(*target.session) && isPoolManagedSessionBead(*target.session)
+		poolFreeable := !shouldWake && !target.alive && isPoolSessionSlotFreeableInfo(info) && isPoolManagedSessionInfo(info)
 		if poolFreeable {
 			var assignedErr error
 			hasAssignedWork, assignedErr = sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *target.session)
 			if assignedErr != nil {
-				fmt.Fprintf(stderr, "session reconciler: checking assigned work for drained %s: %v\n", target.session.Metadata["session_name"], assignedErr) //nolint:errcheck
+				fmt.Fprintf(stderr, "session reconciler: checking assigned work for drained %s: %v\n", name, assignedErr) //nolint:errcheck
 				hasAssignedWork = true
 			}
 		}
@@ -3269,7 +3287,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// happened. Emit a single diagnostic per session bead
 			// generation; the throttle marker on the bead itself
 			// keeps subsequent reconciler ticks quiet.
-			emitSessionStrandedDiagnostic(cityPath, cfg, store, rigStores, target.session, target.tp.TemplateName, rec, clk, stderr)
+			if fold := emitSessionStrandedDiagnostic(cityPath, cfg, store, rigStores, target.session, target.tp.TemplateName, rec, clk, stderr); fold != nil {
+				infoByID[target.session.ID] = infoByID[target.session.ID].ApplyPatch(fold)
+			}
 		}
 		if poolFreeable && !hasAssignedWork {
 			// Close directly rather than via closeSessionBeadIfUnassigned.
@@ -3282,11 +3302,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// on the closed bead for forensic fidelity; fall back to "drained"
 			// when the metadata is missing. Ops can then distinguish a natural
 			// idle-timeout recycle from an explicit drain in the closed record.
-			closeReason := strings.TrimSpace(target.session.Metadata["sleep_reason"])
+			closeReason := strings.TrimSpace(info.SleepReason)
 			if closeReason == "" {
 				closeReason = "drained"
 			}
 			if closeBead(store, target.session.ID, closeReason, clk.Now().UTC(), stderr) {
+				// Store-only close family: mirror the close onto the snapshot
+				// (write-returns-Info) so a later reader sees Closed=true.
+				infoByID[target.session.ID] = infoByID[target.session.ID].MarkClosed()
 				// Pool worktrees are transient by design — reclaim disk
 				// when the session bead is retired. Skipped under safety
 				// gates (uncommitted, unpushed, stashed) and overridable
@@ -3613,15 +3636,15 @@ func emitSessionStrandedDiagnostic(
 	rec events.Recorder,
 	clk clock.Clock,
 	stderr io.Writer,
-) {
+) sessionpkg.MetadataPatch {
 	if rec == nil || session == nil {
-		return
+		return nil
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, 1)
 	}
 	if strings.TrimSpace(session.Metadata[strandedEventEmittedKey]) != "" {
-		return
+		return nil
 	}
 	assignedWork, err := collectSessionAssignedWork(cityPath, cfg, store, rigStores, *session)
 	if err != nil {
@@ -3629,7 +3652,7 @@ func emitSessionStrandedDiagnostic(
 	}
 	diagnosticWork := filterDetachedStrandedDiagnosticWork(assignedWork)
 	if err == nil && len(assignedWork) > 0 && len(diagnosticWork) == 0 {
-		return
+		return nil
 	}
 	ids := strandedAssignedWorkIDs(diagnosticWork)
 	now := clk.Now().UTC()
@@ -3649,6 +3672,11 @@ func emitSessionStrandedDiagnostic(
 	if err := sessionFrontDoor(store).SetMarker(session.ID, strandedEventEmittedKey, now.Format(time.RFC3339)); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: stamping stranded throttle marker on %s: %v\n", session.ID, err) //nolint:errcheck
 	}
+	// Return the throttle-marker fold so the reconciler can apply it to the
+	// infoByID snapshot (write-returns-Info). Applied regardless of the
+	// SetMarker store result — the in-memory marker above is the emit-once
+	// guard, and the snapshot must match it.
+	return sessionpkg.MetadataPatch{strandedEventEmittedKey: now.Format(time.RFC3339)}
 }
 
 type strandedAssignedWork struct {
@@ -4311,30 +4339,31 @@ func resetConfiguredNamedSessionForConfigDrift(
 	return batch
 }
 
-func shouldBeginIdleDrain(
-	session *beads.Bead,
+// shouldBeginIdleDrainInfo reads the session id and session_name off the Info
+// snapshot (both verbatim raw mirrors), so it is byte-identical to the raw form
+// it replaced. The former nil-bead guard is gone: the sole caller passes
+// infoByID[target.session.ID] for a wakeTarget whose bead is always non-nil.
+func shouldBeginIdleDrainInfo(
+	info sessionpkg.Info,
 	eval wakeEvaluation,
 	dt *drainTracker,
 	sp runtime.Provider,
 ) bool {
-	if session == nil {
-		return false
-	}
 	if eval.Policy.Class == config.SessionSleepNonInteractive {
 		return true
 	}
 	if eval.Policy.Capability != runtime.SessionSleepCapabilityFull || sp == nil {
 		return false
 	}
-	probe, ok := dt.idleProbe(session.ID)
+	probe, ok := dt.idleProbe(info.ID)
 	if !ok || !probe.ready {
 		return false
 	}
-	defer dt.clearIdleProbe(session.ID)
+	defer dt.clearIdleProbe(info.ID)
 	if !probe.success {
 		return false
 	}
-	lastActivity, err := workerSessionTargetLastActivityWithConfig("", nil, sp, nil, session.Metadata["session_name"])
+	lastActivity, err := workerSessionTargetLastActivityWithConfig("", nil, sp, nil, info.SessionNameMetadata)
 	if err != nil {
 		return false
 	}
@@ -4345,6 +4374,7 @@ func selectIdleProbeTargets(
 	wakeTargets []wakeTarget,
 	wakeEvals map[string]wakeEvaluation,
 	dt *drainTracker,
+	infoByID map[string]sessionpkg.Info,
 ) map[string]bool {
 	targets := make(map[string]bool)
 	if dt == nil {
@@ -4369,7 +4399,7 @@ func selectIdleProbeTargets(
 		if target.session == nil || !target.alive {
 			continue
 		}
-		if target.session.Metadata["sleep_intent"] != "" {
+		if infoByID[target.session.ID].SleepIntent != "" {
 			continue
 		}
 		if dt.drains[target.session.ID] != nil {
@@ -4411,6 +4441,7 @@ func launchIdleProbes(
 	dt *drainTracker,
 	sp runtime.Provider,
 	clk clock.Clock,
+	infoByID map[string]sessionpkg.Info,
 ) {
 	if len(idleProbeTargets) == 0 || dt == nil || sp == nil {
 		return
@@ -4423,7 +4454,7 @@ func launchIdleProbes(
 		if target.session == nil || !idleProbeTargets[target.session.ID] {
 			continue
 		}
-		name := target.session.Metadata["session_name"]
+		name := infoByID[target.session.ID].SessionNameMetadata
 		probe := dt.startIdleProbe(target.session.ID)
 		if name == "" || probe == nil {
 			continue

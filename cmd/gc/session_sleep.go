@@ -309,17 +309,22 @@ func persistSleepPolicyMetadata(
 	}
 }
 
-func markIdleSleepPending(session *beads.Bead, sessFront *sessionpkg.Store) {
+// markIdleSleepPending returns the metadata patch it applied (sleep_intent =
+// idle-stop-pending) so the reconciler can fold it onto the infoByID snapshot
+// (write-returns-Info), or nil when it was a no-op. The raw mirror onto
+// session.Metadata is kept (dropped in Step 5).
+func markIdleSleepPending(session *beads.Bead, sessFront *sessionpkg.Store) sessionpkg.MetadataPatch {
 	if session == nil || sessFront == nil || session.Metadata["sleep_intent"] == "idle-stop-pending" {
-		return
+		return nil
 	}
 	if err := sessFront.SetMarker(session.ID, "sleep_intent", "idle-stop-pending"); err != nil {
-		return
+		return nil
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, 1)
 	}
 	session.Metadata["sleep_intent"] = "idle-stop-pending"
+	return sessionpkg.MetadataPatch{"sleep_intent": "idle-stop-pending"}
 }
 
 func recoverPendingIdleSleep(

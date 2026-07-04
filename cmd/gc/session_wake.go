@@ -157,22 +157,37 @@ func validateWorkDir(dir string) error {
 // Without this, a single bad tick can interrupt a working agent mid-tool-call.
 func beginSessionDrain(
 	session beads.Bead,
+	sp runtime.Provider,
+	dt *drainTracker,
+	reason string,
+	clk clock.Clock,
+	timeout time.Duration,
+) bool {
+	return beginSessionDrainInfo(sessions.InfoFromPersistedBead(session), sp, dt, reason, clk, timeout)
+}
+
+// beginSessionDrainInfo is the typed core of beginSessionDrain for the
+// reconciler's post-Phase-1 wake loop. It reads only session_name, generation,
+// and id — all carried verbatim on Info — so it is byte-identical to the raw
+// form it backs.
+func beginSessionDrainInfo(
+	info sessions.Info,
 	_ runtime.Provider, // kept for caller compatibility; interrupt deferred to advanceSessionDrains
 	dt *drainTracker,
 	reason string,
 	clk clock.Clock,
 	timeout time.Duration,
 ) bool {
-	name := session.Metadata["session_name"]
-	if dt.get(session.ID) != nil {
+	name := info.SessionNameMetadata
+	if dt.get(info.ID) != nil {
 		if os.Getenv("GC_TMUX_TRACE") == "1" {
 			log.Printf("[DRAIN-TRACE] beginSessionDrain session=%s reason=%s noop=already-draining", name, reason)
 		}
 		return false
 	}
-	gen, _ := strconv.Atoi(session.Metadata["generation"])
+	gen, _ := strconv.Atoi(info.Generation)
 
-	dt.set(session.ID, &drainState{
+	dt.set(info.ID, &drainState{
 		startedAt:  clk.Now(),
 		deadline:   clk.Now().Add(timeout),
 		reason:     reason,
@@ -244,6 +259,13 @@ func clearReconcilerDrainAckMetadata(sp runtime.Provider, name string) error {
 // kill the session.
 func cancelSessionDrain(session beads.Bead, sp runtime.Provider, dt *drainTracker) bool {
 	return cancelSessionDrainIf(session, sp, dt, drainReasonCancelable)
+}
+
+// cancelSessionDrainInfo is the typed sibling of cancelSessionDrain for the
+// reconciler's post-Phase-1 wake loop, reading the session id/generation/name
+// off the Info snapshot instead of the raw bead.
+func cancelSessionDrainInfo(info sessions.Info, sp runtime.Provider, dt *drainTracker) bool {
+	return cancelSessionDrainIfInfo(info, sp, dt, drainReasonCancelable)
 }
 
 func cancelSessionDrainForPending(session beads.Bead, sp runtime.Provider, dt *drainTracker) bool {
