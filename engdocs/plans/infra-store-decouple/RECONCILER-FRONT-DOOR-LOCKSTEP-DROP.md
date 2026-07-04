@@ -1,7 +1,7 @@
 # Reconciler front-door — the LOCKSTEP DROP (in progress; Steps 1–3 done, 3.5 next)
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `0d694acee`** (re-grep
+worktree `.claude/worktrees/object-front-doors`, **HEAD `97fd6fbc6`** (re-grep
 `git rev-parse HEAD`; line numbers below drift as you edit — always re-grep).
 
 ## Progress
@@ -65,13 +65,41 @@ worktree `.claude/worktrees/object-front-doors`, **HEAD `0d694acee`** (re-grep
       (`pendingCreateInstanceTokenFold`→`pendingCreateResidueFold` carries `started_config_hash`; teeth test).
       `session_key`/`continuation_reset_pending` residue stays unthreaded (documented: the CRP one-tick-deferral
       is a pre-existing Step-3/6d gap, not 5a's). Reviews wf_9be58e9c + fix re-review wf_78063ee2.
-- [ ] **Steps 5b–5e, 6e remain** (see `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` §Step 5 / 6e). The entire
-      decision-path READ conversion is now DONE (Steps 1–5a). Remaining = delete the now-read-dead raw mirror
-      WRITES (5b drain-ack finalize family; 5c the raw lockstep mirror loops — the riskiest, needs the per-key
-      census INCL `buildPreparedStart` start-execution coupling: mirrors whose keys the start path reads
-      SURVIVE), drop the dead `sessionBeads` param (5d), demote `ordered` (5e), and the 6e guard. Step 5 is
-      re-scoped to DEMOTE `ordered` (not delete — start-execution `startCandidate`/`buildPreparedStart` is
-      raw-by-design consumer #7, out of scope).
+- [x] **Trace-decouple precursor — gc-trace terminal read off the store** (`245a86b4a`). **The 5b review
+      surfaced a systemic blocker the plan missed:** the raw mirror WRITES are NOT read-dead — the caller's
+      post-reconcile `recordReconcileTraceResults` reads `open[i].Metadata["state"]/["sleep_reason"]`, and `open`
+      shares Metadata maps with the reconciler's `ordered` working set, so deleting any mirror stales that trace.
+      There is **no byte-identical replacement** for that read: `open[i].Metadata` is an in-memory-mirror artifact
+      (a first fix attempt returning the reconciler's final `infoByID` was fable-refuted — infoByID is stale for
+      woken sessions because `preWakeCommit` mirrors onto a discarded `store.Get` copy, and `completeDrain`'s
+      mirror was already dropped). **Owner decision: source the trace from the authoritative post-reconcile store
+      snapshot** — an intentional accuracy improvement (woken→`creating`, drain-completed→`asleep`/reason are now
+      recorded correctly where HEAD read stale in-memory state), trace/observability-only, reusing the snapshot
+      the wait-nudge dispatch already loads (no added query). Beads closed this tick fall back to the open bead.
+      This decouples the trace from the mirrors so 5b/5c can delete them. Reviews wf_d9dc087d (refuted the
+      infoByID approach) + wf_a1c4e6cc (confirmed the intended store-authoritative deltas).
+- [x] **Step 5b — drain-ack finalize family off raw metadata** (`97fd6fbc6`). `markDrainAckStopPending` takes
+      `session.Info` (drops the bead + its mirror loop); `finalizeDrainAckStoppedSession` gains an `Info` param
+      for its reads (session_name/template/wake_mode/restart_requested) and drops the closePatch + drain-ack
+      ApplyPatch mirror loops, but **KEEPS its `*beads.Bead` param** — the whole-bead raw-by-design helpers
+      (`sessionHasOpenAssignedWorkForReachableStore`, `closeSessionBeadIfReachableStoreUnassigned`,
+      `recordDrainAckAssignedWorkEvent`, `sessionAgentMetricIdentity`) and the store.Get witness still need it.
+      The raw `session.Status="closed"` struct write + witness Status/Metadata swap stay (non-bracket;
+      telemetry-test-asserted). `reconcileDrainAckStopPending` threads `Info`; the non-reconciler
+      `finalizeDrainAckStopPendingSessions` projects per-bead at its boundary. **Plan deviation:** the FINISH
+      doc said "drop the `*beads.Bead` param" — infeasible for `finalizeDrainAckStoppedSession` (raw-by-design
+      whole-bead helpers); the achievable goal (family off `session.Metadata[` reads + mirror writes) is met.
+      Byte-identical on decision/store/lifecycle (fable 5-lens wf_fdf44eb5: 4 clean; the trace finding resolved
+      by the precursor above). LOW residual: drain-ack sessions that CLOSE this tick trace their pre-close state
+      (closed → snapshot-excluded → open fallback → mirror-free), consistent with store-only closes.
+- [ ] **Steps 5c–5e, 6e remain** (see `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` §Step 5 / 6e). **The trace
+      precursor above unblocks the mirror deletions** — the trace no longer reads `open[i].Metadata` for open
+      sessions, so deleting the remaining forward-pass mirror WRITES (5c) no longer stales the trace (except the
+      same closed-this-tick fallback residual). 5c still needs the per-key census INCL `buildPreparedStart`
+      start-execution coupling: mirrors whose keys the start path reads via `startCandidate` SURVIVE. Then drop
+      the dead `sessionBeads` param (5d), demote `ordered` (5e), and the 6e guard. Step 5 is re-scoped to
+      DEMOTE `ordered` (not delete — start-execution `startCandidate`/`buildPreparedStart` is raw-by-design
+      consumer #7, out of scope).
 
 ## Where things stand
 
