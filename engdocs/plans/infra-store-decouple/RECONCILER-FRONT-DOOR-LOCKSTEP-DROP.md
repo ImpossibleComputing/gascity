@@ -1,7 +1,7 @@
-# Reconciler front-door — the LOCKSTEP DROP (in progress; Steps 1–2 done, 3 next)
+# Reconciler front-door — the LOCKSTEP DROP (in progress; Steps 1–3 done, 3.5 next)
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `1d2ea2028`** (re-grep
+worktree `.claude/worktrees/object-front-doors`, **HEAD `0d694acee`** (re-grep
 `git rev-parse HEAD`; line numbers below drift as you edit — always re-grep).
 
 ## Progress
@@ -25,7 +25,17 @@ worktree `.claude/worktrees/object-front-doors`, **HEAD `1d2ea2028`** (re-grep
       2 lenses clean, F2/F4 byte-identical, 1 refuted, 1 CONFIRMED-then-FIXED: the
       `buildPreparedStart` `instance_token` residue (now threaded into recoverRunningPendingCreate's
       returned fold batch + teeth test). Details in `raw/lockstep-drop-step2-drains.md`.
-- [ ] Steps 3–6 below.
+- [x] **Step 3 — `buildAwakeInputFromReconciler` domain → order-preserving `[]session.Info`**
+      (`0d694acee`). The awake scan's decision reads were already on Info (4C/4D); only the
+      iteration DOMAIN was raw. Params `sessionBeads []beads.Bead` + `sessionInfoByID map` → a single
+      `sessionInfos []session.Info`; reconciler builds it in `ordered` order
+      (`sessionInfos[i] = infoByID[ordered[i].ID]`, never `range infoByID`), body unchanged. 15 test
+      sites convert `[]beads.Bead{X}` → `[]session.Info{InfoFromPersistedBead(X)}`; the
+      divergent-snapshot test passes the Info directly; one `session`-shadowing local renamed to
+      `sessionBead`. Byte-identical (every ordered ID keys infoByID, never deleted; `ordered` never
+      resliced; fallback was prod-dead). Fable 4-lens review wf_21c330af: **0 findings**. Analysis in
+      `raw/lockstep-drop-step3-awake-domain.md`.
+- [ ] Steps 3.5–6 below.
 
 ## Where things stand
 
@@ -37,17 +47,20 @@ are deleted (see `RECONCILER-FRONT-DOOR-STEP6-PREPASS-AUDIT.md`). Verified by th
 comprehensive reconciler suite (211-212s green) + a 4-lens capstone fable review
 (0 defects).
 
-**Already removed (Steps 1–2b):** `circuitSessionByIdentity`, `beadByID`, and
+**Already removed (Steps 1–3):** `circuitSessionByIdentity`, `beadByID`, and
 `sessionLookup` are GONE. The circuit persist (`persist`/`recordSessionCircuitBreakerRestart`),
 `completeDrain`, and the whole Phase-2 drain scan (`advanceSessionDrainsWithSessionsTraced`,
 `verifiedStop`, the drain-cancel helpers) are off the raw bead and their mirrors dropped.
+Step 3 moved the **awake scan** (`buildAwakeInputFromReconciler`) fully onto an order-preserving
+`[]session.Info` — it no longer accepts or reads any raw session bead.
 
 **What's still physically present but READ-DEAD for decisions:** the raw
 `ordered []beads.Bead` working set, and the remaining `session.Metadata[k]=v` lockstep
 mirror writes in the forward pass (re-grep `session\.Metadata\[.*\] *=` in
-session_reconciler.go — ~11 left after Steps 1–2b). The `wakeTargets` loop still carries
-raw `target.session` beads (a **separate** source from `ordered`; addressed in Steps 3–5).
-The remaining lockstep drop removes all of it.
+session_reconciler.go). The `wakeTargets` loop still carries raw `target.session` beads (a
+**separate** source from `ordered`) and still reads `session_name`/`sleep_intent` off them — that
+is the **Step 3.5** sub-thread (consumer #4). `newSessionBeadSnapshot` (consumer #5) is the other
+whole-bead reader. The remaining lockstep drop removes all of it.
 
 ## The governing safety principle (unchanged)
 
@@ -81,14 +94,10 @@ Two hard invariants the CI enforces and the awake scan depends on:
 2. ~~**The Phase-0.5 circuit-breaker block**~~ **DONE (1, `ec6127ead`).** `circuitSessionByIdentity`
    (`map[string]*beads.Bead`) → `circuitIDByIdentity` (`map[string]string`); circuit persist
    is store-authoritative by id.
-3. **`buildAwakeInputFromReconciler`** (`compute_awake_bridge.go`, reconciler call ~3007) —
-   **NEXT (Step 3).** DECISION READS are already on Info (4C/4D): the loop reads
-   `sessionInfoByID[b.ID]` (falls back to `InfoFromPersistedBead(*b)` for nil-snapshot unit
-   tests). What remains is the **DOMAIN**: it iterates `sessionBeads []beads.Bead` (= `ordered`).
-   Replace the param with an order-preserving `[]session.Info` (build it in the reconciler as
-   `sessionInfos[i] = infoByID[ordered[i].ID]`, SAME order as `ordered`) and drop the
-   `sessionInfoByID` map + the fallback. **NEVER `range infoByID`** (slice order is load-bearing —
-   see the invariant above). 15 test call sites + 1 reconciler site.
+3. ~~**`buildAwakeInputFromReconciler`**~~ **DONE (3, `0d694acee`).** Params `sessionBeads` +
+   `sessionInfoByID` → a single order-preserving `sessionInfos []session.Info`, built in the
+   reconciler as `sessionInfos[i] = infoByID[ordered[i].ID]` (never `range infoByID`). Fallback +
+   map dropped; 15 test sites + reconciler site converted. Byte-identical; fable review 0 findings.
 4. **The `wakeTargets` / `sleep_intent` sub-thread** (`session_reconciler.go` ~3185-3222, ~4362;
    and the `wakeTargets` loop in `buildAwakeInputFromReconciler` reading
    `target.session.Metadata["session_name"]`) — `target.session` is a **raw bead carried on
@@ -120,10 +129,12 @@ handled before cutting the tick-start build to a store `List`:
   because `verifiedStop` reads `info.InstanceToken`. The OTHER residue keys (a stale-resume
   clear of `session_key`/`started_config_hash`/`continuation_reset_pending`) are still NOT
   threaded — verified inert (no divergent same-tick Info reader) by the pre-pass capstone
-  (wf_e8507262). **CAUTION for Step 3:** the awake scan already reads
-  `info.ContinuationResetPending`/`ConfigDrift`-adjacent fields from the snapshot; re-confirm
-  (fable review) that the un-threaded residue keys stay inert when you touch the awake path,
-  and thread them if a divergence surfaces.
+  (wf_e8507262). **Step 3 outcome:** the awake scan reads `info.ContinuationResetPending`/
+  `ResetCommittedAt`, but Step 3 changed the DOMAIN, not the SOURCE — the OLD reconciler already
+  read `infoByID` (the `ok` branch), so OLD and NEW read the identically stale-or-fresh value and
+  the residue is NOT a new divergence. Confirmed by the Step-3 fable review (wf_21c330af, lens
+  snapshot-equivalence: 0 findings). No threading needed. Re-confirm again only if a later step
+  moves this read onto a per-refresh store `Get` (STEP6-DESIGN exposure set).
 
 ## 6e — the CI guard (last)
 
@@ -136,10 +147,14 @@ documented raw-by-design exceptions (witness full-resync, work-bead reads).
 
 1. ~~**CB block → `Store.CircuitState`**~~ DONE (`ec6127ead`).
 2. ~~**`advanceSessionDrains` off the raw bead**~~ DONE (2a `4bcec563b`, 2b `1d2ea2028`).
-3. **`buildAwakeInputFromReconciler` domain → order-preserving `[]session.Info`** (NOT
-   map iteration; slice-order invariant lives here). ← NEXT.
-   - **3.5** (optional split): the `wakeTargets` / `sleep_intent` raw reads+mirror
-     (consumer #4). Can land separately or with Step 3.
+3. ~~**`buildAwakeInputFromReconciler` domain → order-preserving `[]session.Info`**~~ DONE
+   (`0d694acee`).
+3.5. **The `wakeTargets` / `sleep_intent` raw reads+mirror** (consumer #4). ← NEXT. `target.session`
+   is a raw bead carried on `wakeTarget` (a DIFFERENT source than `ordered`). Convert the loop's
+   `target.session.Metadata["session_name"]` read and the post-loop `sleep_intent` read+clear
+   (`target.session.Metadata["sleep_intent"] = ""`) onto `Info.SleepIntent`/store. Also
+   `shouldProbeAttachmentForAwakeInput` reads `target.session.Metadata[...]` raw. Smaller than Step 4;
+   good next slice.
 4. **`newSessionBeadSnapshot` off a store source** (bucket-D, hardest — may need `List`).
 5. **Drop the remaining lockstep mirrors + `ordered []beads.Bead` + the dead `sessionBeads`
    param + cut the tick-start build to the store**. Nothing reads the raw bead by now.
