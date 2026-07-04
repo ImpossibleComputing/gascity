@@ -576,6 +576,10 @@ func drainProjectedBlockerIDs(store beads.Store, memberID string, manifest drain
 	if err != nil {
 		return nil, err
 	}
+	// Under graph_store=sqlite, hoist the graph-residency prefix so a raw
+	// (un-projected, out-of-manifest) blocker that crosses store legs can be
+	// caught. Absent on a single-store city → "" → the guard is inert.
+	graphPrefix := drainGraphIDPrefix(store)
 	seen := make(map[string]bool, len(deps))
 	blockerIDs := make([]string, 0, len(deps))
 	for _, dep := range deps {
@@ -587,8 +591,10 @@ func drainProjectedBlockerIDs(store beads.Store, memberID string, manifest drain
 			continue
 		}
 		blockerID := dependsOnID
+		projected := false
 		if projectedRootID := strings.TrimSpace(rootByMember[dependsOnID]); projectedRootID != "" {
 			blockerID = projectedRootID
+			projected = true
 		} else if manifestMembers[dependsOnID] {
 			// An in-manifest member without a materialized item root must not
 			// be embedded as a blocker: drains do not close source members,
@@ -598,6 +604,16 @@ func drainProjectedBlockerIDs(store beads.Store, memberID string, manifest drain
 			// blocker's root exists.
 			continue
 		}
+		// A RAW (un-projected, out-of-manifest) blocker that crosses store legs
+		// can never release: neither leg's readiness reader can see the other's
+		// bead table (E §7). The attach-change removed the only routine writer
+		// of such edges, so fail loud here — a new one must not silently
+		// reappear and wedge a drain member forever. Projected in-manifest
+		// blockers are exempt: their same-leg item-root release is the intended
+		// drain mechanism and the empirically live shape.
+		if !projected && drainCrossLegBlocker(graphPrefix, memberID, blockerID) {
+			return nil, fmt.Errorf("drain member %s has a raw cross-leg blocking dependency on out-of-manifest bead %s: under graph_store=sqlite a cross-leg block never releases (E §7); bring the blocker into the drain manifest or make it graph-resident", memberID, blockerID)
+		}
 		if seen[blockerID] {
 			continue
 		}
@@ -605,6 +621,28 @@ func drainProjectedBlockerIDs(store beads.Store, memberID string, manifest drain
 		blockerIDs = append(blockerIDs, blockerID)
 	}
 	return blockerIDs, nil
+}
+
+// drainGraphIDPrefix returns the graph-class id prefix (with trailing "-") when
+// the store is a graph_store=sqlite Router, or "" for a single-store city, in
+// which case the cross-leg guard is inert (byte-identical default).
+func drainGraphIDPrefix(store beads.Store) string {
+	if gol, ok := beads.GraphOnlyListFor(store); ok {
+		if pfx := gol.GraphIDPrefix(); pfx != "" {
+			return pfx + "-"
+		}
+	}
+	return ""
+}
+
+// drainCrossLegBlocker reports whether memberID and blockerID live on different
+// store legs under graph_store=sqlite (one graph-resident, one not). An empty
+// prefix (single-store city) is never cross-leg.
+func drainCrossLegBlocker(graphPrefix, memberID, blockerID string) bool {
+	if graphPrefix == "" {
+		return false
+	}
+	return strings.HasPrefix(memberID, graphPrefix) != strings.HasPrefix(blockerID, graphPrefix)
 }
 
 func ensureDrainWorkflowBlocksOn(store beads.Store, rootID, blockerID string) error {
