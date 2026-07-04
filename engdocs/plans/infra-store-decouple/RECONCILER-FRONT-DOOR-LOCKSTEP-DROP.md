@@ -46,7 +46,19 @@ worktree `.claude/worktrees/object-front-doors`, **HEAD `0d694acee`** (re-grep
       off an ID-keyed `sessionInfos` index (state → `MetadataState`, the raw-verbatim landmine). All
       three fable-reviewed (0 findings), reconciler subset green. See
       `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` (the fable design of record) for 4/5/6e.
-- [ ] Steps 4–6 below.
+- [x] **Step 4 — preserve-template feed off the raw `ordered`** (consumer #5, `656d322c5`).
+      4a: additive verbatim codec `Info.Pack` (`beadmeta.PackMetadataKey`). 4b:
+      `newSessionBeadSnapshotFromInfos([]Info)` (OpenInfos-only, filters `info.Closed`) +
+      `resolveTemplateForSessionBeadInfo` + `resolvePreservedConfiguredNamedSessionTemplate([]Info, Info)`;
+      the reconciler `:1587` builds the feed from live `infoByID` in `ordered` order, start-refresh caller
+      passes `snapshot.OpenInfos()`. Byte-identical (membership matches at HEAD; the only reachable read
+      is the GC_SESSION_ID scan, drift-fingerprint-excluded). Cleared by a 3-agent fable feed-hazard
+      analysis (wf_58aa9f17) + 3-lens review (0 findings) + a guard test. Boundary correction: the
+      original "may need store List" was wrong — live `infoByID`, not a store List (REMAINING-PLAN §Step 4).
+- [ ] Steps 5–6 below (see `RECONCILER-FRONT-DOOR-REMAINING-PLAN.md` §Step 5 / 6e). Step 5 is re-scoped to
+      DEMOTE `ordered` (zero raw decision reads + zero lockstep mirror writes on the decision path); physical
+      deletion of `ordered` is deferred (start-execution `startCandidate`/`buildPreparedStart` = raw-by-design
+      consumer #7, out of scope).
 
 ## Where things stand
 
