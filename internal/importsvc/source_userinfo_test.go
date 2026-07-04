@@ -21,6 +21,10 @@ func TestRejectSourceUserinfo(t *testing.T) {
 		// Malformed userinfo (invalid %-escape) makes url.Parse fail; the string
 		// fallback must still reject a password-bearing source and never leak it.
 		{"https malformed userinfo with password", "https://user:ghp_x%SS@github.com/org/repo", true},
+		// ssh://user:password@ embeds a secret and must be rejected; ssh://user@
+		// and the scp-form carry transport identity (key auth), not a secret.
+		{"ssh url with password", "ssh://user:ghp_secret@github.com/org/repo", true},
+		{"ssh url user only", "ssh://user@github.com/org/repo", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

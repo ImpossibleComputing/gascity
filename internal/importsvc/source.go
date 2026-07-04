@@ -72,20 +72,27 @@ func normalizeImportAddSource(fs fsys.FS, cityPath, source string) (string, bool
 	return source, false, nil
 }
 
-// rejectSourceUserinfo refuses an http(s)/file source that embeds credentials
-// (user or user:password) in the URL: such a token would leak into city.toml,
-// packs.lock, the shared cache's .git/config, the RepoCacheKey, and error
-// output. It only inspects the URL-scheme forms — git@host: and ssh://user@
-// carry transport identity, not a secret, and stay legal. The error never
-// echoes the secret (it redacts via gitcred.RedactUserinfo) and is returned as
-// ErrInvalidSource by the caller (HTTP 400).
+// rejectSourceUserinfo refuses a URL-scheme source that embeds credentials in
+// the URL: such a token would leak into city.toml, packs.lock, the shared
+// cache's .git/config, the RepoCacheKey, and error output. For http(s)/file it
+// rejects any userinfo (user or user:password) — those forms carry no legitimate
+// transport identity in the userinfo. For ssh:// it rejects only a
+// password-bearing userinfo; ssh://user@ (key auth) and the scp-form
+// git@host:org/repo carry transport identity, not a secret, and stay legal. The
+// error never echoes the secret (it redacts via gitcred.RedactUserinfo) and is
+// returned as ErrInvalidSource by the caller (HTTP 400).
 func rejectSourceUserinfo(source string) error {
 	source = strings.TrimSpace(source)
+	isSSH := strings.HasPrefix(source, "ssh://")
 	if !strings.HasPrefix(source, "https://") &&
 		!strings.HasPrefix(source, "http://") &&
-		!strings.HasPrefix(source, "file://") {
+		!strings.HasPrefix(source, "file://") &&
+		!isSSH {
 		return nil
 	}
+	// ssh://user@ is legitimate key-auth identity; only a password is a secret.
+	rejectUsernameOnly := !isSSH
+
 	u, err := url.Parse(source)
 	if err != nil {
 		// A malformed userinfo (invalid %-escape, raw space/^/|) makes url.Parse
@@ -105,6 +112,9 @@ func rejectSourceUserinfo(source string) error {
 	redacted := gitcred.RedactUserinfo(source)
 	if _, hasPassword := u.User.Password(); hasPassword {
 		return fmt.Errorf("credentials embedded in the source URL would leak into city.toml, packs.lock, the shared repo cache's .git/config, and error output; remove them and register a credential instead: gc import credential add <host> (source: %s)", redacted)
+	}
+	if !rejectUsernameOnly {
+		return nil
 	}
 	return fmt.Errorf("a username embedded in the source URL would leak into city.toml, packs.lock, the shared repo cache's .git/config, and error output; remove it and register a credential instead: gc import credential add <host> (source: %s)", redacted)
 }
