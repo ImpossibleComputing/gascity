@@ -1,8 +1,31 @@
 # Reconciler front-door — the LOCKSTEP DROP (next phase)
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `33de818df`** (re-grep
+worktree `.claude/worktrees/object-front-doors`, **HEAD `ec6127ead`** (re-grep
 `git rev-parse HEAD`; line numbers below drift as you edit — always re-grep).
+
+## Progress
+
+- [x] **Step 1 — circuit persist store-authoritative + drop `circuitSessionByIdentity`**
+      (`ec6127ead`). CORRECTION to the plan's stale line-anchored model: the Phase-0.5
+      restore READS already project `ordered[i].Metadata` via `CircuitStateFromMetadata`
+      (Step 5); the only surviving raw consumer was the progress-sig persist lookup.
+      `persistSessionCircuitBreakerMetadata`/`recordSessionCircuitBreakerRestart` now take
+      `id string`, equality via `sessFront.CircuitState(id)`, raw mirror dropped, dead
+      `sessionCircuitMetadataEqual` removed. `circuitSessionByIdentity` → `circuitIDByIdentity`
+      (`map[string]string`). Byte-identical under a healthy store; fable review wf_803d0b26
+      (0 defects beyond one ACCEPTED LOW: the equality-skip now does a store Get on the
+      previously-free path — details in `raw/lockstep-drop-step1-circuit.md`).
+- [x] **Step 2a — `completeDrain` store-only** (`4bcec563b`). Drop the bead mirror; take
+      `sessions.Info` (id + raw wake_mode). Byte-identical (mirror had no in-tick consumer;
+      tests assert on the store).
+- [x] **Step 2b — `advanceSessionDrains` off the raw bead + retire `beadByID`/`sessionLookup`**.
+      Traced core takes `infoLookup func(id)(Info,bool)`; loop reads Info only; `verifiedStop`
+      + drain-cancel Info siblings; reconciler feeds it `infoByID`. Fable review wf_381c5866:
+      2 lenses clean, F2/F4 byte-identical, 1 refuted, 1 CONFIRMED-then-FIXED: the
+      `buildPreparedStart` `instance_token` residue (now threaded into recoverRunningPendingCreate's
+      returned fold batch + teeth test). Details in `raw/lockstep-drop-step2-drains.md`.
+- [ ] Steps 3–6 below.
 
 ## Where things stand
 

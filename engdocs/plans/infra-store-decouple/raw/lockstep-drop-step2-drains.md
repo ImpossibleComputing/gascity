@@ -37,3 +37,27 @@ nil, so the param can't be dropped. Non-reconciler (tests) still pass beads for 
 completeDrain: prod :492/:606 (info in scope); tests :1360/:1391/:1425/:1453 (`&b` -> `sessionpkg.InfoFromPersistedBead(b)`).
 advanceSessionDrains family test sites (2b): session_wake_test.go x12, session_sleep_test.go:1272,
 trace_integration_test.go:382 — build infoLookup from their beads.
+
+## Step 2b implementation + fable review (wf_381c5866)
+Landed: advanceSessionDrainsWithSessionsTraced takes `infoLookup func(id)(Info,bool)`;
+loop reads Info only (info.ID/Generation/SessionNameMetadata/WakeMode/InstanceToken);
+cancelSessionDrainIfInfo core + Pending/AssignedWork Info siblings; verifiedStop→Info;
+infoLookupFromBeadLookup adapts the bead-based wrappers (10/12 test sites untouched);
+reconciler passes infoByID-backed infoLookup, DROPS beadByID + sessionLookup.
+
+Review verdict: 2 lenses CLEAN (typed-field-fidelity, callsite-completeness); F2/F4 CONFIRMED
+byte-identical (presence 1:1, adapter correct); 1 finding REFUTED (start-candidate preWakeCommit
+mutates a REBOUND deep-copy via prepareStartCandidateForCity store.Get, not ordered[i] — so OLD
+and NEW both read stale; no divergence).
+
+**1 CONFIRMED (LOW→FIXED): the buildPreparedStart instance_token residue.** recoverRunningPendingCreate's
+buildPreparedStart mints instance_token onto ordered[i]+store when empty, OUTSIDE CommitStartedPatch,
+so infoByID kept "". Pre-2b this was snapshot-inert (no Info reader). 2b's verifiedStop(info.InstanceToken)
+made it a live same-tick Info reader → in a compound-rare state (pending_create_claim + empty tick-start
+token + live runtime + uncancelable drain past deadline) NEW read "" and skipped the token check, killing
+a runtime OLD spared. FIX: recoverRunningPendingCreate now threads the persisted mint into its returned
+fold batch on every return path (pendingCreateInstanceTokenFold on the abort paths; metadata["instance_token"]=tok
+on success — store write unchanged, augments only the fold). Teeth test
+TestRecoverRunningPendingCreate_ReturnsMintedInstanceTokenForSnapshotFold (fails without the fold).
+The OTHER residue keys (session_key/started_config_hash/continuation_reset_pending stale-resume clears)
+stay unthreaded — still no Info reader; thread when Step 3 moves the awake scan onto Info.

@@ -1399,15 +1399,6 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		"session_count": len(ordered),
 	})
 
-	// Build session ID -> *beads.Bead lookup for advanceSessionDrains.
-	// These pointers intentionally alias into the ordered slice so that
-	// mutations in Phase 1 (healState, clearWakeFailures, etc.) are
-	// visible to Phase 2's advanceSessionDrains via this map.
-	beadByID := make(map[string]*beads.Bead, len(ordered))
-	for i := range ordered {
-		beadByID[ordered[i].ID] = &ordered[i]
-	}
-
 	// Coherent typed snapshot of the tick's working set, loaded once (front-door
 	// migration Phase 5, Step 2). Reconciler decision reads route through this
 	// instead of a per-iteration InfoFromPersistedBead(*session) re-derive: it is
@@ -2459,18 +2450,16 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					continue
 				}
 			}
-			// Fold the CommitStartedPatch onto the snapshot (Step 6d write-returns-Info);
-			// nil on failure (no CommitStartedPatch mirror ran). STEP6-PREPASS-AUDIT
-			// group 7. KNOWN-INERT RESIDUE (capstone review wf_e8507262): buildPreparedStart
-			// inside recoverRunningPendingCreate may mirror a few extra keys (a
-			// stale-resume clear of session_key/started_config_hash/continuation_reset_pending,
-			// and a session_key/instance_token mint) that are NOT threaded into
-			// commitBatch, so on the failure path the snapshot keeps the pre-call values.
-			// Decision-inert: the block is gated on pending_create_claim=="true", which
-			// survives every failure return and drives WakeCausePendingCreate, so the
-			// awake decision matches the deleted pre-pass; the residue keys have no
-			// same-tick Info reader and self-heal on the next tick's store reload.
-			// Threading buildPreparedStart's batch out is deferred to the Get-cutover.
+			// Fold recoverRunningPendingCreate's batch onto the snapshot (Step 6d
+			// write-returns-Info). The batch now carries CommitStartedPatch PLUS
+			// buildPreparedStart's persisted instance_token mint (threaded out in
+			// pendingCreateInstanceTokenFold, on every return path): the Phase-2 drain
+			// scan reads info.InstanceToken (verifiedStop, Step 2b), so that mint can no
+			// longer stay a snapshot-inert residue. STEP6-PREPASS-AUDIT group 7. The
+			// remaining buildPreparedStart residue (a stale-resume clear of
+			// session_key/started_config_hash/continuation_reset_pending) is still not
+			// threaded — it has no same-tick Info reader and self-heals on the next
+			// tick's store reload; thread it out when Step 3 moves the awake scan onto Info.
 			ok, commitBatch := recoverRunningPendingCreate(session, tp, cfg, store, clk, trace)
 			if !ok {
 				fmt.Fprintf(stderr, "session reconciler: recovering pending create %s: metadata repair incomplete\n", name) //nolint:errcheck
@@ -3330,12 +3319,16 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		return plannedWakes
 	}
 
-	// Phase 2: Advance all in-flight drains.
+	// Phase 2: Advance all in-flight drains. The drain scan reads the coherent
+	// typed snapshot (write-returns-Info keeps it current through Phase 1), not
+	// the raw working beads — so it observes the same post-forward-pass state the
+	// old &ordered[i] aliases carried, without holding a raw pointer map.
 	phaseStart = time.Now()
-	sessionLookup := func(id string) *beads.Bead {
-		return beadByID[id]
+	infoLookup := func(id string) (sessionpkg.Info, bool) {
+		info, ok := infoByID[id]
+		return info, ok
 	}
-	advanceSessionDrainsWithSessionsTraced(dt, sp, store, sessionLookup, ordered, wakeEvals, cfg, poolDesired, nil, readyWaitSet, clk, trace)
+	advanceSessionDrainsWithSessionsTraced(dt, sp, store, infoLookup, ordered, wakeEvals, cfg, poolDesired, nil, readyWaitSet, clk, trace)
 	clearMissingIdleProbes(dt, infoByID)
 	recordPhase(TraceSiteSessionReconcileDrainAdvance, "session_reconcile.advance_drains", phaseStart, map[string]any{
 		"ordered_session_count": len(ordered),

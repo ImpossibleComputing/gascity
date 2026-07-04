@@ -2100,7 +2100,7 @@ func recoverRunningPendingCreate(
 				"error": err.Error(),
 			}, nil, "")
 		}
-		return false, nil
+		return false, pendingCreateInstanceTokenFold(session)
 	}
 	coreBreakdown := ""
 	if bdj, err := json.Marshal(prepared.coreBreakdown); err == nil {
@@ -2141,7 +2141,7 @@ func recoverRunningPendingCreate(
 				"error": err.Error(),
 			}, nil, "")
 		}
-		return false, nil
+		return false, pendingCreateInstanceTokenFold(session)
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, len(metadata))
@@ -2149,10 +2149,33 @@ func recoverRunningPendingCreate(
 	for key, value := range metadata {
 		session.Metadata[key] = value
 	}
+	// buildPreparedStart mints instance_token onto the bead + store (SetMarker) when
+	// it was empty — a residue outside CommitStartedPatch. Carry it in the returned
+	// fold batch so the caller's snapshot reflects it: the Phase-2 drain scan reads
+	// info.InstanceToken (verifiedStop). Already persisted, so this augments only the
+	// returned fold, not the store write.
+	if tok := session.Metadata["instance_token"]; tok != "" {
+		metadata["instance_token"] = tok
+	}
 	if trace != nil {
 		trace.recordDecision("reconciler.session.pending_create", tp.TemplateName, tp.SessionName, "pending_create_healed", "healed", nil, nil, "")
 	}
 	return true, metadata
+}
+
+// pendingCreateInstanceTokenFold returns buildPreparedStart's persisted
+// instance_token mint as a one-key fold batch (nil when unset). recoverRunningPendingCreate
+// returns it on the paths that abort before CommitStartedPatch persists, so the caller's
+// snapshot still reflects a token buildPreparedStart already wrote to the store — the
+// Phase-2 drain scan reads info.InstanceToken (verifiedStop) and must not see a stale "".
+func pendingCreateInstanceTokenFold(session *beads.Bead) map[string]string {
+	if session == nil {
+		return nil
+	}
+	if tok := session.Metadata["instance_token"]; tok != "" {
+		return map[string]string{"instance_token": tok}
+	}
+	return nil
 }
 
 func shouldRollbackPendingCreate(session *beads.Bead) bool {

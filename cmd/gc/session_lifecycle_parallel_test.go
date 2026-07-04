@@ -4102,6 +4102,52 @@ func TestRecoverRunningPendingCreate_StampsCreationCompleteAtForAlreadyActive(t 
 	}
 }
 
+// recoverRunningPendingCreate's buildPreparedStart mints a fresh instance_token
+// onto the store when the bead carried none — a residue OUTSIDE CommitStartedPatch.
+// The reconciler folds the returned batch onto its infoByID snapshot, and the
+// Phase-2 drain scan reads info.InstanceToken (verifiedStop, Step 2b). If the mint
+// were left out of the returned batch, the snapshot token would stay "" this tick,
+// verifiedStop would skip the incarnation check, and a re-woken runtime the old
+// raw-bead read spared would be killed. The returned batch MUST carry the mint.
+func TestRecoverRunningPendingCreate_ReturnsMintedInstanceTokenForSnapshotFold(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Title:  "helper",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"session_name":         "sky",
+			"pending_create_claim": "true",
+			"state":                "active",
+			"state_reason":         "creation_complete",
+			// No instance_token — buildPreparedStart mints one during recovery.
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{Agents: []config.Agent{{Name: "helper"}}}
+	tp := TemplateParams{SessionName: "sky", TemplateName: "helper"}
+	clkTime := time.Date(2026, 3, 18, 12, 0, 1, 0, time.UTC)
+
+	ok, batch := recoverRunningPendingCreate(&bead, tp, cfg, store, &clock.Fake{Time: clkTime}, nil)
+	if !ok {
+		t.Fatal("recoverRunningPendingCreate returned false, want true")
+	}
+	persisted, err := store.Get(bead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mintedToken := persisted.Metadata["instance_token"]
+	if mintedToken == "" {
+		t.Fatal("recovery did not mint an instance_token; test cannot exercise the residue fold")
+	}
+	if batch["instance_token"] != mintedToken {
+		t.Fatalf("returned fold batch instance_token = %q, want %q (the persisted mint) — the reconciler snapshot would go stale and verifiedStop would kill a re-woken runtime",
+			batch["instance_token"], mintedToken)
+	}
+}
+
 // A successful atomic start batch must land state=active, state_reason,
 // creation_complete_at, AND the pending_create_claim clear together —
 // downstream readers (e.g. the pool bead sweep) rely on this atomicity so

@@ -582,7 +582,7 @@ func TestVerifiedStop_MatchingToken(t *testing.T) {
 		t.Fatalf("store.Get: %v", err)
 	}
 
-	err = verifiedStop(session, store, sp, nil)
+	err = verifiedStop(sessionpkg.InfoFromPersistedBead(session), store, sp, nil)
 	if err != nil {
 		t.Errorf("verifiedStop with matching token: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestVerifiedStop_MismatchedToken(t *testing.T) {
 		t.Fatalf("store.Get: %v", err)
 	}
 
-	err = verifiedStop(session, store, sp, nil)
+	err = verifiedStop(sessionpkg.InfoFromPersistedBead(session), store, sp, nil)
 	if err == nil {
 		t.Error("expected error for mismatched token")
 	}
@@ -635,7 +635,7 @@ func TestVerifiedStop_NoToken(t *testing.T) {
 		t.Fatalf("store.Get: %v", err)
 	}
 
-	err = verifiedStop(session, store, sp, nil)
+	err = verifiedStop(sessionpkg.InfoFromPersistedBead(session), store, sp, nil)
 	if err != nil {
 		t.Errorf("verifiedStop with no token: %v", err)
 	}
@@ -1277,10 +1277,10 @@ func TestAdvanceSessionDrains_ConfigDriftCancelableOnPendingWake(t *testing.T) {
 	})
 
 	cfg := &config.City{Agents: []config.Agent{{Name: "worker"}}}
-	advanceSessionDrainsWithSessionsTraced(dt, sp, store, func(id string) *beads.Bead {
+	advanceSessionDrainsWithSessionsTraced(dt, sp, store, infoLookupFromBeadLookup(func(id string) *beads.Bead {
 		got, _ := store.Get(id)
 		return &got
-	}, []beads.Bead{b}, map[string]wakeEvaluation{
+	}), []beads.Bead{b}, map[string]wakeEvaluation{
 		b.ID: {Reasons: []WakeReason{WakePending}},
 	}, cfg, map[string]int{"worker": 1}, nil, nil, clk, nil)
 

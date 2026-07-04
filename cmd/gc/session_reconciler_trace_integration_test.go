@@ -383,7 +383,7 @@ func TestSessionReconcilerTraceStartAndDrainSubOps(t *testing.T) {
 		drainTracker,
 		sp,
 		store,
-		drainLookup,
+		infoLookupFromBeadLookup(drainLookup),
 		[]beads.Bead{drainBead},
 		wakeEvals,
 		cfg,
