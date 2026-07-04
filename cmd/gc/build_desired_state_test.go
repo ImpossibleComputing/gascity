@@ -244,6 +244,74 @@ func (s *partialAssignedWorkStore) Ready(query ...beads.ReadyQuery) ([]beads.Bea
 	return rows, nil
 }
 
+// Group F Phase 1: a failed query is attributed to the store scope it came
+// from ("" = city, otherwise the rig name), not just the global partial bool.
+func TestCollectAssignedWorkBeadsWithStores_AttributesPartialByStoreRef(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	healthy, err := cityStore.Create(beads.Bead{Title: "healthy city work", Assignee: "worker"})
+	if err != nil {
+		t.Fatalf("create city work: %v", err)
+	}
+	if err := cityStore.Update(healthy.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("mark in_progress: %v", err)
+	}
+	rigStore := &partialAssignedWorkStore{MemStore: beads.NewMemStore(), partialInProgress: true}
+	cfg := &config.City{Rigs: []config.Rig{{Name: "repo", Path: t.TempDir()}}}
+
+	_, _, _, _, partial, partialByRef := collectAssignedWorkBeadsWithStores(
+		cfg, cityStore, map[string]beads.Store{"repo": rigStore}, nil, nil)
+	if !partial {
+		t.Fatal("expected partial=true when a rig leg fails")
+	}
+	if !reflect.DeepEqual(partialByRef, map[string]bool{"repo": true}) {
+		t.Fatalf("partialByStoreRef = %#v, want exactly {\"repo\":true} (the city leg was healthy)", partialByRef)
+	}
+}
+
+// Group F: a rig leg that lists clean but fails its READY probe must still be
+// attributed to its own scope key. Without this the wrapper falls back to the
+// map-less global skip and re-strands graph orphans for the ready-probe-failure
+// subclass. Mutation guard: reverting the ready-pass markPartialScope to a bare
+// partial=true leaves this the only failing test.
+func TestCollectAssignedWorkBeadsWithStores_AttributesReadyPassPartialByStoreRef(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	rigStore := &partialAssignedWorkStore{MemStore: beads.NewMemStore(), partialReady: true}
+	if _, err := rigStore.Create(beads.Bead{Title: "assigned ready work", Assignee: "worker"}); err != nil {
+		t.Fatalf("create rig work: %v", err)
+	}
+	cfg := &config.City{Rigs: []config.Rig{{Name: "repo", Path: t.TempDir()}}}
+
+	_, _, _, _, partial, partialByRef := collectAssignedWorkBeadsWithStores(
+		cfg, cityStore, map[string]beads.Store{"repo": rigStore}, nil, nil)
+	if !partial {
+		t.Fatal("expected partial=true when the rig Ready probe fails")
+	}
+	if !reflect.DeepEqual(partialByRef, map[string]bool{"repo": true}) {
+		t.Fatalf("partialByStoreRef = %#v, want exactly {\"repo\":true} (ready-pass attribution, no \"\" key)", partialByRef)
+	}
+}
+
+// Group F Phase 1: a failing CITY leg is attributed to the "" key.
+func TestCollectAssignedWorkBeadsWithStores_AttributesCityPartialToEmptyRef(t *testing.T) {
+	cityStore := &partialAssignedWorkStore{MemStore: beads.NewMemStore(), partialInProgress: true}
+	work, err := cityStore.Create(beads.Bead{Title: "city work", Assignee: "worker"})
+	if err != nil {
+		t.Fatalf("create city work: %v", err)
+	}
+	if err := cityStore.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("mark in_progress: %v", err)
+	}
+
+	_, _, _, _, partial, partialByRef := collectAssignedWorkBeadsWithStores(
+		&config.City{}, cityStore, nil, nil, nil)
+	if !partial {
+		t.Fatal("expected partial=true when the city leg fails")
+	}
+	if !reflect.DeepEqual(partialByRef, map[string]bool{"": true}) {
+		t.Fatalf("partialByStoreRef = %#v, want exactly {\"\":true} (city leg attributed to \"\")", partialByRef)
+	}
+}
+
 func TestCollectAssignedWorkBeads_IncludesReadyOpenAssignedHandoff(t *testing.T) {
 	store := beads.NewMemStore()
 	handoff, err := store.Create(beads.Bead{
@@ -1806,7 +1874,7 @@ func TestCollectAssignedWorkBeads_PreservesPartialInProgressSurvivors(t *testing
 		t.Fatalf("reload work bead: %v", err)
 	}
 
-	got, stores, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, nil)
+	got, stores, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, nil)
 	if !partial {
 		t.Fatal("partial = false, want true")
 	}
@@ -1837,7 +1905,7 @@ func TestCollectAssignedWorkBeads_PreservesPartialReadySurvivors(t *testing.T) {
 		t.Fatalf("create work bead: %v", err)
 	}
 
-	got, stores, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, nil)
+	got, stores, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, nil)
 	if !partial {
 		t.Fatal("partial = false, want true")
 	}
@@ -1884,7 +1952,7 @@ func TestCollectAssignedWorkBeads_SkipsReadyProbeForInProgressAssignee(t *testin
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{session})
 
-	got, _, _, _, partial := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
+	got, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -1929,7 +1997,7 @@ func TestCollectAssignedWorkBeads_SkipsCityReadyProbeForRigInProgressAssignee(t 
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{session})
 
-	got, _, _, _, partial := collectAssignedWorkBeadsWithStores(
+	got, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(
 		&config.City{Rigs: []config.Rig{{Name: "repo", Path: "repo"}}},
 		cityStore,
 		map[string]beads.Store{"repo": rigStore},
@@ -2001,7 +2069,7 @@ func TestCollectAssignedWorkBeads_ReadyProbeStillRunsForOtherAssignees(t *testin
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{activeSession, readySession})
 
-	got, _, _, _, partial := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
+	got, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -2065,7 +2133,7 @@ func TestCollectAssignedWorkBeads_ReadyProbeIncludesActiveSessionAssignees(t *te
 	}
 	snapshot := newSessionBeadSnapshot([]beads.Bead{activeSession, sleepySession})
 
-	got, _, _, _, partial := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
+	got, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(&config.City{}, store, nil, nil, snapshot)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -2131,7 +2199,7 @@ func TestCollectAssignedWorkBeadsWithStores_TracksRigStore(t *testing.T) {
 		t.Fatalf("reload rig work bead: %v", err)
 	}
 
-	got, stores, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(
+	got, stores, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(
 		&config.City{Rigs: []config.Rig{{Name: "repo", Path: "/repo"}}},
 		cityStore,
 		map[string]beads.Store{"repo": rigStore},
@@ -2191,7 +2259,7 @@ func TestCollectAssignedWorkBeadsWithStores_PreservesCrossStoreIDCollisions(t *t
 		t.Fatalf("test setup expected overlapping city/rig IDs, got city %q rig %q", cityWork.ID, rigWork.ID)
 	}
 
-	got, stores, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(
+	got, stores, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(
 		&config.City{Rigs: []config.Rig{{Name: "repo", Path: "/repo"}}},
 		cityStore,
 		map[string]beads.Store{"repo": rigStore},
@@ -10423,7 +10491,7 @@ func TestCollectAssignedWorkBeads_ReadyProbeExcludesFutureNamedSessionRuntimeAss
 		t.Fatalf("create ready work bead: %v", err)
 	}
 
-	got, stores, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(
+	got, stores, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(
 		cfg,
 		cityStore,
 		map[string]beads.Store{"repo": rigStore},

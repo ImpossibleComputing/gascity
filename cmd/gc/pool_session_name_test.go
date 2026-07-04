@@ -1159,7 +1159,7 @@ func TestCollectAndReleaseOrphanPoolStepBead_Issue2793(t *testing.T) {
 
 	cfg := &config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}}
 
-	found, foundStores, foundStoreRefs, _, partial := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
+	found, foundStores, foundStoreRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -1210,7 +1210,7 @@ func TestCollectAndReleaseOrphanWorkflowRunTargetBead(t *testing.T) {
 
 	cfg := &config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}}
 
-	found, foundStores, foundStoreRefs, _, partial := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
+	found, foundStores, foundStoreRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -1260,7 +1260,7 @@ func TestCollectAndReleaseNonWorkflowRunTargetBeadStaysAssigned(t *testing.T) {
 
 	cfg := &config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}}
 
-	found, foundStores, foundStoreRefs, _, partial := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
+	found, foundStores, foundStoreRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(cfg, store, nil, nil, nil)
 	if partial {
 		t.Fatal("collectAssignedWorkBeadsWithStores reported partial results")
 	}
@@ -1298,7 +1298,7 @@ func TestCollectAssignedWorkBeadsIncludesUnassignedInProgressPoolWorkForRecovery
 		t.Fatalf("Set work status: %v", err)
 	}
 
-	found, stores, _, _, partial := collectAssignedWorkBeadsWithStores(
+	found, stores, _, _, partial, _ := collectAssignedWorkBeadsWithStores(
 		&config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
 		store,
 		nil,
@@ -2264,5 +2264,300 @@ func TestReleaseOrphanedPoolAssignments_ReleasesGraphResidentBeadBoundToRigStore
 	}
 	if got.Assignee != "" {
 		t.Fatalf("assignee = %q, want empty (reopened for re-dispatch)", got.Assignee)
+	}
+}
+
+// Group F: a graph-resident (gcg-) orphan gates on the city/graph leg's health
+// ("" key), NOT on its Group-B-remapped rig storeRef. So a flaky rig Dolt leg
+// (partialStoreRefs={"gascity"}) must NOT strand the graph orphan — its own
+// graph leg was healthy. Naive gating on assignedWorkStoreRefs[i] would skip it
+// and fail this test.
+func TestReleaseOrphanedPoolAssignments_GraphResidentReleasedWhenOnlyRigLegPartial(t *testing.T) {
+	work := beads.Bead{
+		ID:       "gcg-9001",
+		Title:    "orphaned graph step",
+		Status:   "in_progress",
+		Assignee: "run-operator-dead",
+		Metadata: map[string]string{"gc.routed_to": "run-operator", "gc.root_store_ref": "rig:gascity"},
+	}
+	graphStore := &graphFederatingStore{Store: beads.NewMemStore(), graph: []beads.Bead{work}}
+	rigStore := beads.NewMemStore()
+
+	released := releaseOrphanedPoolAssignmentsWithPartialScopes(
+		graphStore,
+		&config.City{Agents: []config.Agent{{Name: "run-operator", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
+		"",
+		nil,
+		[]beads.Bead{work},
+		[]beads.Store{rigStore},
+		[]string{"gascity"}, // post-Group-B remapped rig ref
+		map[string]beads.Store{"gascity": rigStore},
+		map[string]bool{"gascity": true}, // only the rig Dolt leg flaked
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("released = %v, want [%s] — graph orphan must release when only the rig leg is partial", released, work.ID)
+	}
+	got, err := graphStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("get work: %v", err)
+	}
+	if got.Status != "open" || got.Assignee != "" {
+		t.Fatalf("bead = {status:%q assignee:%q}, want reopened", got.Status, got.Assignee)
+	}
+}
+
+// Group F: a non-graph rig orphan gates on its OWN rig leg; when that leg is
+// partial the orphan is held back (the snapshot may be missing the open session
+// that owns it).
+func TestReleaseOrphanedPoolAssignments_HoldsRigBeadWhenOwnRigLegPartial(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	work, err := rigStore.Create(beads.Bead{
+		Title:    "orphaned rig pool work",
+		Assignee: "worker-dead",
+		Metadata: map[string]string{"gc.routed_to": "rig/worker"},
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+	if err := rigStore.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("Set work status: %v", err)
+	}
+	work, err = rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload work bead: %v", err)
+	}
+
+	released := releaseOrphanedPoolAssignmentsWithPartialScopes(
+		cityStore,
+		&config.City{
+			Rigs:   []config.Rig{{Name: "rig", Prefix: "ga"}},
+			Agents: []config.Agent{{Name: "worker", Dir: "rig", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}},
+		},
+		"",
+		nil,
+		[]beads.Bead{work},
+		[]beads.Store{rigStore},
+		[]string{"rig"},
+		map[string]beads.Store{"rig": rigStore},
+		map[string]bool{"rig": true}, // the owning leg flaked
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — orphan on a partial owning leg must be held", released)
+	}
+	got, err := rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Get rig work bead: %v", err)
+	}
+	if got.Status != "in_progress" {
+		t.Fatalf("status = %q, want in_progress (untouched)", got.Status)
+	}
+}
+
+// Group F: the gate is per-leg, not any-leg. A different flaky leg must not
+// suppress release of an orphan whose own leg is healthy.
+func TestReleaseOrphanedPoolAssignments_ReleasesRigBeadWhenOtherLegPartial(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	work, err := rigStore.Create(beads.Bead{
+		Title:    "orphaned rig pool work",
+		Assignee: "worker-dead",
+		Metadata: map[string]string{"gc.routed_to": "rig/worker"},
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+	if err := rigStore.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("Set work status: %v", err)
+	}
+	work, err = rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload work bead: %v", err)
+	}
+
+	released := releaseOrphanedPoolAssignmentsWithPartialScopes(
+		cityStore,
+		&config.City{
+			Rigs:   []config.Rig{{Name: "rig", Prefix: "ga"}},
+			Agents: []config.Agent{{Name: "worker", Dir: "rig", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}},
+		},
+		"",
+		nil,
+		[]beads.Bead{work},
+		[]beads.Store{rigStore},
+		[]string{"rig"},
+		map[string]beads.Store{"rig": rigStore},
+		map[string]bool{"otherrig": true}, // an unrelated leg flaked
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("released = %v, want [%s] — orphan on a healthy leg must release when a different leg is partial", released, work.ID)
+	}
+}
+
+// Group F: a populated partiality map with no index-aligned storeRefs cannot
+// attribute any bead to a healthy leg, so it conservatively skips all release.
+func TestReleaseOrphanedPoolAssignments_PartialScopesWithoutStoreRefsSkipsAll(t *testing.T) {
+	cityStore := beads.NewMemStore()
+	rigStore := beads.NewMemStore()
+	work, err := rigStore.Create(beads.Bead{
+		Title:    "orphaned rig pool work",
+		Assignee: "worker-dead",
+		Metadata: map[string]string{"gc.routed_to": "rig/worker"},
+	})
+	if err != nil {
+		t.Fatalf("Create work bead: %v", err)
+	}
+	if err := rigStore.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+		t.Fatalf("Set work status: %v", err)
+	}
+	work, err = rigStore.Get(work.ID)
+	if err != nil {
+		t.Fatalf("Reload work bead: %v", err)
+	}
+
+	released := releaseOrphanedPoolAssignmentsWithPartialScopes(
+		cityStore,
+		&config.City{
+			Rigs:   []config.Rig{{Name: "rig", Prefix: "ga"}},
+			Agents: []config.Agent{{Name: "worker", Dir: "rig", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}},
+		},
+		"",
+		nil,
+		[]beads.Bead{work},
+		nil, // no stores
+		nil, // no storeRefs -> not storeRefAware
+		map[string]beads.Store{"rig": rigStore},
+		map[string]bool{"rig": true},
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — unattributable partiality must skip release", released)
+	}
+}
+
+// Group F headline shape: a SINGLE release call over a MIXED slice — one
+// graph-resident (gcg-) orphan beside a non-graph rig orphan — with one flaky
+// leg. Per-bead gating must release the graph orphan (scope "") and hold the
+// rig orphan (scope "repo"), then the inverse when the graph leg flakes.
+// Single-bead tests cannot catch a scope-hoist or stale-index regression.
+func TestReleaseOrphanedPoolAssignments_MixedSliceGatesPerBead(t *testing.T) {
+	cfg := &config.City{
+		Rigs: []config.Rig{{Name: "rig", Prefix: "ga"}},
+		Agents: []config.Agent{
+			{Name: "run-operator", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)},
+			{Name: "worker", Dir: "rig", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)},
+		},
+	}
+	run := func(partial map[string]bool) (released []releasedPoolAssignment, graphID, rigID string) {
+		graphWork := beads.Bead{
+			ID:       "gcg-9001",
+			Title:    "orphaned graph step",
+			Status:   "in_progress",
+			Assignee: "run-operator-dead",
+			Metadata: map[string]string{"gc.routed_to": "run-operator", "gc.root_store_ref": "rig:gascity"},
+		}
+		graphStore := &graphFederatingStore{Store: beads.NewMemStore(), graph: []beads.Bead{graphWork}}
+		rigStore := beads.NewMemStore()
+		rigWork, err := rigStore.Create(beads.Bead{
+			Title:    "orphaned rig pool work",
+			Assignee: "worker-dead",
+			Metadata: map[string]string{"gc.routed_to": "rig/worker"},
+		})
+		if err != nil {
+			t.Fatalf("create rig work: %v", err)
+		}
+		if err := rigStore.Update(rigWork.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+			t.Fatalf("set rig work in_progress: %v", err)
+		}
+		rigWork, err = rigStore.Get(rigWork.ID)
+		if err != nil {
+			t.Fatalf("reload rig work: %v", err)
+		}
+		released = releaseOrphanedPoolAssignmentsWithPartialScopes(
+			graphStore, cfg, "", nil,
+			[]beads.Bead{graphWork, rigWork},
+			[]beads.Store{rigStore, rigStore}, // graph bead's Group-B-tagged entry is the rig; residency override rescues it
+			[]string{"gascity", "repo"},
+			map[string]beads.Store{"gascity": rigStore, "repo": rigStore},
+			partial,
+		)
+		return released, graphWork.ID, rigWork.ID
+	}
+
+	// Rig leg flaky: graph orphan releases (scope ""), rig orphan held (scope "repo").
+	if released, graphID, _ := run(map[string]bool{"repo": true}); len(released) != 1 || released[0].ID != graphID {
+		t.Fatalf("rig-leg-partial: released = %v, want [%s] only", released, graphID)
+	}
+	// Graph/city leg flaky: graph orphan held (scope ""), rig orphan releases (scope "repo").
+	if released, graphID, rigID := run(map[string]bool{"": true}); len(released) != 1 || released[0].ID != rigID {
+		t.Fatalf("city-leg-partial: released = %v, want [%s] only (graph %s must be held)", released, rigID, graphID)
+	}
+}
+
+// Group F headline: the wrapper releases orphans on a healthy leg even when
+// StoreQueryPartial is set, as long as the failing leg is a DIFFERENT scope.
+// Before the fix, snapshotQueryPartial() bailed on ALL release the moment any
+// leg flaked — stranding the graph orphan whose own leg was complete.
+func TestReleaseOrphanedPoolAssignmentsWhenSnapshotsComplete_ReleasesHealthyLegWhenOtherLegPartial(t *testing.T) {
+	work := beads.Bead{
+		ID:       "gcg-9001",
+		Title:    "orphaned graph step",
+		Status:   "in_progress",
+		Assignee: "run-operator-dead",
+		Metadata: map[string]string{"gc.routed_to": "run-operator", "gc.root_store_ref": "rig:gascity"},
+	}
+	graphStore := &graphFederatingStore{Store: beads.NewMemStore(), graph: []beads.Bead{work}}
+	rigStore := beads.NewMemStore()
+
+	result := DesiredStateResult{
+		AssignedWorkBeads:            []beads.Bead{work},
+		AssignedWorkStores:           []beads.Store{rigStore},
+		AssignedWorkStoreRefs:        []string{"gascity"},
+		StoreQueryPartial:            true,
+		AssignedWorkPartialStoreRefs: map[string]bool{"gascity": true},
+	}
+	released := releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
+		graphStore,
+		&config.City{Agents: []config.Agent{{Name: "run-operator", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
+		"",
+		nil,
+		result,
+		map[string]beads.Store{"gascity": rigStore},
+	)
+	if len(released) != 1 || released[0].ID != work.ID {
+		t.Fatalf("released = %v, want [%s] — graph orphan must release when only the rig leg is partial", released, work.ID)
+	}
+}
+
+// Group F: SessionQueryPartial stays a global gate — a missing session snapshot
+// makes ANY assigned work look orphaned, so release bails regardless of which
+// store legs are healthy.
+func TestReleaseOrphanedPoolAssignmentsWhenSnapshotsComplete_SessionPartialBlocksDespiteHealthyScopes(t *testing.T) {
+	work := beads.Bead{
+		ID:       "gcg-9001",
+		Title:    "orphaned graph step",
+		Status:   "in_progress",
+		Assignee: "run-operator-dead",
+		Metadata: map[string]string{"gc.routed_to": "run-operator", "gc.root_store_ref": "rig:gascity"},
+	}
+	graphStore := &graphFederatingStore{Store: beads.NewMemStore(), graph: []beads.Bead{work}}
+	rigStore := beads.NewMemStore()
+
+	result := DesiredStateResult{
+		AssignedWorkBeads:            []beads.Bead{work},
+		AssignedWorkStores:           []beads.Store{rigStore},
+		AssignedWorkStoreRefs:        []string{"gascity"},
+		SessionQueryPartial:          true,
+		AssignedWorkPartialStoreRefs: map[string]bool{"otherrig": true}, // a non-owning leg
+	}
+	released := releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
+		graphStore,
+		&config.City{Agents: []config.Agent{{Name: "run-operator", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
+		"",
+		nil,
+		result,
+		map[string]beads.Store{"gascity": rigStore},
+	)
+	if len(released) != 0 {
+		t.Fatalf("released = %v, want none — SessionQueryPartial must globally block release", released)
 	}
 }

@@ -78,8 +78,14 @@ func GCSweepSessionBeads(store beads.Store, rigStores map[string]beads.Store, se
 	return closed
 }
 
-// releaseOrphanedPoolAssignmentsWhenSnapshotsComplete skips orphan release
-// unless both the assigned-work and open-session snapshots are complete.
+// releaseOrphanedPoolAssignmentsWhenSnapshotsComplete gates orphan release on
+// snapshot completeness. A missing session snapshot is a global bail (any
+// assigned work can look orphaned). A partial store snapshot is gated
+// per-scope: only beads whose OWNING store leg failed this tick are held back,
+// so one flaky rig Dolt leg no longer suppresses release of graph-resident
+// (gcg-) orphans whose own city/graph leg was complete. When the partial flag
+// is set without per-scope attribution (e.g. the squatter guard), fall back to
+// the historical global skip.
 func releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
 	store beads.Store,
 	cfg *config.City,
@@ -88,19 +94,26 @@ func releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
 	result DesiredStateResult,
 	rigStores map[string]beads.Store,
 ) []releasedPoolAssignment {
-	// Partial input snapshots can make active work look orphaned for this
-	// tick only: missing work affects drain decisions, and missing sessions
-	// affects assigned-work orphan release.
-	if result.snapshotQueryPartial() {
+	// Missing session beads make ANY assigned work look orphaned, so the
+	// session snapshot stays a global gate.
+	if result.SessionQueryPartial {
 		return nil
 	}
-	return releaseOrphanedPoolAssignments(store, cfg, cityPath, openSessionBeads, result.AssignedWorkBeads, result.AssignedWorkStores, result.AssignedWorkStoreRefs, rigStores)
+	// A partial store snapshot with no per-scope attribution (hand-built
+	// results, squatter-guard-style setters that flip StoreQueryPartial without
+	// populating the map): historical global skip — never release on
+	// unattributed partiality.
+	if result.StoreQueryPartial && len(result.AssignedWorkPartialStoreRefs) == 0 {
+		return nil
+	}
+	return releaseOrphanedPoolAssignmentsWithPartialScopes(store, cfg, cityPath, openSessionBeads, result.AssignedWorkBeads, result.AssignedWorkStores, result.AssignedWorkStoreRefs, rigStores, result.AssignedWorkPartialStoreRefs)
 }
 
 // releaseOrphanedPoolAssignments reopens active pool-routed work whose
 // assignee no longer maps to any open session bead. This also recovers
 // pool-routed work left in_progress with no assignee, which cannot be claimed
-// again until it is moved back to open.
+// again until it is moved back to open. It gates on no per-scope partiality
+// (nil map) — every bead is eligible regardless of store health.
 func releaseOrphanedPoolAssignments(
 	store beads.Store,
 	cfg *config.City,
@@ -110,6 +123,27 @@ func releaseOrphanedPoolAssignments(
 	assignedWorkStores []beads.Store,
 	assignedWorkStoreRefs []string,
 	rigStores map[string]beads.Store,
+) []releasedPoolAssignment {
+	return releaseOrphanedPoolAssignmentsWithPartialScopes(store, cfg, cityPath, openSessionBeads, assignedWorkBeads, assignedWorkStores, assignedWorkStoreRefs, rigStores, nil)
+}
+
+// releaseOrphanedPoolAssignmentsWithPartialScopes is releaseOrphanedPoolAssignments
+// with per-scope partiality gating. partialStoreRefs, when non-empty, names the
+// collection scopes ("" = city/graph store, otherwise the rig name) whose
+// assigned-work queries failed this tick; a bead is skipped only when its OWNING
+// scope is in that set. Graph-resident (gcg-) beads physically live in the city
+// graph store even after Group B retagged their logical storeRef to a rig, so
+// they gate on the "" key — a flaky rig Dolt leg must not strand them.
+func releaseOrphanedPoolAssignmentsWithPartialScopes(
+	store beads.Store,
+	cfg *config.City,
+	cityPath string,
+	openSessionBeads []beads.Bead,
+	assignedWorkBeads []beads.Bead,
+	assignedWorkStores []beads.Store,
+	assignedWorkStoreRefs []string,
+	rigStores map[string]beads.Store,
+	partialStoreRefs map[string]bool,
 ) []releasedPoolAssignment {
 	if store == nil || cfg == nil || len(assignedWorkBeads) == 0 {
 		return nil
@@ -121,6 +155,23 @@ func releaseOrphanedPoolAssignments(
 	storeRefAware := len(assignedWorkStoreRefs) == len(assignedWorkBeads)
 	if len(assignedWorkStoreRefs) > 0 && !storeRefAware {
 		log.Printf("releaseOrphanedPoolAssignments: assigned work/store-ref length mismatch: work=%d storeRefs=%d", len(assignedWorkBeads), len(assignedWorkStoreRefs))
+	}
+	// Per-scope partiality can only be attributed through index-aligned
+	// storeRefs; without them, fall back to the historical global skip rather
+	// than release beads we cannot attribute to a healthy leg.
+	if len(partialStoreRefs) > 0 && !storeRefAware {
+		log.Printf("releaseOrphanedPoolAssignments: store snapshot partial (%d scope(s)) with no store-ref alignment; skipping release this tick", len(partialStoreRefs))
+		return nil
+	}
+	// Hoist the graph-residency prefix once so the partiality-scope decision and
+	// the physical-owner remap below share the SAME predicate. Absent on a
+	// default Dolt city (no distinct ClassGraph backend) → graphPrefix "" → no
+	// residency override, byte-identical.
+	var graphPrefix string
+	if gol, ok := beads.GraphOnlyListFor(store); ok {
+		if pfx := gol.GraphIDPrefix(); pfx != "" {
+			graphPrefix = pfx + "-"
+		}
 	}
 
 	openIdentifiers := makeOpenSessionStoreRefIndex(cityPath, cfg, openSessionBeads, storeRefAware)
@@ -138,6 +189,20 @@ func releaseOrphanedPoolAssignments(
 	for i, wb := range assignedWorkBeads {
 		if wb.Status != "open" && wb.Status != "in_progress" {
 			continue
+		}
+		if len(partialStoreRefs) > 0 {
+			// Gate the bead on the health of the scope it was COLLECTED from.
+			// Graph-resident (gcg-) beads gate on the city/graph leg's key ""
+			// even though Group B retagged their logical storeRef to the routed
+			// rig — a flaky rig Dolt leg must not strand them. Everything else
+			// was collected from the store its ref names.
+			scope := assignedWorkStoreRefs[i]
+			if graphPrefix != "" && strings.HasPrefix(wb.ID, graphPrefix) {
+				scope = ""
+			}
+			if partialStoreRefs[scope] {
+				continue
+			}
 		}
 		assignee := strings.TrimSpace(wb.Assignee)
 		if assignee == "" && wb.Status == "in_progress" && isCanonicalWorkflowRoot(wb) {
@@ -194,11 +259,11 @@ func releaseOrphanedPoolAssignments(
 		// analog of the close-check graph-only fix). Validate and write against the
 		// store that physically holds it. Identity-phase Dolt cities have no
 		// distinct ClassGraph backend, so GraphOnlyListFor is absent and this is a
-		// no-op there (byte-identical default).
-		if gol, ok := beads.GraphOnlyListFor(store); ok {
-			if pfx := gol.GraphIDPrefix(); pfx != "" && strings.HasPrefix(wb.ID, pfx+"-") {
-				ownerStore = store
-			}
+		// no-op there (byte-identical default). Uses the same hoisted
+		// graphPrefix as the partiality-scope gate above, so residency is
+		// classified identically for both decisions.
+		if graphPrefix != "" && strings.HasPrefix(wb.ID, graphPrefix) {
+			ownerStore = store
 		}
 		if !liveWorkAssignmentStillReleasable(ownerStore, wb.ID, wb.Status, assignee) {
 			continue

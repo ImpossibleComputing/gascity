@@ -66,8 +66,20 @@ type DesiredStateResult struct {
 	// StoreQueryPartial is true when one or more bead store work queries
 	// failed. When set, the reconciler must NOT drain sessions based on the
 	// incomplete desired state — a transient failure would cause running
-	// sessions to be falsely orphaned and interrupted via Ctrl-C.
+	// sessions to be falsely orphaned and interrupted via Ctrl-C. See the
+	// companion AssignedWorkPartialStoreRefs for per-scope attribution used by
+	// orphan release.
 	StoreQueryPartial bool
+	// AssignedWorkPartialStoreRefs records, per collection scope, which store's
+	// assigned-work queries failed this tick ("" = city/graph store, otherwise
+	// the rig name — the same key space as AssignedWorkStoreRefs BEFORE the
+	// graph-resident remap). Orphan release gates each bead on its OWNING
+	// scope's health instead of the global StoreQueryPartial, so one flaky rig
+	// Dolt leg no longer suppresses release of graph-resident (gcg-) orphans
+	// whose own store snapshot was complete. nil/empty means no store failed;
+	// when StoreQueryPartial is set without this attribution (e.g. the squatter
+	// guard), release falls back to the historical global skip.
+	AssignedWorkPartialStoreRefs map[string]bool
 	// SessionQueryPartial is true when session-bead snapshot loading failed.
 	// Orphan-release and drain decisions must treat this like an incomplete
 	// work snapshot because missing live session beads make assigned work look
@@ -651,13 +663,14 @@ func buildDesiredStateWithSessionBeads(
 	var assignedWorkStoreRefs []string
 	var readyAssignedIDs map[string]bool
 	var storePartial bool
+	var storePartialByRef map[string]bool
 	var scaleCheckCounts map[string]int
 	var poolScaleCheckPartialTemplates map[string]bool
 	var namedScaleCheckPartialTemplates map[string]bool
 	var scaleCheckPartialTemplates map[string]bool
 	var namedDefaultDemand map[string]bool
 	if store != nil {
-		assignedWorkBeads, assignedWorkStores, assignedWorkStoreRefs, readyAssignedIDs, storePartial = collectAssignedWorkBeadsWithStores(cfg, store, rigStores, suspendedRigPaths, sessionBeads)
+		assignedWorkBeads, assignedWorkStores, assignedWorkStoreRefs, readyAssignedIDs, storePartial, storePartialByRef = collectAssignedWorkBeadsWithStores(cfg, store, rigStores, suspendedRigPaths, sessionBeads)
 		// Retag graph-resident (gcg-) beads collected from the city graph store
 		// with the logical rig ref their routing carries. Under graph_store=sqlite
 		// the city collection pass tags them storeRef "", which makes every
@@ -910,6 +923,7 @@ func buildDesiredStateWithSessionBeads(
 		ReadyAssignedIDs:                readyAssignedIDs,
 		NamedSessionDemand:              namedWorkReady,
 		StoreQueryPartial:               storePartial,
+		AssignedWorkPartialStoreRefs:    storePartialByRef,
 		BeaconTime:                      beaconTime,
 	}
 }
@@ -1061,7 +1075,7 @@ func collectAssignedWorkBeads(
 	cfg *config.City,
 	cityStore beads.Store,
 ) ([]beads.Bead, bool) {
-	result, _, _, _, partial := collectAssignedWorkBeadsWithStores(cfg, cityStore, nil, nil, nil)
+	result, _, _, _, partial, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, nil, nil, nil)
 	return result, partial
 }
 
@@ -1078,7 +1092,7 @@ func collectAssignedWorkBeadsWithStores(
 	rigStores map[string]beads.Store,
 	suspendedRigPaths map[string]bool,
 	sessionBeads *sessionBeadSnapshot,
-) ([]beads.Bead, []beads.Store, []string, map[string]bool, bool) {
+) ([]beads.Bead, []beads.Store, []string, map[string]bool, bool, map[string]bool) {
 	// Use CachingStore-wrapped stores. Creating raw bdStoreForCity per rig
 	// spawns bd subprocesses on every tick, saturating dolt.
 	type workStore struct {
@@ -1157,7 +1171,21 @@ func collectAssignedWorkBeadsWithStores(
 	var resultStoreRefs []string
 	readyAssignedIDs := make(map[string]bool)
 	var partial bool
-	for _, r := range results {
+	// partialByStoreRef attributes each failed query to its COLLECTION scope
+	// ("" = city/graph leg, otherwise the rig name), so orphan release can gate
+	// each bead on the health of the store it was collected from rather than the
+	// global partial flag. Allocated lazily: a healthy tick returns a nil map,
+	// which keeps the release path byte-identical. Kept in lockstep with
+	// `partial` (both derive from r.errs).
+	var partialByStoreRef map[string]bool
+	markPartialScope := func(ref string) {
+		partial = true
+		if partialByStoreRef == nil {
+			partialByStoreRef = make(map[string]bool, len(stores))
+		}
+		partialByStoreRef[ref] = true
+	}
+	for idx, r := range results {
 		result = append(result, r.beads...)
 		resultStores = append(resultStores, r.stores...)
 		resultStoreRefs = append(resultStoreRefs, r.storeRefs...)
@@ -1166,7 +1194,7 @@ func collectAssignedWorkBeadsWithStores(
 		}
 		for _, err := range r.errs {
 			log.Printf("collectAssignedWorkBeads: %v", err)
-			partial = true
+			markPartialScope(stores[idx].ref)
 		}
 	}
 	// Skip the Ready handoff probe only for assignees that already have a
@@ -1184,7 +1212,7 @@ func collectAssignedWorkBeadsWithStores(
 	routedSanitized := routedSanitizedNamedIdentities(result)
 	assignees := readyAssignedWorkAssignees(cfg, sessionBeads, skipReadyAssignees, routedSanitized)
 	if len(skipReadyAssignees) > 0 && len(assignees) == 0 {
-		return result, resultStores, resultStoreRefs, readyAssignedIDs, partial
+		return result, resultStores, resultStoreRefs, readyAssignedIDs, partial, partialByStoreRef
 	}
 
 	readyResults := make([]storeAssignedWorkResult, len(stores))
@@ -1220,7 +1248,7 @@ func collectAssignedWorkBeadsWithStores(
 		}()
 	}
 	wg.Wait()
-	for _, r := range readyResults {
+	for idx, r := range readyResults {
 		result = append(result, r.beads...)
 		resultStores = append(resultStores, r.stores...)
 		resultStoreRefs = append(resultStoreRefs, r.storeRefs...)
@@ -1229,10 +1257,10 @@ func collectAssignedWorkBeadsWithStores(
 		}
 		for _, err := range r.errs {
 			log.Printf("collectAssignedWorkBeads: %v", err)
-			partial = true
+			markPartialScope(stores[idx].ref)
 		}
 	}
-	return result, resultStores, resultStoreRefs, readyAssignedIDs, partial
+	return result, resultStores, resultStoreRefs, readyAssignedIDs, partial, partialByStoreRef
 }
 
 func assignedWorkReadyLimit(cfg *config.City) int {

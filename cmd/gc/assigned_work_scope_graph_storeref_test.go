@@ -78,7 +78,7 @@ func newGraphResidentRemapFixture(t *testing.T, hasGraph bool) (*config.City, st
 // worker; the remap retags it to the rig so every rig-scoped gate can reach it.
 func TestGraphResidentAssignedWorkStoreRefRemap(t *testing.T) {
 	cfg, cityPath, cityStore, rigStores := newGraphResidentRemapFixture(t, true)
-	work, _, storeRefs, _, partial := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
+	work, _, storeRefs, _, partial, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
 	if partial {
 		t.Fatalf("unexpected partial collection")
 	}
@@ -100,7 +100,7 @@ func TestGraphResidentAssignedWorkStoreRefRemap(t *testing.T) {
 // its in-progress graph work (the a7f7b2bcd assigned-work sibling deadlock).
 func TestGraphResidentAssignedWorkWakesAsleepRigWorker(t *testing.T) {
 	cfg, cityPath, cityStore, rigStores := newGraphResidentRemapFixture(t, true)
-	work, _, storeRefs, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
+	work, _, storeRefs, _, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
 
 	sessions := []beads.Bead{{
 		ID: "session-1", Status: "open", Type: sessionBeadType,
@@ -124,7 +124,7 @@ func TestGraphResidentAssignedWorkWakesAsleepRigWorker(t *testing.T) {
 // graph step visible to the rig pool-demand gate.
 func TestGraphResidentAssignedWorkDrivesRigPoolDemand(t *testing.T) {
 	cfg, cityPath, cityStore, rigStores := newGraphResidentRemapFixture(t, true)
-	work, _, storeRefs, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
+	work, _, storeRefs, _, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
 	remapGraphResidentAssignedWorkStoreRefs(cfg, cityPath, cityStore, work, storeRefs)
 
 	sessions := []beads.Bead{{
@@ -201,7 +201,7 @@ func TestGraphResidentRemapWiredIntoBuildDesiredState(t *testing.T) {
 func TestGraphResidentStoreRefRemapInertness(t *testing.T) {
 	t.Run("default dolt city (capability absent)", func(t *testing.T) {
 		cfg, cityPath, cityStore, rigStores := newGraphResidentRemapFixture(t, false)
-		work, _, storeRefs, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
+		work, _, storeRefs, _, _, _ := collectAssignedWorkBeadsWithStores(cfg, cityStore, rigStores, nil, nil)
 		idx := remapTestIndexOf(work, "gcg-1590")
 		if idx < 0 {
 			t.Fatalf("gcg-1590 not collected")
