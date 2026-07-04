@@ -1,8 +1,8 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `556f02696`** (6d Commit 4 —
-the `restart_requested` overlay SET+consume folds).
+worktree `.claude/worktrees/object-front-doors`, **HEAD `901b3c6b8`** (6d Commit 5 batch 1 —
+heal#2 + SleepPatch-kill folds; the pre-pass deletion has STARTED).
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
@@ -72,21 +72,32 @@ Verified by a **4-lens fable panel (wf_06452ded): 0 confirmed defects** (byte-id
 clean; #2574 overlay lifecycle + masking confirmed correct). Also updated the pre-pass rationale
 comment to record which writers self-refresh vs. which the pre-pass still masks.
 
-**NEXT ACTIONABLE = 6d Commit 5 — DELETE the blanket pre-pass @~2913 (the LANDMINE).** This is
-gated on converting the COMPLETE set of forward-pass writers to self-refresh (STEP6-DESIGN §5 —
-**re-enumerate from code**, do NOT trust any list). Head-start enumeration from the Commit-4
-review (all currently masked by the pre-pass, none folded): (1) **pending-create rollback**
-(`rollbackPendingCreate` mutates `session_name` + closes in-store, the `continue`d sites ~2002/
-~2022); (2) **`resetConfiguredNamedSessionForConfigDrift`** (calls @~2538 / @~2726, mirrors
-`ConfigDriftResetPatch` — state/session_key/last_woke_at/pending_create_*/continuation_reset_pending
-— @~4201, then `continue`s); (3) **SleepPatch max-age/idle kills** (raw-mirror sites ~2801 / ~2875);
-(4) **stability/churn/detach writes**. Fold each (byte-identical, coherence-checked), THEN delete
-the pre-pass, THEN add the comprehensive read-after-write test that becomes possible (a
-kill-success-then-awake-scan asserting `restart_requested` reads empty; a config-drift-repair
-asserting the reset-pending wake rung fires). Also the aggregating refreshes (`infoAsleepDrift`
-@~2688, wakeTargets @~2938) + `advanceSessionDrains`/`newSessionBeadSnapshot` + drop the lockstep &
-raw working set, then **6e** (join the guard). **STEP6-DESIGN §8 is the plan;
-`RECONCILER-FRONT-DOOR-NEXT-SESSION-PROMPT.md` is paste-ready.**
+**6d Commit 5 = DELETE the blanket pre-pass — IN PROGRESS (the LANDMINE, a multi-batch commit).**
+The COMPLETE fold set was audited from code (4-region fable audit + opus synthesis, wf_df3cae94):
+**12 mechanisms / 22 sites**, fully enumerated in
+`RECONCILER-FRONT-DOOR-STEP6-PREPASS-AUDIT.md` (the authoritative plan — exact folds, commit
+sequence, not-dependencies, tests-unlocked-at-deletion). Every fold is MASKED by the pre-pass
+(byte-identical, no behavior change, NO isolated teeth test — verified by review; teeth tests
+land at the deletion).
+
+**Batch 1 DONE (`901b3c6b8`).** The batch-in-hand folds (no helper sig change): heal#2
+(`ApplyPatch(healBatch)` @~2384, the coherence linchpin) + the max-age & idle SleepPatch kills
+(`ApplyPatch(batch)` @~2823/@~2903). Byte-identical + coherent; focused fable review confirmed
+all three correct.
+
+**NEXT = the remaining fold batches (STEP6-PREPASS-AUDIT sequence), each masked/review-verified:**
+(2) idleSleep/detachedAt/recoverRunningPendingCreate (Groups 6,7); (3) stability/churn/clears
+(Group 5); (4) rebaseline/relaunch (Groups 8,9); (5) resetConfigDrift asleep (Group 10 — the
+**#2574 restart_requested-clear** hazard); (6) markDrainAckStopPending (Group 3); (7) the
+sig-change folds `checkRateLimitStability` (Group 1) + `attemptRollbackPendingCreate` (Group 2,
+incl. the store-only `MarkClosed`). Most of Groups 5-10 need the helper to RETURN its mirrored
+batch (a sig change per helper, like `markProviderTerminalError` in Commit 3). **THEN** delete the
+pre-pass @~2930 + retire the aggregating refreshes (`infoAsleepDrift` @~2700, wakeTargets @~2958)
++ add the comprehensive read-after-write tests (now possible: same-tick re-wake off a mid-tick
+sleep; cross-session drain-ack/min-floor visibility; #2574 phantom-restart suppression) +
+`advanceSessionDrains`/`newSessionBeadSnapshot` + drop the lockstep & raw working set, then **6e**
+(the guard forbidding raw `session.Metadata[` writes on the decision path). **STEP6-PREPASS-AUDIT.md
+is the per-fold plan; STEP6-DESIGN §8 is the higher-level design.**
 Design + sub-phase backlog:
 `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
 audit + opus synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team**
