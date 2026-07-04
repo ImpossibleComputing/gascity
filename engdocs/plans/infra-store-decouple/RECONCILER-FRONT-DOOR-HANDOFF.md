@@ -1,8 +1,8 @@
 # Reconciler Front-Door Handoff — the backlog to work through
 
 **PR #3839** (DRAFT, base `main`), branch `upstream/object-front-doors-cleanup`,
-worktree `.claude/worktrees/object-front-doors`, **HEAD `901b3c6b8`** (6d Commit 5 batch 1 —
-heal#2 + SleepPatch-kill folds; the pre-pass deletion has STARTED).
+worktree `.claude/worktrees/object-front-doors`, **HEAD `b15b02892`** (6d Commit 5 batches 1-2 —
+heal#2 + SleepPatch kills + drain-ack-stop-pending + idle-recover-sleep folds).
 
 This is the authoritative handoff for finishing the session reconciler's move off
 raw `beads.Bead.Metadata`, onto the typed **`session.Store`** front door. It
@@ -80,24 +80,45 @@ sequence, not-dependencies, tests-unlocked-at-deletion). Every fold is MASKED by
 (byte-identical, no behavior change, NO isolated teeth test — verified by review; teeth tests
 land at the deletion).
 
-**Batch 1 DONE (`901b3c6b8`).** The batch-in-hand folds (no helper sig change): heal#2
-(`ApplyPatch(healBatch)` @~2384, the coherence linchpin) + the max-age & idle SleepPatch kills
-(`ApplyPatch(batch)` @~2823/@~2903). Byte-identical + coherent; focused fable review confirmed
-all three correct.
+**Batches 1-2 DONE (`901b3c6b8`, `b15b02892`) — 5 of 22 sites folded.** The folds needing
+NO helper signature change (batch in hand or deterministic-Info-key reconstruction gated on a
+`true` return): heal#2 `ApplyPatch(healBatch)` @~2394 (linchpin) + the max-age & idle SleepPatch
+kills @~2833/@~2913 (Groups 4, 11, 12); + `markDrainAckStopPending` ×2 (reconstruct
+`DrainAckStopPendingPatch(now)`) and `recoverPendingIdleSleep` (reconstruct `SleepPatch(now,"idle")`)
+(Groups 3, 6-partial). Byte-identical + coherent; batch 1 fable-reviewed clean.
 
-**NEXT = the remaining fold batches (STEP6-PREPASS-AUDIT sequence), each masked/review-verified:**
-(2) idleSleep/detachedAt/recoverRunningPendingCreate (Groups 6,7); (3) stability/churn/clears
-(Group 5); (4) rebaseline/relaunch (Groups 8,9); (5) resetConfigDrift asleep (Group 10 — the
-**#2574 restart_requested-clear** hazard); (6) markDrainAckStopPending (Group 3); (7) the
-sig-change folds `checkRateLimitStability` (Group 1) + `attemptRollbackPendingCreate` (Group 2,
-incl. the store-only `MarkClosed`). Most of Groups 5-10 need the helper to RETURN its mirrored
-batch (a sig change per helper, like `markProviderTerminalError` in Commit 3). **THEN** delete the
-pre-pass @~2930 + retire the aggregating refreshes (`infoAsleepDrift` @~2700, wakeTargets @~2958)
-+ add the comprehensive read-after-write tests (now possible: same-tick re-wake off a mid-tick
-sleep; cross-session drain-ack/min-floor visibility; #2574 phantom-restart suppression) +
+**NEXT = the SIGNATURE-CHANGE fold batches — the bulk (17 sites, ~8 helpers).** Every remaining
+helper CONDITIONALLY mutates and does NOT return its batch, so reconstruction is unsafe → each
+needs a sig change to return its mirrored batch (like `markProviderTerminalError` in Commit 3),
+then `ApplyPatch(batch)` at the forward-pass call site (other callers take `_`; tests updated).
+Ordered by rising difficulty (the last two thread the batch out of SUB-helpers — deeper surgery):
+- **`clearWakeFailures`/`clearChurn`** (Group 5, void→`map[string]string`; both build a conditional
+  local `batch`/marker — return it or nil).
+- **`reconcileDetachedAt`** (Group 6, void→ the `detached_at` patch it set/cleared; value is a
+  timestamp, NOT reconstructable).
+- **`recoverRunningPendingCreate`** (Group 7, bool→`(bool, batch)`; the `CommitStartedPatch` is a
+  local `metadata` var).
+- **`silentRebaselineSessionHashes`** (Group 8, error→`(batch, error)`; 3 callers, 1 forward-pass).
+- **`relaunchAgentForLaunchDrift`** (Group 9, bool→`(bool, batch)`; gate on `true`; 2 sites).
+- **`resetConfiguredNamedSessionForConfigDrift`** asleep (Group 10, void→ batch; **#2574 hazard —
+  clears restart_requested**; 2 callers, only the @~2734 asleep one folds).
+- **`checkStability`/`checkChurn`** (Group 5, bool→`(bool, batch)`; batch spread across
+  `recordWakeFailure`/`ConversationResetPatch`/`clearLastWokeAt` sub-calls — thread it out).
+- **`checkRateLimitStability`** (Group 1, `(bool,error)`→`(bool,error,batch)`; batch via
+  `markProviderTerminalError`[already returns] / `recordRateLimitQuarantine`; 4 forward-pass sites +
+  1 other; 1 test).
+- **`attemptRollbackPendingCreate`** (Group 2; `ApplyPatch(rollbackBatch)` for last_woke_at/
+  session_name/claims **+ a separate `MarkClosed`** since `rollbackPendingCreate`/ClearingClaim close
+  STORE-ONLY, never setting raw Status; 3 sites).
+
+**THEN** delete the pre-pass @~2940 + retire the aggregating refreshes (`infoAsleepDrift` @~2710,
+wakeTargets @~2968) + add the comprehensive read-after-write tests (finally possible: same-tick
+re-wake off a mid-tick sleep; cross-session drain-ack/min-floor visibility; #2574 suppression) +
 `advanceSessionDrains`/`newSessionBeadSnapshot` + drop the lockstep & raw working set, then **6e**
 (the guard forbidding raw `session.Metadata[` writes on the decision path). **STEP6-PREPASS-AUDIT.md
-is the per-fold plan; STEP6-DESIGN §8 is the higher-level design.**
+is the per-fold plan; STEP6-DESIGN §8 is the higher-level design.** NOTE: every fold is MASKED
+until the pre-pass is deleted (no isolated teeth test; whole-tick suite catches regressions on the
+raw path; review verifies fold correctness; the comprehensive tests land at deletion).
 Design + sub-phase backlog:
 `RECONCILER-FRONT-DOOR-STEP6-DESIGN.md` (fable 4-lens
 audit + opus synthesis, opus red-team GO-WITH-CHANGES, then a deeper **fable red-team**
