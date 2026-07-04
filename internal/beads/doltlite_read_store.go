@@ -96,12 +96,17 @@ func doltliteReadyIssueWhere(tables doltliteTableSet, includeWispTargets bool) (
 		blockerStatus = "CASE WHEN " + wispTarget + " IS NOT NULL THEN COALESCE(blocker_wisp.status, '') ELSE COALESCE(blocker_issue.status, '') END"
 	}
 
+	// 'external:' literal targets are synthetic cross-rig tracking refs the
+	// default bd path has always ignored (#1593); the native reader must not
+	// treat them as permanent blockers (Group E §6.3). Foreign-prefix values
+	// stay blocking — that is the deferred Decision 2.
 	return strings.Join([]string{
 		typePredicate,
 		`NOT EXISTS (
 				SELECT 1 FROM ` + tables.deps + ` d
 				` + blockerJoins + `
 				WHERE d.issue_id = i.id AND ` + depType + ` IN (` + blockingPlaceholders + `) AND ` + blockerStatus + ` != 'closed'
+					AND ` + issueTarget + ` NOT LIKE 'external:%'
 			)`,
 	}, " AND "), args
 }

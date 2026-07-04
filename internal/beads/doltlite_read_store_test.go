@@ -215,6 +215,66 @@ func TestDoltliteReadStoreReadyBlocksMissingTargets(t *testing.T) {
 	}
 }
 
+// TestDoltliteReadStoreReadyIgnoresExternalLiteralBlockers pins Group E §6.3:
+// an 'external:' literal cross-rig tracking ref in depends_on_external must not
+// block readiness under the native reader, matching the default bd path which
+// has always ignored these (#1593). A genuine open local blocker still blocks.
+// (Foreign-prefix values remain blocking — that is the deferred Decision 2.)
+func TestDoltliteReadStoreReadyIgnoresExternalLiteralBlockers(t *testing.T) {
+	store, closeStore := newTestDoltliteReadStore(t)
+	defer closeStore()
+	writer := openTestDoltliteWriter(t, store.db)
+	defer writer.Close() //nolint:errcheck // test cleanup
+
+	// An open local issue used as a genuine blocker.
+	insertTestDoltliteIssue(t, writer, "issues", "labels", "dependencies", testDoltliteIssue{
+		ID:        "gc-external-open-blocker",
+		Title:     "open local blocker",
+		Status:    "open",
+		IssueType: "task",
+		CreatedAt: time.Now().UTC(),
+	})
+
+	// Blocked only by an external: literal cross-rig ref → must be READY.
+	insertTestDoltliteIssue(t, writer, "issues", "labels", "dependencies", testDoltliteIssue{
+		ID:        "gc-external-literal-dep",
+		Title:     "external literal dep",
+		Status:    "open",
+		IssueType: "task",
+		CreatedAt: time.Now().UTC().Add(time.Minute),
+		Assignee:  "rig/external-literal",
+		Dependencies: []testDoltliteDependency{{
+			DependsOnExternal: "external:foo",
+			Type:              "blocks",
+		}},
+	})
+
+	// Blocked by an open local issue → stays blocked.
+	insertTestDoltliteIssue(t, writer, "issues", "labels", "dependencies", testDoltliteIssue{
+		ID:        "gc-external-local-blocked",
+		Title:     "blocked by open local issue",
+		Status:    "open",
+		IssueType: "task",
+		CreatedAt: time.Now().UTC().Add(2 * time.Minute),
+		Assignee:  "rig/external-literal",
+		Dependencies: []testDoltliteDependency{{
+			DependsOnID: "gc-external-open-blocker",
+			Type:        "blocks",
+		}},
+	})
+
+	rows, err := store.Ready(ReadyQuery{Assignee: "rig/external-literal"})
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !hasTestBead(rows, "gc-external-literal-dep") {
+		t.Fatalf("Ready missing gc-external-literal-dep (external: literal must not block): %#v", rows)
+	}
+	if hasTestBead(rows, "gc-external-local-blocked") {
+		t.Fatalf("Ready included gc-external-local-blocked (open local blocker must block): %#v", rows)
+	}
+}
+
 func TestDoltliteReadStoreReadyBlocksOpenWispTargets(t *testing.T) {
 	store, closeStore := newTestDoltliteReadStore(t)
 	defer closeStore()

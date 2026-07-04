@@ -55,9 +55,27 @@ live? (Notes per group in §4.)
 | A | `0195f407e` | `beadPolicyStore.ListGraphOnlyHandle` forwarder (mirrors the Ready one, applies `expandPolicyReadTier`) + compile-time provider assertions. Reactivates 4 shipped-but-dead fixes (08cdd75f3 orphan heal, 2a83e20bd List half, df3f274ce liveListForRoot, the reconciler drain guard). + drain-guard rider in `graphOnlyHasAwakeAssignedWork` (federated in-progress fallback when List absent) + `sessionHasOpenAssignedWorkForReachableStore` gated on `GraphIDPrefix() != ""` so a degraded identity-phase Router falls back to the rig fan-out. |
 | B | `ec586c953` | `remapGraphResidentAssignedWorkStoreRefs` in `assigned_work_scope.go`, called at the **single** production consumer of collected storeRefs (`build_desired_state.go`, right after `collectAssignedWorkBeadsWithStores`). Retags city-tagged (`""`) graph beads to their routed rig so rig workers wake for their graph work. Guards: unresolvable route → `""`; direct session bind (`gc.session_id`) → `""` (owner scope governs, never the workflow root's rig). |
 | C | `adc789f9a` | **The doctrine fix.** `registerGraphStoreBackend` registers a **self-healing `lazyGraphStore`** on `OpenSQLiteStore` failure (re-checks the handle cache to kill the open race, re-attempts on use with a 2s backoff, caches on heal; while unhealed all graph ops ERROR — writes fail loud, reads error into the reconciler's fail-safe branches). `openStoreResultAtForCity` stops swallowing `loadCityConfig`'s error — minimal raw `[beads]` parse decides; fails only when `graph_store` is set or `city.toml` is unparseable, else keeps nil-cfg tolerance so default-Dolt cities aren't bricked. |
+| H | `dab71c5eb` (beads repo) | Proxied `configSQLRepositoryImpl.SetConfig` now syncs `custom_types`/`custom_statuses` tables in the same UOW (mirrors `DoltStore.SetConfig`) — the durable `invalid issue type: session` fix. Red-team SHIP; folded in a restored fallback test + comment softening. |
+| F | `de533db5d` | Orphan reclaim gates per-store-scope, not one global `StoreQueryPartial`: `collectAssignedWorkBeadsWithStores` returns `partialByStoreRef`; graph-resident beads gate on the `""` (city/graph) key despite Group B's rig retag. 3-lens red-team cleared prod code; both MUST-FIXes (ready-pass attribution, mixed graph+rig slice) were test-only and applied. |
+| D | `7c14aa4e8` | `coordrouter` `federateRead`/`DepList` return survivor rows wrapped in `PartialResultError` instead of a false-complete nil; 8 caller guards (G1–G8). 3-lens red-team found zero code defects + no missed guard; applied its one test-only MUST-FIX (wired-stack test through `wrapStoreWithBeadPolicies(Router)`). |
+| G | `bd6fafde1` (workflows repo, branch `fix/adopt-pr-root-id-from-convoy`) | `pr_merge.py` reads molecule subtrees via `gc bd-shim mol current` for `gcg-` roots (graph route) with a rig-bd fallback; `SOURCE_BEAD_NOT_FOUND_IS_SKIP` toggle. Red-team SHIP-WITH-MUST-FIXES all folded (M1 exact bead-404 sniff, S1 fallback-code, S2 rig-wide union, S3 monkeypatch restore). **Owner-gated:** push of this + 7 unpushed commits to shared `gastownhall/workflows`. |
 
-**Red-team caught real defects in B and C that were fixed before commit** — do
-not skip the red-team.
+**Red-team caught real defects in B, C, D, F, G, H before commit** — do not skip
+the red-team.
+
+### Group E status (partial)
+- **Design:** `engdocs/contributors/group-E-design.md`. Doctrine narrows E to
+  **two** blocking cross-leg populations (drain out-of-manifest blockers →
+  sqlite `gcg-→ga-`; cook-attach gate → Dolt `ga-→gcg-` in `depends_on_external`).
+- **Two coupled owner decisions surfaced** (design §1, still OPEN):
+  (1) proxy/gate beads [recommended] vs router-resolved readiness;
+  (2) foreign-dep meaning non-blocking [recommended if 1A] vs beads-enforced blocking.
+  The §7 write-path work is gated on these — do NOT implement §7 until decided.
+- **Decision-independent safe subset (§6):** §6.1 doctor carve-out (beads —
+  **stops `bd doctor --fix` deleting live attach-gate rows TODAY**, active data
+  loss), §6.2 proxied DepAdd classification parity (beads), §6.3 native
+  `external:` reader parity (gascity, tag-gated). Being implemented now; commit
+  pending review + red-team.
 
 ### Load-bearing facts the red-teams established (reuse, don't re-derive)
 - **Erroring graph READS are fail-safe** in the reconciler: every decision site
