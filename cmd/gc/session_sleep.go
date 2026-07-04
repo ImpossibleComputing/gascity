@@ -138,6 +138,10 @@ func pendingInteractionKeepsAwake(session beads.Bead, sp runtime.Provider, name 
 	return !view.HasBlocker(sessionpkg.BlockerHeld) && !view.HasBlocker(sessionpkg.BlockerQuarantined)
 }
 
+// reconcileDetachedAt tracks when a session last became detached for idle-sleep
+// accounting. Returns the mirrored {"detached_at": <value>} batch when a write
+// is persisted (clear or set), nil when no change is made. The caller folds the
+// returned batch onto the typed snapshot via ApplyPatch (nil is a no-op).
 func reconcileDetachedAt(
 	session *beads.Bead,
 	store beads.Store,
@@ -145,9 +149,9 @@ func reconcileDetachedAt(
 	alive bool,
 	sp runtime.Provider,
 	clk clock.Clock,
-) {
+) map[string]string {
 	if session == nil || store == nil {
-		return
+		return nil
 	}
 	if policy.Class == config.SessionSleepNonInteractive || !policy.enabled() || sp == nil || !alive || policy.Capability != runtime.SessionSleepCapabilityFull {
 		if session.Metadata["detached_at"] != "" {
@@ -155,13 +159,14 @@ func reconcileDetachedAt(
 				log.Printf("session sleep: clearing detached_at for %s: %v", session.ID, err)
 			} else {
 				session.Metadata["detached_at"] = ""
+				return map[string]string{"detached_at": ""}
 			}
 		}
-		return
+		return nil
 	}
 	name := session.Metadata["session_name"]
 	if name == "" {
-		return
+		return nil
 	}
 	attached, err := workerSessionTargetAttachedWithConfig("", store, sp, nil, session.ID)
 	if err == nil && attached {
@@ -170,9 +175,10 @@ func reconcileDetachedAt(
 				log.Printf("session sleep: clearing detached_at for %s: %v", session.ID, err)
 			} else {
 				session.Metadata["detached_at"] = ""
+				return map[string]string{"detached_at": ""}
 			}
 		}
-		return
+		return nil
 	}
 	if session.Metadata["detached_at"] == "" {
 		ts := clk.Now().UTC().Format(time.RFC3339)
@@ -180,8 +186,10 @@ func reconcileDetachedAt(
 			log.Printf("session sleep: setting detached_at for %s: %v", session.ID, err)
 		} else {
 			session.Metadata["detached_at"] = ts
+			return map[string]string{"detached_at": ts}
 		}
 	}
+	return nil
 }
 
 func sessionIdleReference(session beads.Bead, sp runtime.Provider) time.Time {

@@ -860,7 +860,10 @@ func recordWakeFailure(session *beads.Bead, sessFront *sessionpkg.Store, clk clo
 }
 
 // clearWakeFailures resets crash counter and quarantine for a stable session.
-func clearWakeFailures(session *beads.Bead, sessFront *sessionpkg.Store) {
+// Returns the mirrored batch on the persist path, nil when there is nothing to
+// clear (both fields already absent/zero). The caller folds the returned batch
+// onto the typed snapshot via ApplyPatch (nil is a no-op).
+func clearWakeFailures(session *beads.Bead, sessFront *sessionpkg.Store) map[string]string {
 	batch := make(map[string]string, 2)
 	if session.Metadata["wake_attempts"] != "" && session.Metadata["wake_attempts"] != "0" {
 		batch["wake_attempts"] = "0"
@@ -869,7 +872,7 @@ func clearWakeFailures(session *beads.Bead, sessFront *sessionpkg.Store) {
 		batch["quarantined_until"] = ""
 	}
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 	if err := sessFront.ApplyPatch(session.ID, batch); err == nil {
 		if session.Metadata == nil {
@@ -878,7 +881,9 @@ func clearWakeFailures(session *beads.Bead, sessFront *sessionpkg.Store) {
 		for k, v := range batch {
 			session.Metadata[k] = v
 		}
+		return batch
 	}
+	return nil
 }
 
 // checkChurn detects repeated non-productive wake→die cycles (context
@@ -952,12 +957,16 @@ func recordChurn(session *beads.Bead, sessFront *sessionpkg.Store, clk clock.Clo
 }
 
 // clearChurn resets the churn counter for a productive session.
-func clearChurn(session *beads.Bead, sessFront *sessionpkg.Store) {
+// Returns the mirrored batch {"churn_count":"0"} when a clear is persisted, nil
+// when churn_count is already absent or zero (no-op). The caller folds the
+// returned batch onto the typed snapshot via ApplyPatch (nil is a no-op).
+func clearChurn(session *beads.Bead, sessFront *sessionpkg.Store) map[string]string {
 	if session.Metadata["churn_count"] == "" || session.Metadata["churn_count"] == "0" {
-		return
+		return nil
 	}
 	_ = sessFront.SetMarker(session.ID, "churn_count", "0")
 	session.Metadata["churn_count"] = "0"
+	return map[string]string{"churn_count": "0"}
 }
 
 // productiveLongEnough returns true if the session has been alive past

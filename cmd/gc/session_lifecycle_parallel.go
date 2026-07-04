@@ -2071,6 +2071,11 @@ func commitStartFailure(result startResult, sessFront *sessionpkg.Store, clk clo
 	logLifecycleOutcome(stderr, "start", wave, name, tp.TemplateName, result.outcome, result.started, result.finished, result.err, result.phases)
 }
 
+// recoverRunningPendingCreate heals an already-active bead whose
+// pending_create_claim flag was left set after a partial write on a prior tick.
+// Returns (true, metadata) when the heal was persisted, (false, nil) on any
+// early-out or failure. The caller folds the returned metadata onto the typed
+// snapshot via ApplyPatch (nil is a no-op).
 func recoverRunningPendingCreate(
 	session *beads.Bead,
 	tp TemplateParams,
@@ -2078,9 +2083,9 @@ func recoverRunningPendingCreate(
 	store beads.Store,
 	clk clock.Clock,
 	trace *sessionReconcilerTraceCycle,
-) bool {
+) (bool, map[string]string) {
 	if session == nil || store == nil {
-		return false
+		return false, nil
 	}
 	prepared, err := buildPreparedStart(startCandidate{session: session, tp: tp}, cfg, store)
 	if err != nil {
@@ -2089,7 +2094,7 @@ func recoverRunningPendingCreate(
 				"error": err.Error(),
 			}, nil, "")
 		}
-		return false
+		return false, nil
 	}
 	coreBreakdown := ""
 	if bdj, err := json.Marshal(prepared.coreBreakdown); err == nil {
@@ -2130,7 +2135,7 @@ func recoverRunningPendingCreate(
 				"error": err.Error(),
 			}, nil, "")
 		}
-		return false
+		return false, nil
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, len(metadata))
@@ -2141,7 +2146,7 @@ func recoverRunningPendingCreate(
 	if trace != nil {
 		trace.recordDecision("reconciler.session.pending_create", tp.TemplateName, tp.SessionName, "pending_create_healed", "healed", nil, nil, "")
 	}
-	return true
+	return true, metadata
 }
 
 func shouldRollbackPendingCreate(session *beads.Bead) bool {
