@@ -1524,16 +1524,22 @@ func asyncStartPreparedCommandStale(prepared preparedStart, current beads.Bead) 
 	return preparedCommand != "" && currentCommand != "" && preparedCommand != currentCommand
 }
 
-func clearPendingStartInFlightLease(session *beads.Bead, sessFront *sessionpkg.Store, stderr io.Writer) {
+// clearPendingStartInFlightLease clears last_woke_at. Returns the mirrored
+// {"last_woke_at":""} batch when the clear persisted, nil otherwise, so the
+// rollback callers can fold it onto the typed snapshot (Step 6d write-returns-Info).
+// Most callers discard the return.
+func clearPendingStartInFlightLease(session *beads.Bead, sessFront *sessionpkg.Store, stderr io.Writer) map[string]string {
 	if session == nil || sessFront == nil {
-		return
+		return nil
 	}
 	if setMeta(sessFront, session.ID, "last_woke_at", "", stderr) == nil {
 		if session.Metadata == nil {
 			session.Metadata = make(map[string]string)
 		}
 		session.Metadata["last_woke_at"] = ""
+		return map[string]string{"last_woke_at": ""}
 	}
+	return nil
 }
 
 func stopStaleAsyncStartRuntime(result startResult, sp runtime.Provider, stderr io.Writer) {
@@ -2200,46 +2206,65 @@ func runningSessionMatchesPendingCreate(session *beads.Bead, sessionName string,
 	return expectedToken != "" && liveToken == expectedToken
 }
 
-func rollbackPendingCreate(session *beads.Bead, sessFront *sessionpkg.Store, now time.Time, stderr io.Writer) {
+// rollbackPendingCreate returns the metadata batch it mirrored onto the raw bead
+// (last_woke_at="" + conditional session_name="") so the reconciler can fold it
+// onto the typed snapshot (Step 6d write-returns-Info). NOTE: closeBead is
+// STORE-ONLY (it never sets *session.Status), so the raw bead stays open and the
+// returned batch deliberately carries NO Closed change — matching what a raw
+// re-projection of *session sees. The Closed reconstruction is the separate
+// Get-cutover concern, not a pre-pass fold.
+func rollbackPendingCreate(session *beads.Bead, sessFront *sessionpkg.Store, now time.Time, stderr io.Writer) map[string]string {
 	if session == nil || sessFront == nil {
-		return
+		return nil
 	}
-	clearPendingStartInFlightLease(session, sessFront, stderr)
+	batch := clearPendingStartInFlightLease(session, sessFront, stderr)
 	if strings.TrimSpace(session.Metadata["session_name_explicit"]) == "true" {
 		if setMeta(sessFront, session.ID, "session_name", "", stderr) == nil {
 			if session.Metadata == nil {
 				session.Metadata = make(map[string]string)
 			}
 			session.Metadata["session_name"] = ""
+			batch = mergeMetadataPatch(batch, map[string]string{"session_name": ""})
 		}
 	}
 	closeBead(sessFront.Store().Store, session.ID, string(sessionpkg.StateFailedCreate), now, stderr)
+	return batch
 }
 
-func rollbackPendingCreateClearingClaim(session *beads.Bead, sessFront *sessionpkg.Store, now time.Time, stderr io.Writer) {
+// rollbackPendingCreateClearingClaim is rollbackPendingCreate plus the
+// failed-create ClosePatch metadata + claim clears mirrored onto the raw bead
+// when the store-only close succeeds. Returns the full mirrored batch (again with
+// NO Closed change — closeFailedCreateBead is store-only, so *session.Status stays
+// open) for the snapshot fold.
+func rollbackPendingCreateClearingClaim(session *beads.Bead, sessFront *sessionpkg.Store, now time.Time, stderr io.Writer) map[string]string {
 	if session == nil || sessFront == nil {
-		return
+		return nil
 	}
-	clearPendingStartInFlightLease(session, sessFront, stderr)
+	batch := clearPendingStartInFlightLease(session, sessFront, stderr)
 	if strings.TrimSpace(session.Metadata["session_name_explicit"]) == "true" {
 		if setMeta(sessFront, session.ID, "session_name", "", stderr) == nil {
 			if session.Metadata == nil {
 				session.Metadata = make(map[string]string)
 			}
 			session.Metadata["session_name"] = ""
+			batch = mergeMetadataPatch(batch, map[string]string{"session_name": ""})
 		}
 	}
 	if !closeFailedCreateBead(sessFront, session.ID, now, stderr) {
-		return
+		return batch
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string)
 	}
-	for key, value := range sessionpkg.ClosePatch(now.UTC(), string(sessionpkg.StateFailedCreate)) {
+	closePatch := sessionpkg.ClosePatch(now.UTC(), string(sessionpkg.StateFailedCreate))
+	for key, value := range closePatch {
 		session.Metadata[key] = value
 	}
 	session.Metadata["pending_create_claim"] = ""
 	session.Metadata["pending_create_started_at"] = ""
+	batch = mergeMetadataPatch(batch, closePatch)
+	batch = mergeMetadataPatch(batch, map[string]string{"pending_create_claim": "", "pending_create_started_at": ""})
+	return batch
 }
 
 func executePlannedStarts(

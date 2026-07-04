@@ -1454,7 +1454,13 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 	// remaining stale beads roll back on subsequent ticks.
 	const maxRollbacksPerTick = 5
 	rollbacksThisTick := 0
-	attemptRollbackPendingCreate := func(session *beads.Bead, templateName, name, action, detail string, clearClaim bool) {
+	// attemptRollbackPendingCreate returns the metadata batch the rollback mirrored
+	// onto the raw bead (nil when the per-tick budget is exhausted, i.e. nothing was
+	// rolled back), so each forward-pass caller can fold it onto the typed snapshot
+	// (Step 6d write-returns-Info). The batch carries NO Closed change: the close is
+	// store-only, so a raw re-projection of *session still sees it open — the fold
+	// must match that.
+	attemptRollbackPendingCreate := func(session *beads.Bead, templateName, name, action, detail string, clearClaim bool) map[string]string {
 		if rollbacksThisTick >= maxRollbacksPerTick {
 			fmt.Fprintf(stderr, "session reconciler: deferring rollback of %s (%s): rollback budget exhausted this tick\n", name, detail) //nolint:errcheck
 			if trace != nil {
@@ -1463,7 +1469,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					"max_rollbacks_per_tick": maxRollbacksPerTick,
 				}, nil, "")
 			}
-			return
+			return nil
 		}
 		rollbacksThisTick++
 		fmt.Fprintf(stderr, "session reconciler: rolling back pending create %s: %s\n", name, detail) //nolint:errcheck
@@ -1471,10 +1477,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			trace.recordDecision("reconciler.session.pending_create", templateName, name, action, "rollback", nil, nil, "")
 		}
 		if clearClaim {
-			rollbackPendingCreateClearingClaim(session, sessFront, clk.Now().UTC(), stderr)
-			return
+			return rollbackPendingCreateClearingClaim(session, sessFront, clk.Now().UTC(), stderr)
 		}
-		rollbackPendingCreate(session, sessFront, clk.Now().UTC(), stderr)
+		return rollbackPendingCreate(session, sessFront, clk.Now().UTC(), stderr)
 	}
 	phaseStart = time.Now()
 	for i := range ordered {
@@ -1575,7 +1580,10 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						continue
 					}
 					clearClaim := configuredNamedSessionBeadHasSpecInfo(info, cfg, cityName)
-					attemptRollbackPendingCreate(session, template, name, "pending_create_lease_expired", "lease expired and no live runtime", clearClaim)
+					// Fold the rollback's mirrored metadata onto the snapshot (Step 6d
+					// write-returns-Info; no Closed change — store-only close).
+					// Pre-pass-masked (STEP6-PREPASS-AUDIT group 2).
+					infoByID[session.ID] = infoByID[session.ID].ApplyPatch(attemptRollbackPendingCreate(session, template, name, "pending_create_lease_expired", "lease expired and no live runtime", clearClaim))
 					continue
 				}
 			}
@@ -2014,7 +2022,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		infoByID[session.ID] = infoByID[session.ID].ApplyPatch(terminalErrBatch)
 		infoPostZombie := infoByID[session.ID]
 		if alive && shouldRollbackPendingCreateInfo(infoPostZombie) && !runningSessionMatchesPendingCreate(session, name, sp) {
-			attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false)
+			// Fold the rollback's mirrored metadata onto the snapshot (Step 6d;
+			// no Closed change — store-only close). STEP6-PREPASS-AUDIT group 2.
+			infoByID[session.ID] = infoByID[session.ID].ApplyPatch(attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_rollback", "live runtime belongs to another session", false))
 			continue
 		}
 		// Desired-branch counterpart to pendingCreateSessionStillLeased: a
@@ -2037,7 +2047,9 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 					infoByID[session.ID] = infoByID[session.ID].ApplyPatch(rlBatch)
 					continue
 				}
-				attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_lease_expired", "lease expired and no live runtime", false)
+				// Fold the rollback's mirrored metadata onto the snapshot (Step 6d;
+				// no Closed change — store-only close). STEP6-PREPASS-AUDIT group 2.
+				infoByID[session.ID] = infoByID[session.ID].ApplyPatch(attemptRollbackPendingCreate(session, tp.TemplateName, name, "pending_create_lease_expired", "lease expired and no live runtime", false))
 				continue
 			}
 		}
@@ -2607,7 +2619,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 									continue
 								}
 							}
-							resetConfiguredNamedSessionForConfigDrift(session, store, sp, name, alive, string(sessionpkg.StateStartPending), clk.Now().UTC(), stderr)
+							// Fold the config-drift reset onto the snapshot (Step 6d
+							// write-returns-Info). The alive lane falls through to the
+							// aggregating refresh @~2710 today, but folding here future-proofs
+							// that refresh's retirement (STEP6-PREPASS-AUDIT group 10).
+							infoByID[session.ID] = infoByID[session.ID].ApplyPatch(resetConfiguredNamedSessionForConfigDrift(session, store, sp, name, alive, string(sessionpkg.StateStartPending), clk.Now().UTC(), stderr))
 							if trace != nil {
 								trace.recordDecision("reconciler.session.config_drift", tp.TemplateName, name, "config_drift", "restart_in_place", configDriftTracePayload(storedHash, currentHash, driftedFields, nil), nil, "")
 							}
@@ -2811,7 +2827,11 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							continue
 						}
 						driftedFields := runtime.CoreFingerprintDriftFieldsFromJSON(session.Metadata["core_hash_breakdown"], agentCfg)
-						resetConfiguredNamedSessionForConfigDrift(session, store, sp, name, false, "asleep", clk.Now().UTC(), stderr)
+						// Fold the config-drift reset onto the snapshot (Step 6d
+						// write-returns-Info); this asleep lane `continue`s, so the fold must
+						// run before the continue. Clears restart_requested on the snapshot
+						// (#2574). Pre-pass-masked (STEP6-PREPASS-AUDIT group 10).
+						infoByID[session.ID] = infoByID[session.ID].ApplyPatch(resetConfiguredNamedSessionForConfigDrift(session, store, sp, name, false, "asleep", clk.Now().UTC(), stderr))
 						if trace != nil {
 							trace.recordDecision("reconciler.session.config_drift", tp.TemplateName, name, "config_drift", "repair_in_place", configDriftTracePayload(storedHash, currentHash, driftedFields, nil), nil, "")
 						}
@@ -4250,9 +4270,9 @@ func resetConfiguredNamedSessionForConfigDrift(
 	nextState string,
 	now time.Time,
 	stderr io.Writer,
-) {
+) map[string]string {
 	if session == nil || store == nil {
-		return
+		return nil
 	}
 	if nextState == "" {
 		nextState = "asleep"
@@ -4300,7 +4320,7 @@ func resetConfiguredNamedSessionForConfigDrift(
 	batch[sessionAttachedConfigDriftDeferredKeyMetadata] = ""
 	if err := sessionFrontDoor(store).ApplyPatch(session.ID, batch); err != nil {
 		fmt.Fprintf(stderr, "session reconciler: recording config-drift repair for %s: %v\n", sessionName, err) //nolint:errcheck
-		return
+		return nil
 	}
 	if session.Metadata == nil {
 		session.Metadata = make(map[string]string, len(batch))
@@ -4308,6 +4328,11 @@ func resetConfiguredNamedSessionForConfigDrift(
 	for key, value := range batch {
 		session.Metadata[key] = value
 	}
+	// Return the mirrored batch so the caller can fold it onto the typed snapshot
+	// (Step 6d write-returns-Info). The batch clears restart_requested (part of
+	// ConfigDriftResetPatch), so folding it keeps a consumed restart marker off the
+	// snapshot once the pre-pass is dropped (#2574).
+	return batch
 }
 
 func shouldBeginIdleDrain(
