@@ -2,8 +2,19 @@
 
 **Branch** `upstream/object-front-doors-cleanup` (base `main`), **PR #3839 DRAFT**,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`.
-**HEAD `92f05221d`** (always `git rev-parse HEAD` — line numbers below drift; re-grep
+**HEAD `31cdf48a2`** (always `git rev-parse HEAD` — line numbers below drift; re-grep
 before editing any file).
+
+> **UPDATE (CONT-37): the guard-earning shape pass in `cmd/gc` is now EXHAUSTED.**
+> `cmd_session.go` was shape-sealed this session (the last bounded guard-earning
+> win); a 4-agent census + inspection proved the remaining candidates are all
+> permanently guard-ineligible (giants = session writes + work reads +
+> raw-by-design fingerprint; `session_origin` = the oracle's raw arm). The
+> "recommended order" further down (which leads with the Tier-1 giants) is
+> SUPERSEDED — see the CONT-37 STRATEGIC FINDING in
+> `SESSION-PERIPHERY-CLOSURE-PLAN.md` Progress log and the "What is LEFT"
+> section below. The next real guard-earning work is the **access-pass DI
+> initiative**, not more shape conversions.
 
 This continues the object-model front-door migration onto the SESSION-class
 periphery. It is the successor to `RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md` (the
@@ -123,11 +134,19 @@ against the `Info` struct (`internal/session/manager.go:74`) + codec
   guard. Low priority (no guard payoff).
 
 ### The bigger tranches (plan phases C-tier1, D, E, F)
-- **Tier-2**: `cmd_start.go` (~1529 ln), `cmd_session.go` (~2541 ln). Larger CLI; verify
-  each `.Metadata[` is session vs work vs wait first.
-- **Tier-1 giants** (each its OWN session, reconciler-grade care):
-  `build_desired_state.go` (~4520 ln), `city_runtime.go` (~3477 ln). The Phase B
-  helpers now exist to support them; `session_origin.go`'s bead forms convert here.
+> **CONT-37: guard-eligibility settled for the cmd/gc Tier-1/2.** `cmd_session.go`
+> is DONE (sealed via wait-helper extraction + Phase A `DependencyOnlyMetadata`).
+> `cmd_start.go` is a library trap (its `.Open()` feeds the reconciler entry
+> `reconcileSessionBeadsAtPathWithNamedDemand`) — DEFER with the reconciler. The
+> two Tier-1 giants are **permanently guard-ineligible in a shape pass** (see the
+> CONT-37 STRATEGIC FINDING in the plan Progress log) — converting their session
+> reads is shape-value-only, no guard entry. So the guard-earning cmd/gc shape
+> pass is complete; the bullets below are shape-value-only or different-package.
+- **Tier-1 giants** (each its OWN session, reconciler-grade care, NO guard payoff —
+  shape value only): `build_desired_state.go` (~4520 ln; 75 `.Metadata[`, session
+  writes + work reads), `city_runtime.go` (~3477 ln; whole-map fingerprint +
+  `.Open()` library-traps). The Phase B helpers exist to support them;
+  `session_origin.go`'s bead forms convert here.
 - **Phase D** `internal/api` session handlers (read `engdocs/architecture/api-control-plane.md`
   first). Different package — extend the guard's dir resolution or add sibling guards.
 - **Phase E** `internal/worker` (`factory.go` real_world_app_session_kind/worker_profile

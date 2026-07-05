@@ -11,8 +11,19 @@ worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`; run
 
 The reconciler decision path, nudge, and mail classes are sealed. This pass drives
 SESSION-bead *field reads* behind the typed `session.Info` codec and guards each clean
-file. **10 periphery files + `Info.ProviderKind` are done; `soft_reload.go` is the first
-FULLY-sealed file (all three guard lists).**
+file. **11 periphery files + `Info.ProviderKind` + `Info.DependencyOnlyMetadata` are done;
+`soft_reload.go` is the first FULLY-sealed file (all three guard lists);
+`cmd_session.go` was sealed in CONT-37.**
+
+> **READ THIS FIRST — the guard-earning shape pass in `cmd/gc` is EXHAUSTED (CONT-37).**
+> Every remaining cmd/gc candidate is permanently guard-ineligible in a shape pass:
+> the two Tier-1 giants (`build_desired_state.go` = session writes + work-bead reads;
+> `city_runtime.go` = raw-by-design whole-map fingerprint + `.Open()` library-traps),
+> `session_origin.go` (the classifier oracle's raw arm), `cmd_start.go` (its `.Open()`
+> feeds the reconciler entry). Do NOT expect a quick guard win from more shape work.
+> The next guard-earning + relocation-completing work is the **access-pass DI
+> initiative** (below). Full rationale: the CONT-37 STRATEGIC FINDING in the plan
+> Progress log.
 
 **Read first, in order:**
 1. `engdocs/plans/infra-store-decouple/SESSION-PERIPHERY-SHAPE-PASS-HANDOFF.md` — the
@@ -30,21 +41,25 @@ add to `metadataInfoOnlyFiles`/`snapshotInfoOnlyFiles`) then **access** (loads �
 `sessionsBeadStore()`, add to `frontDoorStoreFreeFiles`). `metadataInfoOnlyFiles`
 membership is SHAPE-sealed, NOT relocation-safe.
 
-**Pick your target (recommended order):**
-- The **Tier-1 giants** each warrant their OWN session (`build_desired_state.go` ~4520 ln,
-  `city_runtime.go` ~3477 ln) — reconciler-grade care. The Phase B Info-form helpers
-  (`sessionCoreConfigForHashInfo`, `applyTemplateOverridesToConfigInfo`,
-  `cancelSessionConfigDriftDrainInfo`) plus the `session_origin.go` Info siblings already
-  exist to support them; converting `session_origin.go`'s bead-form callers happens here.
-- **Tier-2** `cmd_start.go` / `cmd_session.go` — medium CLI; classify each `.Metadata[`
-  (session vs work vs wait) first.
-- The **remaining Tier-4** are all DEFER/no-guard (session_origin = library trap,
-  pool_desired_state oracle ref, usage_compute needs Phase A, pool_session_name /
-  doctor_session_model = mixed). See the handoff for why; only convert their session
-  reads if you want the shape value without a guard entry.
-- The **access-layer pass** (route loads through `sessionsBeadStore()` and add the 9
-  shape-sealed CLI files to `frontDoorStoreFreeFiles`) is a coherent separate slice that
-  makes those files truly relocation-safe.
+**Pick your target (recommended order, CONT-37):**
+- **RECOMMENDED — the access-pass DI initiative.** The ONLY remaining guard-earning +
+  relocation-completing work. Route the ~11 shape-sealed files' bead LOADS through the
+  session-class front door and make each store-free so it joins `frontDoorStoreFreeFiles`
+  (which forbids holding `beads.SessionStore` / calling `sessionFrontDoor(` — the
+  composition root threads in `*session.Store`; `session.Store.Get` returns `Info`).
+  This is a package-wide DI refactor (many cross-file call sites), so scope it: start
+  with the files that already receive a store param on few call sites; `soft_reload.go`
+  is the model (already on all three lists). Confirm with the owner that "separate,
+  later" is now "now" before committing to the multi-session refactor.
+- **Shape-value-only (no guard payoff) — the Tier-1 giants.** Each its OWN session,
+  reconciler-grade care. Converting their session reads behind Info preps the eventual
+  full seal but earns NO guard (session writes + work reads + raw-by-design residuals
+  keep `.Metadata[`). Lower priority per the guard-eligibility lesson. The Phase B
+  Info-form helpers + `session_origin.go` Info siblings exist to support them.
+- **Different-package tranches (Phase D/E/F)** — `internal/api` (read
+  `api-control-plane.md` first), `internal/worker`, `internal/session` own runtime. Each
+  needs the guard's dir resolution extended or sibling guards; separate scoping.
+- The **remaining Tier-4** are all DEFER/no-guard (see the handoff).
 
 **Discipline (byte-identity is the bar):** re-grep each file's exact sites FIRST (census
 line numbers drift and the haiku census was wrong on several fields — verify every field

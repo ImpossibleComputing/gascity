@@ -252,3 +252,66 @@ substring guard (documented census).
 pool_session_name / pool_desired_state (mixed + a dead `poolSessionConsumesNewDemand`
 legacy helper to delete). Then Tier-2 (soft_reload/cmd_start/cmd_session), then the
 Tier-1 giants.
+
+---
+
+**Session 2026-07-05 (CONT-37) — cmd_session.go fully shape-sealed + the
+guard-earning shape pass is now EXHAUSTED in cmd/gc.** Commits on
+`upstream/object-front-doors-cleanup` (#3839 DRAFT):
+
+- `13a8a1731` **Phase A**: `Info.DependencyOnlyMetadata` raw mirror (the
+  pin-awake path compares `dependency_only` UNTRIMMED, which the trimmed
+  `DependencyOnly` bool cannot reproduce). Wired on both codec + apply-patch
+  paths keyed on the same value, so `TestInfoApplyPatchMatchesReprojection`
+  covers it automatically; explicit `TestDependencyOnlyMetadataIsVerbatim`
+  mirrors the `PendingCreateClaimMetadata` precedent.
+- `31cdf48a2` **cmd_session.go shape-sealed** (now on `metadataInfoOnlyFiles`;
+  zero `.Metadata[` of any spelling). Two moves made it guard-eligible:
+  (1) relocated `readyWaitSetForList` to `cmd_wait.go` (byte-identical body,
+  already tested in `cmd_wait_test.go`) — it reads WAIT beads, a separate
+  class, so it belongs with the wait loaders and its two residual wait
+  `.Metadata[` (state/session_id) leave the file; (2) converted the three
+  session helpers `pinAwakeWakeReasonVisible` / `sessionKillRuntimeAlreadyInactive`
+  / `recordSessionKillStop` to the Info form (raw mirrors: `MetadataState` not
+  the blanked `State`; `SessionNameMetadata` not the `s-<ID>`-fallback
+  `SessionName`; `DependencyOnlyMetadata` for the untrimmed compare; siblings
+  `sessionMetadataStateInfo`/`isDrainedSessionInfo`/`normalizedSessionTemplateInfo`/
+  `sessionAgentMetricIdentityInfo`). Full gates (gofmt/build/vet/golangci-lint 0
+  + guard + revert-canary + targeted tests + a fable adversarial byte-identity
+  review, 11/11 confirmed, could-not-refute).
+
+**STRATEGIC FINDING (settles the target question for the rest of the shape
+pass).** A 4-agent census (wf_50fbaa2e-285) + direct inspection proves the
+**guard-earning shape targets in `cmd/gc` are now EXHAUSTED**. A file joins
+`metadataInfoOnlyFiles` only if converting clears EVERY `.Metadata[` spelling;
+the remaining candidates each retain a permanent non-session `.Metadata[`:
+
+- **build_desired_state.go** (75 `.Metadata[`): permanent WORK-bead reads
+  (`wb.Metadata[RoutedToMetadataKey]`, `step.Metadata`, `root.Metadata`) AND
+  session-bead WRITES (`sessionBead.Metadata[key]=value` ×4) → never guard-
+  eligible; shape-value only, contained to one file, OWN-SESSION.
+- **city_runtime.go** (12 session `.Metadata[`, all clean): blocked by the
+  raw-by-design whole-map fingerprint `sessionBeadSnapshotFingerprint` (must
+  hash the full metadata map) + a raw sweep close, plus 6 `.Open()` handing
+  into 5 cross-file `[]beads.Bead` reconciler helpers with no Info siblings
+  (`releaseOrphanedPoolAssignmentsWhenSnapshotsComplete`, `emitDueComputeFacts`,
+  …). Orchestration hub, not a leaf → never guard-eligible; OWN-SESSION.
+- **session_origin.go** (10 `.Metadata[`): permanently raw-by-design — all
+  reads live in the bead-form classifier helpers the `TestSessionClassifierInfoEquivalence`
+  oracle requires (its Info siblings already all exist). Same excluded family
+  as session_reconcile.go / session_sleep.go. Nothing to convert.
+- **cmd_start.go**: only `.Open()` (snapshot), but both feed
+  `reconcileSessionBeadsAtPathWithNamedDemand` (a core reconciler entry taking
+  raw `[]beads.Bead`) → library trap; DEFER with the reconciler.
+
+The two remaining paths, both larger initiatives with no quick guard win:
+1. **Access-pass DI** (the owner-deferred "separate, later"): route the 9
+   shape-sealed files' LOADS through `sessionsBeadStore()`/`sessionFrontDoor`
+   and make each store-free (`frontDoorStoreFreeFiles` forbids even holding
+   `beads.SessionStore` / calling `sessionFrontDoor(` — the composition root
+   threads in `*session.Store`). This is the ONLY remaining guard-earning +
+   relocation-completing work, but it is a package-wide DI refactor (many
+   cross-file call sites; `session.Store.Get` returns Info) — multi-session.
+2. **Shape-value-only** conversions of the giants (drive their session reads
+   behind Info, no guard entry) — prep for the eventual full seal; lower
+   priority per the guard-eligibility lesson.
