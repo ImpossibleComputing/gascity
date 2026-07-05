@@ -64,6 +64,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		PoolManaged:             strings.TrimSpace(b.Metadata["pool_managed"]) == "true",
 		SessionOrigin:           b.Metadata["session_origin"],
 		DependencyOnly:          strings.TrimSpace(b.Metadata["dependency_only"]) == "true",
+		DependencyOnlyMetadata:  b.Metadata["dependency_only"],
 		ManualSession:           strings.TrimSpace(b.Metadata["manual_session"]) == "true",
 		ManualSessionMetadata:   b.Metadata["manual_session"],
 		Labels:                  b.Labels,

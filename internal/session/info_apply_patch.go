@@ -95,6 +95,7 @@ func (info Info) ApplyPatch(patch MetadataPatch) Info {
 			info.SessionOrigin = v
 		case "dependency_only":
 			info.DependencyOnly = strings.TrimSpace(v) == "true"
+			info.DependencyOnlyMetadata = v
 		case "manual_session":
 			info.ManualSession = strings.TrimSpace(v) == "true"
 			info.ManualSessionMetadata = v

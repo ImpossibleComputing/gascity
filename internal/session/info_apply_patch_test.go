@@ -212,6 +212,39 @@ func TestPendingCreateClaimMetadataIsVerbatim(t *testing.T) {
 	}
 }
 
+// TestDependencyOnlyMetadataIsVerbatim pins the raw dependency_only mirror: the
+// pin-awake wake-reason display path (cmd/gc) compares dependency_only untrimmed
+// (== "true"), so DependencyOnlyMetadata must carry the value verbatim while the
+// DependencyOnly bool stays the trimmed=="true" verdict. Both projection paths
+// (InfoFromPersistedBead and ApplyPatch) must agree. Mirrors
+// TestPendingCreateClaimMetadataIsVerbatim.
+func TestDependencyOnlyMetadataIsVerbatim(t *testing.T) {
+	cases := []struct {
+		raw      string
+		wantMeta string
+		wantBool bool
+	}{
+		{"true", "true", true},
+		{" true ", " true ", true},
+		{"yes", "yes", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		b := beads.Bead{ID: "s", Type: "gc:session", Status: "open", Labels: []string{"gc:session"}, Metadata: map[string]string{"dependency_only": tc.raw}}
+		fromBead := InfoFromPersistedBead(b)
+		fromPatch := InfoFromPersistedBead(beads.Bead{ID: "s", Type: "gc:session", Status: "open", Labels: []string{"gc:session"}, Metadata: map[string]string{}}).
+			ApplyPatch(MetadataPatch{"dependency_only": tc.raw})
+		for name, got := range map[string]Info{"InfoFromPersistedBead": fromBead, "ApplyPatch": fromPatch} {
+			if got.DependencyOnlyMetadata != tc.wantMeta {
+				t.Errorf("%s(%q): DependencyOnlyMetadata = %q, want %q", name, tc.raw, got.DependencyOnlyMetadata, tc.wantMeta)
+			}
+			if got.DependencyOnly != tc.wantBool {
+				t.Errorf("%s(%q): DependencyOnly = %v, want %v", name, tc.raw, got.DependencyOnly, tc.wantBool)
+			}
+		}
+	}
+}
+
 // TestInfoMarkClosedMatchesReprojection is the byte-identity oracle for the
 // status-close refresh: for every base bead forced open, folding a status close
 // onto the projected Info via MarkClosed must equal projecting the same bead

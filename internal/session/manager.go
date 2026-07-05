@@ -129,7 +129,14 @@ type Info struct {
 	PoolManaged             bool   // pool_managed == "true"
 	SessionOrigin           string // session_origin (raw; resolved origin is a method)
 	DependencyOnly          bool   // dependency_only == "true"
-	ManualSession           bool   // manual_session (trimmed) == "true"
+	// DependencyOnlyMetadata is the RAW dependency_only metadata, verbatim and
+	// UNTRIMMED. The pin-awake wake-reason display path (cmd/gc) compares it
+	// exactly (== "true") WITHOUT trimming, a distinction the trimmed
+	// DependencyOnly bool cannot reproduce on whitespace-padded input; the mirror
+	// keeps the raw value so that read stays byte-identical. Additive,
+	// internal-only mirror; see ManualSessionMetadata for the precedent.
+	DependencyOnlyMetadata string // dependency_only (raw)
+	ManualSession          bool   // manual_session (trimmed) == "true"
 	// ManualSessionMetadata is the RAW manual_session metadata, verbatim.
 	// isManualSessionBead compares it WITHOUT trimming, so the Info mirror
 	// keeps the raw value to stay byte-identical on whitespace-padded inputs.
