@@ -371,3 +371,46 @@ need converting — pass them `sessFront.Store().Store` (reach-through) and the
 dependent file still goes store-free. The one thing reach-through can't fix is
 cmd_session.go's `map[string]beads.Store` rigStores (multi-class rig map, its own
 ownership boundary).
+
+---
+
+**Session 2026-07-05 (CONT-39) — ACCESS-PASS batch 2: the MEDIUM tranche, via
+SRP split (owner call over guard-gaming).** Commit `2fd4cbc5a`. `frontDoorStoreFreeFiles`
+now **7**: session_circuit_breaker, soft_reload, adoption_barrier, session_index,
+mcp_integration, **skill_visibility, session_logs_resolve**.
+
+**KEY ARCHITECTURAL FINDING that reshaped the MEDIUM tranche:** the 5 survey-"MEDIUM"
+files are NOT clean store-free receivers like the 3 leaves. Two kinds:
+- **Composition ROOTS** (open the store in their own RunE): cmd_prime, cmd_skill,
+  cmd_session_logs. The guard doc says roots that construct the front door inline are
+  "intentionally not listed." The owner chose the **SRP split** (not a composition-factory
+  that would game the guard): move each root's session-store LEAF helpers (pure receivers)
+  into a store-free companion file; the root stays and constructs `sessionFrontDoor(store)`
+  at the call site. Done for cmd_skill (→ `skill_visibility.go`) and cmd_session_logs
+  (→ `session_logs_resolve.go`). **cmd_prime EXCLUDED** — its hook helpers open the store
+  from `cityPath` internally (no receiver leaf to split); it is a genuine root.
+- **Shared SPINE** (raw-store infra, like `workerHandleForSessionWithConfig`):
+  **session_resolve.go EXCLUDED** (the `resolveSessionID*` resolver, 20 non-test callers
+  across 13 files — converting it is a large ripple that entangles the HARD files, and
+  dependents already reach through it); **session_template_start.go EXCLUDED** (the
+  creation spine session_resolve drives). Both legitimately keep a raw store.
+
+**SRP-split mechanics (the pattern for future root files):** move the receiver leaf funcs
+verbatim into a new companion file, convert `store beads.Store`→`sessFront *session.Store`,
+reintroduce `store := sessFront.Store().Store` after the guard so bodies stay byte-identical,
+`if store==nil`→`if !sessFront.Backed()`, forward `sessFront` to sibling moved funcs and
+`sessFront.Store().Store` to unconverted callees (workerHandle/resolveSessionID/ListByMetadata).
+Root's RunE passes `sessionFrontDoor(store)`; prune the root's now-unused imports; wrap test
+call sites in `sessionFrontDoor(store)`; add the companion (not the root) to the guard list.
+
+**NOTE (future guard tightening):** the reach-through `sessFront.Store().Store` puts a
+`beads.Store`-typed local back in scope that the `beads.Store` substring needle can't see
+(true of soft_reload/adoption_barrier/mcp too). A stricter guard could forbid `.Store().Store`
+in listed files; today it's the sanctioned byte-identity escape hatch.
+
+**REMAINING = the HARD-RIPPLE tranche (own session; see
+`ACCESS-PASS-HARD-RIPPLE-HANDOFF.md` + `-NEXT-SESSION-PROMPT.md`):** cmd_session_wake.go
+(3 raw-bead escapes on the WAKE bead) and cmd_session.go (~9 in-file RunE roots +
+`rigStores map[string]beads.Store` cross-class + 3 escapes + ~30 sites). Plus the
+documented EXCLUSIONS (cmd_prime root; session_resolve/session_template_start spine) which
+are relocation-safe via reach-through by their dependents and need no store-free listing.
