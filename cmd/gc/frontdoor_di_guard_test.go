@@ -251,6 +251,7 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_mcp.go",
 	"cmd_session_logs.go",
 	"cmd_prime.go",
+	"cmd_stop.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a
