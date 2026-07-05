@@ -103,7 +103,7 @@ func runAdoptionBarrier(
 		if b.Status == "closed" {
 			continue // closed beads don't count for dedup
 		}
-		if sn := b.Metadata["session_name"]; sn != "" {
+		if sn := sessionpkg.InfoFromPersistedBead(b).SessionNameMetadata; sn != "" {
 			bySessionName[sn] = true
 		}
 	}

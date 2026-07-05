@@ -15,6 +15,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -393,10 +394,11 @@ func primeHookSessionTemplate(cityPath string) string {
 	if err != nil {
 		return ""
 	}
-	if template := strings.TrimSpace(sessionBead.Metadata["template"]); template != "" {
+	info := session.InfoFromPersistedBead(sessionBead)
+	if template := strings.TrimSpace(info.Template); template != "" {
 		return template
 	}
-	return strings.TrimSpace(sessionBead.Metadata["common_name"])
+	return strings.TrimSpace(info.CommonName)
 }
 
 func primeHookAgentFromWorkDir(cfg *config.City) string {
@@ -582,7 +584,7 @@ func persistPrimeHookProviderSessionKey(hookProviderSessionID string, stderr io.
 		warn("hook stdin provider session id is only accepted for codex session %q", gcSessionID)
 		return
 	}
-	if existing := strings.TrimSpace(sessionBead.Metadata["session_key"]); existing != "" {
+	if existing := strings.TrimSpace(session.InfoFromPersistedBead(sessionBead).SessionKey); existing != "" {
 		return
 	}
 	if err := sessionFrontDoor(store).SetMarker(gcSessionID, "session_key", providerSessionID); err != nil {

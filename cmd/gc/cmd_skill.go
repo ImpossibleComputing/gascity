@@ -12,6 +12,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/materialize"
+	"github.com/gastownhall/gascity/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -200,7 +201,7 @@ func resolveVisibilityAgent(cityPath string, cfg *config.City, store beads.Store
 		}
 		template := normalizedSessionTemplate(bead, cfg)
 		if template == "" {
-			template = strings.TrimSpace(bead.Metadata["agent_name"])
+			template = strings.TrimSpace(session.InfoFromPersistedBead(bead).AgentName)
 		}
 		template = resolveAgentTemplate(template, cfg)
 		agent := findAgentByTemplate(cfg, template)

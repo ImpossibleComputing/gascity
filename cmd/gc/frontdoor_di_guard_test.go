@@ -128,14 +128,24 @@ func TestSnapshotInfoOnlyFilesStayOnInfoAccessors(t *testing.T) {
 	}
 }
 
-// metadataInfoOnlyFiles are the reconciler decision-path files whose session
-// beads are read AND written exclusively through the typed session.Info snapshot
-// (infoByID) / session.CircuitState — never by cracking bead metadata off a raw
-// bead. This is the write+read half of the reconciler front-door boundary
-// completed by the lockstep drop
-// (engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md):
-// once a file routes every session field through the typed projection, a
-// reappearing `.Metadata[...]` bead crack is a regression to raw-bead reads.
+// metadataInfoOnlyFiles are the files whose session beads are read AND written
+// exclusively through the typed session.Info projection (infoByID /
+// InfoFromPersistedBead) / session.CircuitState — never by cracking bead
+// metadata off a raw bead. This is the SHAPE half of the object-model front-door
+// boundary: the reconciler decision-path files completed by the lockstep drop
+// (engdocs/plans/infra-store-decouple/RECONCILER-FRONT-DOOR-LOCKSTEP-DROP.md)
+// plus the session-class periphery files converted by the periphery closure
+// (engdocs/plans/infra-store-decouple/SESSION-PERIPHERY-CLOSURE-PLAN.md). Once a
+// file routes every session field through the typed projection, a reappearing
+// `.Metadata[...]` bead crack is a regression to raw-bead reads.
+//
+// SHAPE-SEALED IS NOT RELOCATION-SAFE. Membership here means field reads go
+// through the Info codec (backend-shape-invariant); it does NOT mean the bead
+// LOAD is routed through the session-class store (sessionsBeadStore() /
+// resolveSessionStore). That access half is the separate frontDoorStoreFreeFiles
+// boundary; a [beads.classes.sessions] relocation captures a file only once BOTH
+// halves close. Several files here (e.g. cmd_prime.go, session_template_start.go)
+// still load their session bead from a raw store and are shape-sealed only.
 //
 // Only files that crack NO bead metadata inline (session OR work) belong here —
 // each listed file currently contains zero `.Metadata[` of any receiver spelling,
@@ -159,6 +169,10 @@ var metadataInfoOnlyFiles = []string{
 	"session_progress.go",
 	"session_circuit_breaker.go",
 	"city_status_snapshot.go",
+	"session_template_start.go",
+	"adoption_barrier.go",
+	"cmd_prime.go",
+	"cmd_skill.go",
 }
 
 // forbiddenRawBeadMetadata is the raw bead-metadata crack this guard forbids.

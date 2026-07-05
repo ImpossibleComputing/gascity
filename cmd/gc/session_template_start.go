@@ -108,7 +108,7 @@ func materializeSessionForTemplateWithOptions(
 			if bead, ok := reopenClosedConfiguredNamedSessionBead(
 				cityPath, store, cfg, cityName, spec.Identity, spec.SessionName, "stopped", time.Now().UTC(), opts.materializeMetadata, stderr,
 			); ok {
-				if sn := strings.TrimSpace(bead.Metadata["session_name"]); sn != "" {
+				if sn := strings.TrimSpace(session.InfoFromPersistedBead(bead).SessionNameMetadata); sn != "" {
 					snapshot.add(bead)
 					return sn, nil
 				}
