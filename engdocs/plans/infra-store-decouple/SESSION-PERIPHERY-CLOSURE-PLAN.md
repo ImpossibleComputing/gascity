@@ -315,3 +315,59 @@ The two remaining paths, both larger initiatives with no quick guard win:
 2. **Shape-value-only** conversions of the giants (drive their session reads
    behind Info, no guard entry) — prep for the eventual full seal; lower
    priority per the guard-eligibility lesson.
+
+---
+
+**Session 2026-07-05 (CONT-38) — ACCESS-PASS DI STARTED (owner-authorized).
+Batch 1: 3 leaf files access-sealed onto the session front door.** Commit
+`d7d0aa56b` on `upstream/object-front-doors-cleanup` (#3839 DRAFT). Added to
+`frontDoorStoreFreeFiles`: **adoption_barrier.go, session_index.go,
+mcp_integration.go** (now 5 total with session_circuit_breaker + soft_reload).
+
+**THE PROVEN ACCESS-PASS PATTERN (byte-identical):** a file goes store-free by
+taking `sessFront *session.Store` and reaching the raw session-class store via
+`sessFront.Store().Store` (the soft_reload.go model — a method+field chain that
+does NOT contain the forbidden `beads.Store` substring). Use the REACH-THROUGH,
+**not** the typed `sessFront.Get(id)` — `session.Store.Get` (info_store.go:178)
+adds an `IsSessionBeadOrRepairable` validation and re-wraps the error, so it is
+NOT byte-identical to `store.Get` + `InfoFromPersistedBead`. Reintroduce a local
+`store := sessFront.Store().Store` right after the guard so the rest of the body
+stays byte-identical. Nil-guard: `if store == nil` → `if !sessFront.Backed()`
+(Backed = `s != nil && s.store.Store != nil`, faithful to raw-store-nil). The
+composition root (a non-listed file) constructs `sessionFrontDoor(store)`; tests
+are unguarded and keep using `sessionFrontDoor(store)`. Per file: build/vet/
+golangci-lint 0 + the `TestFrontDoorStoreFreeFilesStayStoreFree` guard +
+revert-canary (inject a `beads.Store` decl, guard must fail) + a fable
+adversarial behavior-identity review.
+
+**REMAINING ACCESS-PASS FILES (survey wf_5bac5e83-758, tractability-ranked):**
+- **MEDIUM** — do next, in this order:
+  - `cmd_prime.go` (1 `beads.Store` literal; one raw-bead escape; root-in-file →
+    needs an UNLISTED composition helper e.g. `primeSessionFrontDoor(cityPath)
+    (*session.Store, error)` wrapping `openCityStoreAt`+`sessionFrontDoor`, since
+    `sessionFrontDoor(` can't appear in the listed file).
+  - `cmd_skill.go` (3 literals incl a `var store beads.Store` decl; raw-bead
+    escape `normalizedSessionTemplate`→ Info sibling `normalizedSessionTemplateInfo`
+    exists; 0 non-test caller ripple; root-in-file).
+  - `cmd_session_logs.go` (4 store-param sigs, all in-file; `store.ListByMetadata`
+    + the 2 shared callees `resolveSessionIDAllowClosedWithConfig` /
+    `workerHandleForSessionWithConfig` via reach-through — no session-pkg escapes).
+  - `session_template_start.go` (raw-bead escape via `RepairEmptyType`).
+  - `session_resolve.go` (the SHARED `resolveSessionID*(...,store,...)` resolver —
+    dependency of mcp/skill/logs; those files reach through it today, so converting
+    it is not required for them, but doing so lets them drop the reach-through).
+- **HARD-RIPPLE** — defer, each own session:
+  - `cmd_session_wake.go` (3 raw-bead escapes on the WAKE bead: `WakeSession`,
+    `RepairEmptyType`, `IsSessionBeadOrRepairable` — the raw bead can't become Info;
+    would want `session.Store` wake/repair methods or reach-through the whole wake).
+  - `cmd_session.go` (LARGEST: ~9 in-file RunE composition roots each opening a
+    store; a `rigStores map[string]beads.Store` CROSS-CLASS map the session
+    reach-through does NOT cover; 3 raw-bead escapes; ~30 sites).
+
+**Cross-cutting:** the shared `beads.Store`-typed callees (`resolveSessionID*`,
+`workerHandleForSessionWithConfig`, `workerSessionCatalogWithConfig`,
+`session.ListAllSessionBeads` with rich ListQuery, `session.EnsureAlias*`) do NOT
+need converting — pass them `sessFront.Store().Store` (reach-through) and the
+dependent file still goes store-free. The one thing reach-through can't fix is
+cmd_session.go's `map[string]beads.Store` rigStores (multi-class rig map, its own
+ownership boundary).
