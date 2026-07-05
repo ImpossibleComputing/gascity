@@ -85,7 +85,7 @@ func cmdSessionLogs(args []string, follow bool, tail int, jsonOutput bool, stdou
 	)
 	if err == nil && store != nil {
 		var diagnostic string
-		path, provider, ok, diagnostic = resolveStoredSessionLogSource(cityPath, cfg, sessionFrontDoor(store), identifier, searchPaths)
+		path, provider, ok, diagnostic = resolveStoredSessionLogSource(cityPath, cfg, cliSessionFrontDoor(store, cfg, cityPath), identifier, searchPaths)
 		if ok && path == "" && diagnostic != "" {
 			fmt.Fprintf(stderr, "gc session logs: %s\n", diagnostic) //nolint:errcheck // best-effort stderr
 			return 1

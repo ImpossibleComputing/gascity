@@ -248,6 +248,8 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_session_wake.go",
 	"cmd_session_pin.go",
 	"cmd_skill.go",
+	"cmd_mcp.go",
+	"cmd_session_logs.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a
