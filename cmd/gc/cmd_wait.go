@@ -727,6 +727,26 @@ func loadWaitBeads(store beads.Store) ([]beads.Bead, error) {
 	return loadWaitBeadsByLabel(store)
 }
 
+// readyWaitSetForList returns the set of session IDs that have a ready wait
+// nudge, keyed by session_id. It reads WAIT beads (a separate coordination
+// class from session beads), so it lives with the other wait-bead loaders here
+// rather than in the session command file; `gc session list` consumes it to
+// surface a "wait" wake reason.
+func readyWaitSetForList(store beads.Store) (map[string]bool, error) {
+	items, err := loadWaitBeads(store)
+	ready := make(map[string]bool)
+	for _, item := range items {
+		if item.Metadata["state"] != waitStateReady {
+			continue
+		}
+		sessionID := item.Metadata["session_id"]
+		if sessionID != "" {
+			ready[sessionID] = true
+		}
+	}
+	return ready, err
+}
+
 func loadSessionWaitBeads(store beads.Store, sessionID string) ([]beads.Bead, error) {
 	return sessionpkg.ListSessionWaitBeads(store, sessionID)
 }

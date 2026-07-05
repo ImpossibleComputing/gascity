@@ -605,7 +605,7 @@ func TestRecordSessionKillStop_SkipOnUnknown(t *testing.T) {
 	t.Run("bead load failure records nothing", func(t *testing.T) {
 		reader := installManualMetricReader(t)
 
-		recordSessionKillStop(beads.Bead{}, errors.New("store unavailable"), nil)
+		recordSessionKillStop(sessionpkg.InfoFromPersistedBead(beads.Bead{}), errors.New("store unavailable"), nil)
 
 		if points := collectCounterDataPoints(t, reader, "gc.agent.stops.total"); len(points) != 0 {
 			t.Fatalf("gc.agent.stops.total datapoints = %+v, want none when the bead failed to load", points)
@@ -615,7 +615,7 @@ func TestRecordSessionKillStop_SkipOnUnknown(t *testing.T) {
 	t.Run("empty session name records nothing", func(t *testing.T) {
 		reader := installManualMetricReader(t)
 
-		recordSessionKillStop(beads.Bead{Metadata: map[string]string{"session_name": "  "}}, nil, nil)
+		recordSessionKillStop(sessionpkg.InfoFromPersistedBead(beads.Bead{Metadata: map[string]string{"session_name": "  "}}), nil, nil)
 
 		if points := collectCounterDataPoints(t, reader, "gc.agent.stops.total"); len(points) != 0 {
 			t.Fatalf("gc.agent.stops.total datapoints = %+v, want none for a blank session name", points)
@@ -625,10 +625,10 @@ func TestRecordSessionKillStop_SkipOnUnknown(t *testing.T) {
 	t.Run("loaded bead records the stop", func(t *testing.T) {
 		reader := installManualMetricReader(t)
 
-		recordSessionKillStop(beads.Bead{Metadata: map[string]string{
+		recordSessionKillStop(sessionpkg.InfoFromPersistedBead(beads.Bead{Metadata: map[string]string{
 			"session_name": "gascity--gc__worker",
 			"agent_name":   "gascity/gc.worker",
-		}}, nil, nil)
+		}}), nil, nil)
 
 		points := collectCounterDataPoints(t, reader, "gc.agent.stops.total")
 		if !hasDataPointWithStringAttrs(points, map[string]string{"agent": "gascity/gc.worker", "reason": "killed", "status": "ok"}) {
@@ -646,9 +646,9 @@ func TestRecordSessionKillStop_SkipOnUnknown(t *testing.T) {
 		// or template passes the session-name guard yet resolves to an empty
 		// agent identity. The RecordAgentStop backstop must drop it so the
 		// counter is never polluted with a blank, unjoinable agent series.
-		recordSessionKillStop(beads.Bead{Metadata: map[string]string{
+		recordSessionKillStop(sessionpkg.InfoFromPersistedBead(beads.Bead{Metadata: map[string]string{
 			"session_name": "gascity--gc__worker",
-		}}, nil, nil)
+		}}), nil, nil)
 
 		if points := collectCounterDataPoints(t, reader, "gc.agent.stops.total"); len(points) != 0 {
 			t.Fatalf("gc.agent.stops.total datapoints = %+v, want none when the agent identity resolves empty", points)

@@ -1303,7 +1303,7 @@ func sessionReason(s session.Info, beadIndex map[string]beads.Bead, cfg *config.
 	// full wake reasons (including WakeConfig).
 	if cfg != nil {
 		reasons := wakeReasons(b, cfg, sp, poolDesired, nil, readyWaitSet, clock.Real{})
-		if pinAwakeWakeReasonVisible(b, cfg, time.Now().UTC()) && !containsWakeReason(reasons, WakePin) {
+		if pinAwakeWakeReasonVisible(session.InfoFromPersistedBead(b), cfg, time.Now().UTC()) && !containsWakeReason(reasons, WakePin) {
 			reasons = append(reasons, WakePin)
 		}
 		if len(reasons) > 0 {
@@ -1318,21 +1318,21 @@ func sessionReason(s session.Info, beadIndex map[string]beads.Bead, cfg *config.
 	return "-"
 }
 
-func pinAwakeWakeReasonVisible(b beads.Bead, cfg *config.City, now time.Time) bool {
-	if strings.TrimSpace(b.Metadata["pin_awake"]) != "true" || cfg == nil {
+func pinAwakeWakeReasonVisible(info session.Info, cfg *config.City, now time.Time) bool {
+	if strings.TrimSpace(info.PinAwake) != "true" || cfg == nil {
 		return false
 	}
-	state := sessionMetadataState(b)
-	if b.Status == "closed" || state == "closed" || state == "suspended" {
+	state := sessionMetadataStateInfo(info)
+	if info.Closed || state == "closed" || state == "suspended" {
 		return false
 	}
-	if isDrainedSessionBead(b) || b.Metadata["dependency_only"] == "true" || b.Metadata["wait_hold"] != "" {
+	if isDrainedSessionInfo(info) || info.DependencyOnlyMetadata == "true" || info.WaitHold != "" {
 		return false
 	}
-	if metadataTimeInFuture(b.Metadata["held_until"], now) || metadataTimeInFuture(b.Metadata["quarantined_until"], now) {
+	if metadataTimeInFuture(info.HeldUntil, now) || metadataTimeInFuture(info.QuarantinedUntil, now) {
 		return false
 	}
-	agent := findAgentByTemplate(cfg, normalizedSessionTemplate(b, cfg))
+	agent := findAgentByTemplate(cfg, normalizedSessionTemplateInfo(info, cfg))
 	if agent == nil {
 		return false
 	}
@@ -1345,21 +1345,6 @@ func metadataTimeInFuture(raw string, now time.Time) bool {
 	}
 	t, err := time.Parse(time.RFC3339, raw)
 	return err == nil && !t.IsZero() && now.Before(t)
-}
-
-func readyWaitSetForList(store beads.Store) (map[string]bool, error) {
-	items, err := loadWaitBeads(store)
-	ready := make(map[string]bool)
-	for _, item := range items {
-		if item.Metadata["state"] != waitStateReady {
-			continue
-		}
-		sessionID := item.Metadata["session_id"]
-		if sessionID != "" {
-			ready[sessionID] = true
-		}
-	}
-	return ready, err
 }
 
 // cliPoolDesired computes a static pool desired count from config.
@@ -2225,11 +2210,12 @@ func cmdSessionKill(args []string, stdout, stderr io.Writer, jsonOutput ...bool)
 
 	sp := newSessionProvider()
 	bead, beadErr := store.Get(sessionID)
+	info := session.InfoFromPersistedBead(bead)
 	identity := ""
 	runtimeAlreadyInactive := false
 	if beadErr == nil {
 		identity = namedSessionIdentity(bead)
-		runtimeAlreadyInactive = sessionKillRuntimeAlreadyInactive(bead, sp)
+		runtimeAlreadyInactive = sessionKillRuntimeAlreadyInactive(info, sp)
 	}
 
 	handle, err := workerHandleForSessionWithConfig(cityPath, store, sp, cfg, sessionID)
@@ -2284,7 +2270,7 @@ func cmdSessionKill(args []string, stdout, stderr io.Writer, jsonOutput ...bool)
 		Message: "killed",
 		Payload: api.SessionLifecyclePayloadJSON(sessionID, "", "killed"),
 	})
-	recordSessionKillStop(bead, beadErr, cfg)
+	recordSessionKillStop(info, beadErr, cfg)
 	if asJSON {
 		if err := writeSessionActionJSON(stdout, sessionActionResult{
 			Action:    "kill",
@@ -2306,23 +2292,23 @@ func cmdSessionKill(args []string, stdout, stderr io.Writer, jsonOutput ...bool)
 // session bead failed to load (or carries no bounded session name) nothing is
 // recorded — an unknown identity must not become a garbage metric label.
 // Purely observational: it never influences control flow or the exit code.
-func recordSessionKillStop(bead beads.Bead, beadErr error, cfg *config.City) {
+func recordSessionKillStop(info session.Info, beadErr error, cfg *config.City) {
 	if beadErr != nil {
 		return
 	}
-	sessionName := strings.TrimSpace(bead.Metadata["session_name"])
+	sessionName := strings.TrimSpace(info.SessionNameMetadata)
 	if sessionName == "" {
 		return
 	}
-	telemetry.RecordAgentStop(context.Background(), sessionName, sessionAgentMetricIdentity(bead, cfg), "killed", nil)
+	telemetry.RecordAgentStop(context.Background(), sessionName, sessionAgentMetricIdentityInfo(info, cfg), "killed", nil)
 }
 
-func sessionKillRuntimeAlreadyInactive(bead beads.Bead, sp runtime.Provider) bool {
-	switch session.State(strings.TrimSpace(bead.Metadata["state"])) {
+func sessionKillRuntimeAlreadyInactive(info session.Info, sp runtime.Provider) bool {
+	switch session.State(strings.TrimSpace(info.MetadataState)) {
 	case session.StateActive, session.StateStartPending, session.StateCreating, session.StateDraining, session.StateAwake:
 		return false
 	}
-	sessionName := strings.TrimSpace(bead.Metadata["session_name"])
+	sessionName := strings.TrimSpace(info.SessionNameMetadata)
 	return sp != nil && sessionName != "" && !sp.IsRunning(sessionName)
 }
 
