@@ -173,3 +173,64 @@ cmd/gc ~30 files / ~120 sites + ~8 Info-sibling helpers; internal/api ~8 files; 
 ~2; internal/session ~6 files (the dogfood gap). This is **multiple focused sessions** —
 sequence by the phase order, small→big, guarding as you go. The two `build_desired_state.go`
 / `city_runtime.go` conversions each warrant their own session (reconciler-grade care).
+
+---
+
+## SCOPE DECISION (2026-07-05): shape-first, access as a tracked pass
+
+Owner call: seal each periphery file in **two separate passes**, not both at once.
+
+- **Shape pass (this pass).** Route every raw session-bead field read through the
+  `session.Info` codec (`InfoFromPersistedBead(bead).<Field>` / typed siblings) and
+  add the file to `metadataInfoOnlyFiles`. This is backend-shape-invariant hygiene.
+- **Access pass (separate, later).** Route the bead *LOAD* through
+  `sessionsBeadStore()` / `resolveSessionStore` so a `[beads.classes.sessions]`
+  relocation actually captures it; that is the `frontDoorStoreFreeFiles` boundary.
+
+**Membership in `metadataInfoOnlyFiles` is SHAPE-SEALED, NOT relocation-safe.** A file
+is only captured by the swap once BOTH passes close. The guard's doc comment states
+this. Shape-first is the correct order because `session.Store.Get` returns `Info` (not
+a raw bead), so a file must be shape-converted before its load can route through the
+Info front door; files still needing the raw bead route their load through
+`sessionsBeadStore()` (typed `beads.SessionStore`) in the access pass.
+
+## Progress log
+
+**Session 2026-07-05 (CONT-35) — Phase A + 8 Tier-4 files shape-sealed.** All verified
+per-file (build/vet/gofmt/golangci-lint 0 + guard + revert-canary + targeted tests +
+a fable adversarial byte-identity review, 0 findings each). Commits on
+`upstream/object-front-doors-cleanup` (#3839 DRAFT):
+
+- `1e1a80138` **Phase A**: added `Info.ProviderKind` (real persisted `provider_kind`
+  family key, was MISSING) — full 6a wiring (struct + codec + ApplyPatch + oracle).
+  Unblocks the logs/mcp/worker paths. Other census "MISSING" flags were wrong
+  (`session_origin`/`pool_slot`/`pool_managed`/`generation`/`instance_token`/
+  `sleep_reason` already on Info — re-verify census claims against the struct).
+- `d3bc67ee3` session_template_start.go, adoption_barrier.go, cmd_prime.go, cmd_skill.go
+- `d4b8bb88e` session_resolve.go (+ Info-sibling helper calls isNamedSessionInfo/…)
+- `1fbcb7728` cmd_session_logs.go, mcp_integration.go (ProviderKind consumers;
+  `sessionLogFallbackCandidateLive` signature → Info)
+- `b5fb81b51` session_index.go (+ deleted dead `pool_template` field per no-ghosts)
+
+**8 files now on `metadataInfoOnlyFiles`** (shape-sealed): session_template_start,
+adoption_barrier, cmd_prime, cmd_skill, session_resolve, cmd_session_logs,
+mcp_integration, session_index. Verified census artifact:
+`raw/session-tier4-census.json`.
+
+**KEY LESSON — clean Tier-4 criterion (sharper than the census):** a file is a clean
+this-pass target only when its raw reads are on a bead **the function loaded itself**
+(no external signature change). Files whose `.Metadata[` lives in a helper that takes a
+`beads.Bead` **parameter** (assigned_work_scope's `sessionAgentConfig`/
+`openSessionReachableStoreRef`, the `session_state_helpers.go` bead-form library) are
+the `session_state_helpers` trap — their callers (the big decision files) pass raw beads,
+so converting drags them in. Defer those with their callers. Also: a file is
+guard-listable only if converting clears **all** its `.Metadata[` — files that also read
+work/wait metadata (doctor_session_model's `routed_to`, pool_session_name,
+pool_desired_state) get shape-converted for their session reads but stay OFF the
+substring guard (documented census).
+
+**Remaining Tier-4 (next):** doctor_session_model (mixed, no guard), usage_compute
+(needs bookkeeping-key Phase A + work refs), session_origin (bead-form helper library),
+pool_session_name / pool_desired_state (mixed + a dead `poolSessionConsumesNewDemand`
+legacy helper to delete), cmd_session_wake (mixed, helpers). Then Tier-2
+(soft_reload/cmd_start/cmd_session), then the Tier-1 giants.

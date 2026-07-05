@@ -146,6 +146,17 @@ Enforcement mechanism (already in place, extend per class):
   closed — its two raw session reads now go through `session.Info`
   (`InfoFromPersistedBead(...).MetadataState` / `OpenInfos()` + proven-mirror helpers);
   added to both guard lists.
+  - **Periphery Phase C Tier-4, session 2026-07-05 (shape pass):** 8 files shape-sealed
+    onto `session.Info` + added to `metadataInfoOnlyFiles` — session_template_start,
+    adoption_barrier, cmd_prime, cmd_skill, session_resolve, cmd_session_logs,
+    mcp_integration, session_index (dead `pool_template` field deleted). Phase A added
+    `Info.ProviderKind`. Each: build/vet/lint 0 + guard + revert-canary + targeted tests +
+    fable byte-identity review (0 findings). Commits `1e1a80138`, `d3bc67ee3`, `d4b8bb88e`,
+    `1fbcb7728`, `b5fb81b51`. **Owner scope decision: shape-first, access-layer routing
+    (`sessionsBeadStore()`/`frontDoorStoreFreeFiles`) is a SEPARATE tracked pass — a file on
+    `metadataInfoOnlyFiles` is shape-sealed, NOT yet relocation-safe.** See
+    `SESSION-PERIPHERY-CLOSURE-PLAN.md` progress log for the clean-Tier-4 criterion and the
+    remaining files.
 
 ### 5. Convoy — *no typed interface* — **weak seal**
 - **Interface:** functions over raw `beads.Store`; `ConvoyFields` unexported;
