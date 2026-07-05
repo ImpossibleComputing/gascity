@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -2652,6 +2653,109 @@ exit 0
 `)
 	if strings.TrimSpace(out) != "0" {
 		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 0 for empty bd output", strings.TrimSpace(out))
+	}
+}
+
+// TestEffectivePoolDemandQueryLegacyEphemeralTierSurfacesBdFailure is the
+// core regression test for ga-ac6t6q: poolDemandCountShell's 4th line
+// (legacy_ephemeral_json) must abort the whole count-form on a bd failure,
+// exactly like its 3 sibling lines already do, instead of masking it as
+// zero legacy-ephemeral demand. The two preceding ready tiers succeed with
+// `[]` so execution actually reaches the legacy-ephemeral probe.
+func TestEffectivePoolDemandQueryLegacyEphemeralTierSurfacesBdFailure(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; count-form exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	stdout, stderr, code := runShellWithFakeBdAllowFailure(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+case "$*" in
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *"--metadata-field gc.run_target=hello-world/worker"*"--metadata-field gc.kind=workflow"*)
+    printf '[]'
+    ;;
+  *"query --json"*"ephemeral=true"*)
+    printf 'connection refused\n' >&2
+    exit 1
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if code == 0 {
+		t.Fatalf("EffectivePoolDemandQuery() exited 0 with stdout %q on legacy-ephemeral bd failure, want non-zero", stdout)
+	}
+	if !strings.Contains(stderr, "connection refused") {
+		t.Fatalf("EffectivePoolDemandQuery() stderr = %q, want legacy-ephemeral bd failure surfaced", stderr)
+	}
+}
+
+// TestEffectivePoolDemandQueryLegacyEphemeralTierSurfacesSchemaSkew closes
+// the loop on the concrete real-world signature (same class as ga-qyw3wn)
+// that motivated this bead, isolated to the legacy-ephemeral tier. In a
+// fully live schema-skew incident the first ready-tier bd call aborts the
+// script before this line runs (see ga-9ex12k) -- this test injects the
+// failure only at the ephemeral tier to pin that this specific line's fix
+// is correct independent of that dormant/reachability nuance.
+func TestEffectivePoolDemandQueryLegacyEphemeralTierSurfacesSchemaSkew(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; count-form exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	stdout, stderr, code := runShellWithFakeBdAllowFailure(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+case "$*" in
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *"--metadata-field gc.run_target=hello-world/worker"*"--metadata-field gc.kind=workflow"*)
+    printf '[]'
+    ;;
+  *"query --json"*"ephemeral=true"*)
+    printf 'schema version mismatch: database is at v51, binary knows up to v49 (2 migrations ahead)\n' >&2
+    exit 1
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if code == 0 {
+		t.Fatalf("EffectivePoolDemandQuery() exited 0 with stdout %q on legacy-ephemeral schema skew, want non-zero", stdout)
+	}
+	if !strings.Contains(stderr, "schema version mismatch") {
+		t.Fatalf("EffectivePoolDemandQuery() stderr = %q, want schema-skew message surfaced", stderr)
+	}
+}
+
+// TestEffectivePoolDemandQueryLegacyEphemeralTierGenuineEmptyStillZero is
+// the non-regression guard: a genuinely empty legacy-ephemeral result
+// (bd exit 0, literal "[]") must still count as zero, not be mistaken for
+// a failure by the restructured fail-loud pipeline.
+func TestEffectivePoolDemandQueryLegacyEphemeralTierGenuineEmptyStillZero(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not available; count-form exercises a jq pipeline")
+	}
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	out := runShellWithFakeBd(t, a.EffectivePoolDemandQuery(), nil, `#!/bin/sh
+case "$*" in
+  *"--metadata-field gc.routed_to=hello-world/worker"*)
+    printf '[]'
+    ;;
+  *"--metadata-field gc.run_target=hello-world/worker"*"--metadata-field gc.kind=workflow"*)
+    printf '[]'
+    ;;
+  *"query --json"*"ephemeral=true"*)
+    printf '[]'
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if strings.TrimSpace(out) != "0" {
+		t.Fatalf("EffectivePoolDemandQuery() count = %q, want 0 for genuinely empty legacy-ephemeral result", strings.TrimSpace(out))
 	}
 }
 
@@ -5663,6 +5767,35 @@ func runShellWithFakeBd(t *testing.T, shellCmd string, env map[string]string, bd
 		t.Fatalf("run shell with fake bd: %v", err)
 	}
 	return string(out)
+}
+
+// runShellWithFakeBdAllowFailure is runShellWithFakeBd's counterpart for
+// tests exercising a fail-loud path: it returns stdout, stderr, and the exit
+// code instead of calling t.Fatalf on a non-zero exit.
+func runShellWithFakeBdAllowFailure(t *testing.T, shellCmd string, env map[string]string, bdScript string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	bdPath := filepath.Join(tmp, "bd")
+	if err := os.WriteFile(bdPath, []byte(bdScript), 0o755); err != nil {
+		t.Fatalf("write fake bd: %v", err)
+	}
+
+	cmd := exec.Command("sh", "-c", shellCmd)
+	cmd.Env = []string{"PATH=" + tmp + ":" + os.Getenv("PATH")}
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.Output()
+	if err == nil {
+		return string(out), "", 0
+	}
+	exitErr := &exec.ExitError{}
+	ok := errors.As(err, &exitErr)
+	if !ok {
+		t.Fatalf("run shell with fake bd: %v", err)
+	}
+	return string(out), string(exitErr.Stderr), exitErr.ExitCode()
 }
 
 func runLifecycleHookCommand(t *testing.T, command string, bdScript string) string {
