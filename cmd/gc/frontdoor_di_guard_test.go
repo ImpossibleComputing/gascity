@@ -176,6 +176,7 @@ var metadataInfoOnlyFiles = []string{
 	"session_resolve.go",
 	"cmd_session_logs.go",
 	"mcp_integration.go",
+	"session_index.go",
 }
 
 // forbiddenRawBeadMetadata is the raw bead-metadata crack this guard forbids.
