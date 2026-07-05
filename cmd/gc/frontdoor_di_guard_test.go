@@ -173,6 +173,7 @@ var metadataInfoOnlyFiles = []string{
 	"adoption_barrier.go",
 	"cmd_prime.go",
 	"cmd_skill.go",
+	"session_resolve.go",
 }
 
 // forbiddenRawBeadMetadata is the raw bead-metadata crack this guard forbids.
