@@ -346,6 +346,14 @@ type Info struct {
 	// the raw string (!= "" && != "0"), which the int form cannot reproduce (it collapses
 	// missing/"0"/malformed all to 0); the mirror preserves that distinction for Step 6b.
 	WakeAttemptsMetadata string // wake_attempts (raw)
+	// ProviderKind is the RAW provider_kind metadata, verbatim — the provider
+	// FAMILY marker (claude/codex/gemini) stamped from ResolvedProvider, distinct
+	// from Provider (the concrete provider name). The session-logs / mcp-integration
+	// CLI paths and the worker invocation-telemetry path read it as a family value
+	// (TrimSpace, with a fall-back to provider when empty), so the mirror keeps the
+	// raw value. Additive, internal-only (absent from the HTTP wire). Session-class
+	// periphery front-door migration.
+	ProviderKind string // provider_kind (raw)
 }
 
 // RuntimeObservation reports the provider-backed live runtime state for a

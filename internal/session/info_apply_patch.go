@@ -196,6 +196,8 @@ func (info Info) ApplyPatch(patch MetadataPatch) Info {
 			} else {
 				info.WakeAttempts = 0
 			}
+		case "provider_kind":
+			info.ProviderKind = v
 		case MetadataLastNudgeDeliveredAt:
 			info.LastNudgeDeliveredAt = time.Time{}
 			if raw := strings.TrimSpace(v); raw != "" {

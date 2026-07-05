@@ -134,6 +134,7 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		SessionIDFlag:                  b.Metadata["session_id_flag"],
 		TemplateOverrides:              b.Metadata["template_overrides"],
 		WakeAttemptsMetadata:           b.Metadata["wake_attempts"],
+		ProviderKind:                   b.Metadata["provider_kind"],
 	}
 	if n, err := strconv.Atoi(b.Metadata["wake_attempts"]); err == nil {
 		info.WakeAttempts = n

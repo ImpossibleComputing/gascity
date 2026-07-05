@@ -41,7 +41,7 @@ var allProjectedMetadataKeys = []string{
 	"attached_config_drift_deferred_key", "stranded_event_emitted_at",
 	"session_name_explicit", "wake_request", "restart_requested",
 	"session_id_flag", "template_overrides", "wake_attempts",
-	MetadataLastNudgeDeliveredAt,
+	MetadataLastNudgeDeliveredAt, "provider_kind",
 }
 
 // oracleBaseBeads returns diverse session beads: a fully-populated open bead, the
@@ -80,7 +80,7 @@ func oracleBaseBeads() []beads.Bead {
 		"attached_config_drift_deferred_key": "ak", "stranded_event_emitted_at": "2026-01-08T00:00:00Z",
 		"session_name_explicit": "true", "wake_request": "explicit", "restart_requested": "true",
 		"session_id_flag": "--session-id", "template_overrides": `{"x":"y"}`, "wake_attempts": "3",
-		MetadataLastNudgeDeliveredAt: "2026-01-09T00:00:00Z",
+		MetadataLastNudgeDeliveredAt: "2026-01-09T00:00:00Z", "provider_kind": "claude",
 	}
 	clone := func(m map[string]string) map[string]string {
 		out := make(map[string]string, len(m))
