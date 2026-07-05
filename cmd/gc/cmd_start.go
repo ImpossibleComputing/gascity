@@ -870,8 +870,14 @@ func doStartStandalone(args []string, controllerMode bool, stdout, stderr io.Wri
 	if store, err := openCityStoreAt(cityPath); err == nil {
 		oneShotStore = store
 
-		// Run adoption barrier before sync.
-		result, passed := runAdoptionBarrier(cityPath, sessionFrontDoor(store), sp, cfg, cityName, clock.Real{}, stderr, false)
+		// Run adoption barrier before sync. The adoption barrier is purely
+		// session-class, so route it through the session coordination-class store.
+		// NOTE: the standalone one-shot reconcile cascade below still threads the
+		// generic oneShotStore (wrapped as beads.SessionStore) because it is
+		// multi-class (session snapshot + work-bead demand + rig stores) — routing
+		// its session arm is a separate mirror-of-runtime follow-up, so cmd_start.go
+		// is intentionally NOT on sessionRelocationRoutedFiles.
+		result, passed := runAdoptionBarrier(cityPath, cliSessionFrontDoor(store, cfg, cityPath), sp, cfg, cityName, clock.Real{}, stderr, false)
 		if result.Adopted > 0 {
 			fmt.Fprintf(stdout, "Adopted %d running session(s) into bead store.\n", result.Adopted) //nolint:errcheck
 		}
