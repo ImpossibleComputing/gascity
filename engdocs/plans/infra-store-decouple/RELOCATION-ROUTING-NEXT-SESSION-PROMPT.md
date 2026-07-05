@@ -1,0 +1,54 @@
+# Next-session prompt — CLI session relocation-routing
+
+Paste the block below into a fresh session.
+
+---
+
+Continue the **CLI session relocation-routing** pass on branch
+`upstream/object-front-doors-cleanup` (base `main`, DRAFT PR #3839, worktree
+`/data/projects/gascity/.claude/worktrees/object-front-doors`; run `git rev-parse HEAD` —
+should be at/after `3e05a03fe`).
+
+**Read first, in order:**
+1. `engdocs/plans/infra-store-decouple/RELOCATION-ROUTING-HANDOFF.md` — the current-state
+   handoff: why the access pass pivoted to relocation-routing, the seam
+   (`cli_session_store.go` — `cliSessionStore`/`cliSessionFrontDoor`), the guard, the 10 roots
+   DONE, and the REMAINING blind roots (with the completeness census). **START HERE.**
+2. `engdocs/plans/infra-store-decouple/SESSION-PERIPHERY-CLOSURE-PLAN.md` Progress log
+   (CONT-40) — the live status.
+3. Memory `infra-beads-decoupling-plan.md` CONT-40.
+
+**KEY DECISIONS (do not relitigate):**
+- Route via `cliSessionStore`/`cliSessionFrontDoor` (= `resolveSessionStore`, identity today →
+  byte-identical). Whole-store route only when EVERY consumer is session-class; else surgical
+  (session calls → sessStore; work/rig/mail/nudge/dep → plain store).
+- cfg-less / hot / hook / daemon paths load cfg via `loadCityConfigWithoutBuiltinPackRefresh(cityPath, io.Discard)`
+  (NOT `loadCityConfig` — pack-refresh side effect).
+- Mixed files (controller.go, cmd_start.go) route for correctness but stay OFF the guard list.
+- DEFERRED (do not attempt piecemeal): cmd_wait.go (owner-approved), cmd_handoff.go+cmd_runtime_drain.go
+  (paired shared-helper effort), cmd_nudge.go, cmd_sling.go, cmd_start.go reconcile cascade.
+
+**IMMEDIATE WORK (pick with the owner):**
+- **cmd_restart.go** `doRigRestart` — likely a clean whole-store route (same session-name+runtime
+  pattern as cmd_stop, which was clean). Verify all consumers session-class first. Good next target.
+- **cmd_session.go** (Phase 4, BIG — ~9 roots, its own session) — surgical; cmdSessionClose/Kill are
+  multi-class (rigStores = WORK, leave). Verify EACH root's consumers per-consumer (prior classifications
+  proved unreliable).
+- **cmd_mail.go** (12 subcommands, mail+session addressing) — surgical, careful, cfg scoping varies.
+
+**Discipline (byte-identity is the bar):** per root — verified per-consumer census (re-grep; DON'T trust
+prior classifications) → route → gofmt·build·vet·`golangci-lint 0`·targeted tests → **revert-canary**
+(guard fails naming the file) → **fable adversarial byte-identity review BEFORE commit** (`model:'fable'`,
+REFUTE; diff vs `git show HEAD:<file>`; for whole-store routes also confirm semantic session-class-correctness)
+→ commit + push `--no-verify`. Trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+Add fully-routed single-class files to `sessionRelocationRoutedFiles`; grow the list at each phase end.
+
+**Guardrails:** `cmd/gc` test binary is huge — scope `go test -run`, isolated `GOCACHE=$(mktemp -d)`, run
+build/vet/tests in the background (cold compile > 2 min). NEVER run the canary concurrently with golangci-lint
+(torn read). `git push` always `--no-verify`; commit `--no-verify` too (stale absolute core.hooksPath breaks
+commit). gascity Dolt LOCAL-ONLY. `#3839` stays DRAFT.
+
+**Phase 6 (still TODO):** the end-to-end `[beads.classes.sessions]` relocation acceptance test — the
+authoritative check the substring guard can't provide.
+
+---

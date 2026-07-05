@@ -414,3 +414,61 @@ in listed files; today it's the sanctioned byte-identity escape hatch.
 `rigStores map[string]beads.Store` cross-class + 3 escapes + ~30 sites). Plus the
 documented EXCLUSIONS (cmd_prime root; session_resolve/session_template_start spine) which
 are relocation-safe via reach-through by their dependents and need no store-free listing.
+
+---
+
+**Session 2026-07-05 (CONT-40) — ACCESS PASS PIVOTED to RELOCATION-ROUTING (owner
+call); 10 CLI roots routed, 8 commits pushed.** Full detail:
+`RELOCATION-ROUTING-{HANDOFF,NEXT-SESSION-PROMPT}.md`. Commits
+`0aa51fafd..3e05a03fe` on `upstream/object-front-doors-cleanup` (#3839 DRAFT).
+
+**THE PIVOT.** The store-free DI guard (`frontDoorStoreFreeFiles`) is compile-time
+hygiene and is ORTHOGONAL to the mission for CLI command roots. The mission is
+relocation-safety: a `[beads.classes.sessions]` swap must capture 100% of session
+access. Grounding finding: the controller/runtime is ALREADY safe (routes via
+`cr.sessionsBeadStore()` → `resolveSessionStore`), but the CLI one-shot roots are
+relocation-BLIND — they do `sessionFrontDoor(openCityStore(...))` where `openCityStore`
+(main.go:1073) returns the GENERIC work store, so after a relocation their session
+reads/writes hit the wrong backend (split-brain). Fix is byte-identical today
+(`resolveClassStore` is pure identity). Owner authorized the pivot.
+
+**THE SEAM (landed, `cmd/gc/cli_session_store.go`):** `cliSessionStore(store,cfg,cityPath)
+= resolveSessionStore(store,cfg,cityPath,nil)` and `cliSessionFrontDoor(...) =
+sessionFrontDoor(cliSessionStore(...))`. Byte-identical today; diverges only under a
+configured relocation. Recorder nil (CLI one-shots have no live event bus). Patterns:
+WHOLE-STORE (all consumers session-class → `sessStore := cliSessionStore(...)`, replace all
+`store`) vs SURGICAL (multi-class → route only session consumers). cfg-less/hot/hook/daemon
+paths load cfg via `loadCityConfigWithoutBuiltinPackRefresh(cityPath, io.Discard)` (NOT
+`loadCityConfig` — pack-refresh side effect; owner-decided for cmd_prime).
+
+**THE GUARD (`frontdoor_di_guard_test.go`):** `TestSessionRelocationRootsRouteThroughSessionClassStore`
+over `sessionRelocationRoutedFiles` — forbids `sessionFrontDoor(store|store.Store|openCityStore`
+and requires `cliSessionStore(`/`cliSessionFrontDoor(` present. Regression canary, NOT a
+completeness proof (can't see `store.Get`/`resolveSessionID*` non-front-door reads). Mixed files
+(controller.go, cmd_start.go) and `cli_session_store.go` are intentionally OFF the list.
+
+**DONE (10 roots, each gofmt·build·vet·golangci-lint 0·tests·revert-canary·FABLE byte-identity
+review [all could-not-refute]):** cmd_session_wake, cmd_session_pin, cmd_skill, cmd_mcp,
+cmd_session_logs, cmd_prime (both hook helpers, no-refresh cfg), cmd_stop (whole-store, all 5
+consumers verified session-class), cmd_start (adoption barrier only — cascade deferred),
+cmd_session_reset (whole-store), controller.go (circuit-reset socket, no-refresh cfg).
+`sessionRelocationRoutedFiles` (8): wake, pin, skill, mcp, session_logs, prime, stop, session_reset.
+
+**COMPLETENESS CENSUS (this session, Explore sweep):** the ORIGINAL census only grepped DIRECT
+`sessionFrontDoor` sites and MISSED roots reaching session state via HELPERS (that's how
+cmd_session_reset + cmd_runtime_drain surfaced). REMAINING blind roots:
+- **Phase 4 cmd_session.go** (BIG, own session): ~9 roots; cmdSessionClose/Kill multi-class
+  (rigStores=WORK, leave). Verify each root's consumers per-consumer (prior classifications
+  proved UNRELIABLE — the plan was wrong about cmd_stop's consumers).
+- **NEW (plan never listed):** cmd_restart.go `doRigRestart` (session-name+runtime pattern like
+  cmd_stop — likely clean whole-store); cmd_mail.go (12 subcommands, mail+session addressing,
+  surgical); cmd_status.go→city_status_snapshot.go (`resolveSessionIDWithConfig`); completion.go
+  `loadSessionsForCompletion`.
+- **DEFERRED (entangled, own efforts):** cmd_handoff.go + cmd_runtime_drain.go (PAIRED — share
+  `sessionRestartableByController`/`clearRestartRequest`; doHandoffWithOutcome mixes mail+session,
+  ~10 test sites); cmd_wait.go (owner-approved defer — multi-class machinery shared with the
+  reconciler); cmd_nudge.go/cmd_sling.go (NUDGES-class front doors); cmd_start.go reconcile cascade.
+- **NON-SESSION (safe):** cmd_prompt, cmd_start_warmup, dispatch_runtime, providers.
+
+**Phase 6 (TODO):** end-to-end `[beads.classes.sessions]` relocation acceptance test — the
+authoritative check the substring guard cannot provide.
