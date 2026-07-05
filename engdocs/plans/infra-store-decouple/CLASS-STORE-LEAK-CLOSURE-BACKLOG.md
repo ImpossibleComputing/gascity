@@ -131,16 +131,21 @@ Enforcement mechanism (already in place, extend per class):
     `internal/worker/factory.go`, `handle_construct.go`, `invocation_telemetry.go`.
   - **(c) `ordered` physical deletion** — blocked on converting start execution
     (consumer #7); demoted, not deleted.
-- **Close work:** convert periphery reads to `session.Info` accessors + `session.Store`
-  writes, file-by-file, adding each to `snapshotInfoOnlyFiles` / `metadataInfoOnlyFiles`
-  as it goes raw-free. Start with read-only status/CLI files (lowest blast radius).
+- **Close work:** **see `SESSION-PERIPHERY-CLOSURE-PLAN.md`** (+ `-NEXT-SESSION-PROMPT.md`) —
+  the full classified inventory + phase ordering. Scope correction: this is NOT a few
+  incremental files — it's ~30 cmd/gc files (~120 sites) + ~8 internal/api handlers +
+  ~2 internal/worker + ~6 internal/session own-runtime files, and almost every site needs an
+  `Info`-form sibling built for the raw-bead helper its bead flows into (same front-door
+  pattern as the reconciler). Multiple focused sessions; the two big decision files
+  (`build_desired_state.go`, `city_runtime.go`) each warrant their own.
 - **Acceptance:** every non-raw-by-design session file guard-listed; the raw-by-design
-  set is the documented census. **Size: L (partly done).**
-- **Progress:** `city_status_snapshot.go` closed — its two raw session reads
-  (`bead.Metadata["state"]`, `snapshot.Open()`) now go through
-  `session.InfoFromPersistedBead(...).MetadataState` / `OpenInfos()` +
-  `sessionMetadataStateInfo` / `IsSessionBeadOrRepairableInfo` (proven mirrors);
-  added to both `snapshotInfoOnlyFiles` and `metadataInfoOnlyFiles`.
+  set is the documented census; `[beads.classes.sessions]` relocation captures all session
+  access. **Size: L (reconciler decision path + `city_status_snapshot.go` done; periphery
+  scoped in the plan doc).**
+- **Progress:** reconciler decision path sealed (Steps 1–6e). `city_status_snapshot.go`
+  closed — its two raw session reads now go through `session.Info`
+  (`InfoFromPersistedBead(...).MetadataState` / `OpenInfos()` + proven-mirror helpers);
+  added to both guard lists.
 
 ### 5. Convoy — *no typed interface* — **weak seal**
 - **Interface:** functions over raw `beads.Store`; `ConvoyFields` unexported;
