@@ -236,6 +236,20 @@ func TestMetadataInfoOnlyFilesStayOnInfoSnapshot(t *testing.T) {
 // SESSION-PERIPHERY-CLOSURE-PLAN.md). These files must never regress to
 // constructing the session front door straight from the generic work store.
 //
+// providers.go is a shared provider-construction helper rather than a one-shot
+// command root, but it is listed because its loadProviderSessionSnapshot session
+// read — the gc:session ListByLabel, off a store it opens itself independent of
+// the caller — is routed. It carries no `sessionFrontDoor(store...)` construction,
+// so there is no substring false-positive risk and the positive `cliSessionStore(`
+// tripwire protects that route the same way it protects the command roots.
+// NOTE: providers.go is only PARTIALLY routed. openCityMailProvider builds a
+// beadmail provider that also does session reads AND writes on the same store
+// (session.ListAllSessionBeads / ResolveSessionID / RepairEmptyType), so it is a
+// mixed mail+session path deferred to the two-store mail-provider follow-up
+// (resolveMailMessagesStore, class_store.go) — not a pure mail-class path. The
+// file's full relocation-safety still depends on that follow-up and the
+// end-to-end acceptance test; the guard entry protects only the snapshot route.
+//
 // Two files are intentionally ABSENT even though they route: controller.go (its
 // session-circuit-reset socket handler routes, but the file also holds the
 // already-safe param-threaded runtime `sessionFrontDoor(store.Store)` at the
@@ -255,6 +269,7 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_session_reset.go",
 	"cmd_restart.go",
 	"completion.go",
+	"providers.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a

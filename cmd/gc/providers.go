@@ -218,7 +218,14 @@ func loadProviderSessionSnapshot(ctx sessionProviderContext) *sessionBeadSnapsho
 	if err != nil {
 		return nil
 	}
-	all, err := store.ListByLabel(sessionBeadLabel, 0)
+	// This snapshot reads only session-class beads (the gc:session label) to
+	// drive transport/ACP routing decisions, so route through the session
+	// coordination-class store for relocation-safety. openSessionProviderStore
+	// opens its own generic store (independent of the caller), so routing here
+	// closes the gap on both the CLI and controller provider-construction paths.
+	// Identity to the opened store today (resolveClassStore is pure identity).
+	sessStore := cliSessionStore(store, ctx.cfg, ctx.cityPath)
+	all, err := sessStore.ListByLabel(sessionBeadLabel, 0)
 	if err != nil {
 		return nil
 	}
@@ -811,6 +818,15 @@ func newMailProviderNamed(v string, store beads.Store, cached bool) mail.Provide
 
 // openCityMailProvider opens the city's bead store and wraps it in a
 // mail.Provider. Returns (nil, exitCode) on failure.
+//
+// Relocation note: the returned beadmail provider uses this one store for BOTH
+// messaging-class ops AND session-class reads/writes (session.ListAllSessionBeads
+// / ResolveSessionID / RepairEmptyType, for mail addressing/identity resolution).
+// It is intentionally NOT routed through cliSessionStore here: splitting the two
+// classes is the two-store mail-provider follow-up parked at resolveMailMessagesStore
+// (class_store.go). Until then a [beads.classes.sessions] relocation leaves these
+// session reads/writes on the generic store — a known deferred gap, not a bug in
+// the loadProviderSessionSnapshot route above.
 func openCityMailProvider(stderr io.Writer, cmdName string) (mail.Provider, int) {
 	// For exec: and test doubles, no store needed.
 	v := mailProviderName()
