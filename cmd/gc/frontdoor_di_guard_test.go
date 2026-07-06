@@ -253,6 +253,7 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_prime.go",
 	"cmd_stop.go",
 	"cmd_session_reset.go",
+	"cmd_restart.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a
