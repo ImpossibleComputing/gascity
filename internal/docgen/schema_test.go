@@ -404,8 +404,118 @@ func TestAddGoCommentsFilteredSkipsHiddenDirs(t *testing.T) {
 	defer func() { _ = os.Chdir(orig) }()
 
 	r := &jsonschema.Reflector{FieldNameTag: "toml"}
-	if err := addGoCommentsFiltered(r, "example.com/test", "."); err != nil {
+	if err := addGoCommentsFiltered(r, "example.com/test"); err != nil {
 		t.Errorf("addGoCommentsFiltered failed with unreadable hidden dir: %v", err)
+	}
+}
+
+// TestAddGoCommentsFilteredSkipsNestedGitCheckouts verifies that
+// addGoCommentsFiltered does not enter a visible top-level directory that is
+// itself a separate git checkout (e.g. a "gc worktree hq" per-bead worktree,
+// which is placed directly under the module root rather than under a
+// dot-prefixed bucket like .gc/). Each such checkout holds a full copy of the
+// module source tree, so without this skip a schema-gen walk re-scans every
+// live worktree's entire tree — observed in practice turning a sub-second
+// scan into a 10-minute test timeout once enough HQ worktrees had
+// accumulated alongside the module root.
+func TestAddGoCommentsFilteredSkipsNestedGitCheckouts(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Visible source dir with a Go struct — should be processed normally.
+	if err := os.MkdirAll(filepath.Join(tmp, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goSrc := "package pkg\n\n// Widget is a widget.\ntype Widget struct{}\n"
+	if err := os.WriteFile(filepath.Join(tmp, "pkg", "widget.go"), []byte(goSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Visible (non-hidden) nested git checkout, as "gc worktree hq" creates.
+	// An unreadable inner dir means entering it surfaces "permission denied".
+	worktree := filepath.Join(tmp, "ga-abc123-some-bead-slug")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitFile := "gitdir: /elsewhere/.git/worktrees/ga-abc123\n"
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte(gitFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	poisonDir := filepath.Join(worktree, "pkg")
+	if err := os.MkdirAll(poisonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(poisonDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(poisonDir, 0o755) })
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+
+	r := &jsonschema.Reflector{FieldNameTag: "toml"}
+	if err := addGoCommentsFiltered(r, "example.com/test"); err != nil {
+		t.Errorf("addGoCommentsFiltered entered a nested git checkout: %v", err)
+	}
+}
+
+// TestAddGoCommentsFilteredSkipsWorktreesBucketDir verifies that
+// addGoCommentsFiltered skips a top-level "worktrees" directory outright,
+// without recursing into it — matching the same name-based convention used
+// by internal/testenv/lint_test.go's skipRepoLintDir and
+// test/docsync/docsync_test.go's docTreeIgnored. The "worktrees" directory
+// itself has no .git of its own (only its children, one level down, do), so
+// isNestedWorktreeRoot alone would not catch it; the walk must never
+// descend into it in the first place.
+func TestAddGoCommentsFilteredSkipsWorktreesBucketDir(t *testing.T) {
+	tmp := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(tmp, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goSrc := "package pkg\n\n// Widget is a widget.\ntype Widget struct{}\n"
+	if err := os.WriteFile(filepath.Join(tmp, "pkg", "widget.go"), []byte(goSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bucket dir with no .git of its own, holding nested checkouts one level
+	// down — the pre-existing convention alongside "gc worktree hq"'s
+	// bare-slug top-level checkouts.
+	bucket := filepath.Join(tmp, "worktrees")
+	nested := filepath.Join(bucket, "ga-def456-some-bead-slug")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitFile := "gitdir: /elsewhere/.git/worktrees/ga-def456\n"
+	if err := os.WriteFile(filepath.Join(nested, ".git"), []byte(gitFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	poisonDir := filepath.Join(nested, "pkg")
+	if err := os.MkdirAll(poisonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(poisonDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(poisonDir, 0o755) })
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+
+	r := &jsonschema.Reflector{FieldNameTag: "toml"}
+	if err := addGoCommentsFiltered(r, "example.com/test"); err != nil {
+		t.Errorf("addGoCommentsFiltered entered the worktrees bucket dir: %v", err)
 	}
 }
 

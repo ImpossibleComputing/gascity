@@ -32,28 +32,56 @@ func ModuleRoot() (string, error) {
 }
 
 // addGoCommentsFiltered calls r.AddGoComments for each visible (non-hidden)
-// top-level directory under root, skipping any directory whose name begins
-// with ".". CWD must already be set to root before calling.
+// top-level directory under the current directory, skipping any directory
+// whose name begins with "." and any directory that is itself a separate
+// git checkout. CWD must already be set to the module root before calling.
 //
 // This avoids the TOCTOU failure where .gc/*/pr-checkout/ dirs are deleted by
 // mpr cleanup while filepath.Walk is in progress: r.AddGoComments("module",
 // ".") walks the entire tree including .gc/; if a directory disappears
 // mid-scan the walk surfaces an I/O error that propagates up and fails schema
 // generation. By enumerating only visible top-level dirs, we never enter .gc/.
-func addGoCommentsFiltered(r *jsonschema.Reflector, module, root string) error {
-	entries, err := os.ReadDir(root)
+//
+// It also skips nested git checkouts: the "worktrees" bucket directory (see
+// internal/testenv/lint_test.go's skipRepoLintDir and
+// test/docsync/docsync_test.go's docTreeIgnored for the same convention), and
+// any bare-bead-slug-named worktree "gc worktree hq" places directly under
+// the module root (isNestedWorktreeRoot, mirroring
+// internal/testenv/lint_test.go and test/docsync/docsync_test.go). Each such
+// worktree holds a full copy of the module source tree; walking into them
+// multiplies the doc-comment scan by however many currently exist alongside
+// the module root.
+func addGoCommentsFiltered(r *jsonschema.Reflector, module string) error {
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", root, err)
+		return fmt.Errorf("reading current directory: %w", err)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		if err := r.AddGoComments(module, entry.Name()); err != nil {
-			return fmt.Errorf("extracting Go comments from %s: %w", entry.Name(), err)
+		name := entry.Name()
+		if name == "worktrees" || strings.HasPrefix(name, "worktree-") {
+			continue
+		}
+		if isNestedWorktreeRoot(name) {
+			continue
+		}
+		if err := r.AddGoComments(module, name); err != nil {
+			return fmt.Errorf("extracting Go comments from %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+// isNestedWorktreeRoot reports whether path is the root of a linked git
+// worktree checked out inside this tree. Linked worktrees have a .git FILE
+// (a "gitdir: ..." pointer) rather than a .git directory, so this catches
+// worktrees regardless of naming convention. Mirrors
+// internal/testenv/lint_test.go and test/docsync/docsync_test.go.
+func isNestedWorktreeRoot(path string) bool {
+	info, err := os.Lstat(filepath.Join(path, ".git"))
+	return err == nil && !info.IsDir()
 }
 
 // newReflector creates a jsonschema.Reflector configured for TOML field
@@ -82,7 +110,7 @@ func newReflector() (*jsonschema.Reflector, error) {
 	r := &jsonschema.Reflector{
 		FieldNameTag: "toml",
 	}
-	if err := addGoCommentsFiltered(r, "github.com/gastownhall/gascity", "."); err != nil {
+	if err := addGoCommentsFiltered(r, "github.com/gastownhall/gascity"); err != nil {
 		return nil, fmt.Errorf("extracting Go comments: %w", err)
 	}
 	return r, nil
