@@ -36,14 +36,27 @@ func parseHelpFlagNames(help string) map[string]bool {
 	return names
 }
 
-// TestBdFlagManifestCurrent guards against the bd CLI's flags drifting out
-// from under this package's hardcoded manifest. It shells the real
+// TestBdFlagManifestCurrent guards against the bd CLI growing a flag that
+// this package's hardcoded manifest doesn't know about. It shells the real
 // installed bd binary's --help output per known subcommand and fails
 // loudly — fail-closed, the same posture as bdMutationWriteIDs in
-// cmd/gc/cmd_bd.go — if the manifest and the live CLI disagree on flag
-// names in either direction. If bd is not in PATH, the test is skipped
-// with a clear message rather than failing, since manifest currency can't
-// be checked without a bd binary to check it against.
+// cmd/gc/cmd_bd.go — if the live CLI declares a flag the manifest is
+// MISSING.
+//
+// It deliberately does not fail on the reverse (the manifest listing flags
+// the installed bd lacks). The manifest is intentionally the newest-known
+// superset of bd's flags — see its dated-provenance comment — and its two
+// consumers, the `gc lint` bd-flag check (scan.go) and the cmd_bd
+// write-mutation ID guard, only misbehave when a real flag is missing from
+// the manifest, never when the manifest is ahead of the installed bd. The
+// bd binary is version-pinned independently of the manifest's provenance:
+// CI installs the stable bd release via BD_VERSION while the manifest
+// tracks the newer bd the fleet runs, so a manifest ahead of the installed
+// bd is expected and benign. That skew is reported, not failed.
+//
+// If bd is not in PATH, the test is skipped with a clear message rather
+// than failing, since manifest currency can't be checked without a bd
+// binary to check it against.
 func TestBdFlagManifestCurrent(t *testing.T) {
 	bdPath, err := exec.LookPath("bd")
 	if err != nil {
@@ -61,7 +74,7 @@ func TestBdFlagManifestCurrent(t *testing.T) {
 
 			manifest := mergeFlagSets(ValueFlags(sub), BoolFlags(sub))
 
-			var missingFromManifest, staleInManifest []string
+			var missingFromManifest, aheadOfInstalled []string
 			for f := range live {
 				if !manifest[f] {
 					missingFromManifest = append(missingFromManifest, f)
@@ -69,15 +82,29 @@ func TestBdFlagManifestCurrent(t *testing.T) {
 			}
 			for f := range manifest {
 				if !live[f] {
-					staleInManifest = append(staleInManifest, f)
+					aheadOfInstalled = append(aheadOfInstalled, f)
 				}
 			}
 			sort.Strings(missingFromManifest)
-			sort.Strings(staleInManifest)
+			sort.Strings(aheadOfInstalled)
 
-			if len(missingFromManifest) > 0 || len(staleInManifest) > 0 {
-				t.Errorf("bd %s flag manifest has drifted from `bd %s --help`:\n  new flags not in manifest: %v\n  manifest flags no longer in --help: %v\nUpdate internal/bdflags/bdflags.go with a fresh dated-provenance comment.",
-					sub, sub, missingFromManifest, staleInManifest)
+			// Benign direction: the manifest lists flags this bd binary does
+			// not have. Expected whenever the installed bd is older than the
+			// manifest's provenance version (e.g. CI's pinned stable bd). A
+			// superset allowlist is safe for both consumers, so report it
+			// without failing.
+			if len(aheadOfInstalled) > 0 {
+				t.Logf("bd %s: manifest lists %d flag(s) absent from this bd's --help: %v (manifest is ahead of the installed bd; benign for a superset allowlist)",
+					sub, len(aheadOfInstalled), aheadOfInstalled)
+			}
+
+			// Dangerous direction: the live bd declares a flag the manifest
+			// does not know. gc lint would then false-positive on valid
+			// templates and the write-mutation ID guard could misparse the
+			// bead ID. Fail closed and require the manifest be regenerated.
+			if len(missingFromManifest) > 0 {
+				t.Errorf("bd %s flag manifest is missing flag(s) present in `bd %s --help`: %v\nThe manifest must be a superset of the installed bd's real flags. Update internal/bdflags/bdflags.go with a fresh dated-provenance comment.",
+					sub, sub, missingFromManifest)
 			}
 		})
 	}
