@@ -16,10 +16,6 @@ import (
 	"github.com/gastownhall/gascity/internal/execenv"
 )
 
-// labelOrderTracking is applied to order bookkeeping beads by the dispatcher.
-// Event orders must not self-fire on lifecycle events emitted by these beads.
-const labelOrderTracking = "order-tracking"
-
 // TriggerResult holds the outcome of a trigger check.
 type TriggerResult struct {
 	// Due is true if the trigger condition is satisfied and the order should run.
