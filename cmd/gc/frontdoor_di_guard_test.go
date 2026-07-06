@@ -242,13 +242,16 @@ func TestMetadataInfoOnlyFilesStayOnInfoSnapshot(t *testing.T) {
 // the caller — is routed. It carries no `sessionFrontDoor(store...)` construction,
 // so there is no substring false-positive risk and the positive `cliSessionStore(`
 // tripwire protects that route the same way it protects the command roots.
-// NOTE: providers.go is only PARTIALLY routed. openCityMailProvider builds a
-// beadmail provider that also does session reads AND writes on the same store
-// (session.ListAllSessionBeads / ResolveSessionID / RepairEmptyType), so it is a
-// mixed mail+session path deferred to the two-store mail-provider follow-up
-// (resolveMailMessagesStore, class_store.go) — not a pure mail-class path. The
-// file's full relocation-safety still depends on that follow-up and the
-// end-to-end acceptance test; the guard entry protects only the snapshot route.
+// providers.go carries a SECOND routed session path: openCityMailProvider builds
+// the CLI mail provider as a two-store beadmail (message persistence on the
+// messaging-class store, mail's session reads/writes — session.ListAllSessionBeads
+// / ResolveSessionID / RepairEmptyType — on the session-class store via
+// cliSessionStore), so the mail addressing/identity session access a
+// [beads.classes.sessions] relocation must capture is routed here too (the former
+// two-store mail-provider follow-up, now closed for the session class). Both the
+// snapshot route and the mail route carry the positive cliSessionStore( tripwire
+// and no sessionFrontDoor(store...) construction; the end-to-end acceptance test
+// remains the authoritative completeness check.
 //
 // The gc status trio (cmd_status.go, cmd_citystatus.go, city_status_snapshot.go)
 // is listed even though none of them constructs a session front door: their

@@ -791,6 +791,16 @@ func newMailProvider(store beads.Store) mail.Provider {
 	return newMailProviderNamed(mailProviderName(), store, true)
 }
 
+// newMailProviderWithSessionStore builds the configured mail provider with
+// distinct message-persistence (messaging class) and session-addressing (session
+// class) stores. Byte-identical to newMailProvider(store) at the single-store bd
+// backend where msgStore == sessStore; once a class relocates, mail's message
+// beads and its session reads follow their respective backends instead of
+// splitting off one generic store.
+func newMailProviderWithSessionStore(msgStore, sessStore beads.Store) mail.Provider {
+	return newMailProviderNamedWithSessionStore(mailProviderName(), msgStore, sessStore, true)
+}
+
 func newCommandMailProvider(store beads.Store) mail.Provider {
 	return newMailProviderNamed(mailProviderName(), store, true)
 }
@@ -800,6 +810,10 @@ func newCommandMailProviderNamed(v string, store beads.Store) mail.Provider {
 }
 
 func newMailProviderNamed(v string, store beads.Store, cached bool) mail.Provider {
+	return newMailProviderNamedWithSessionStore(v, store, store, cached)
+}
+
+func newMailProviderNamedWithSessionStore(v string, msgStore, sessStore beads.Store, cached bool) mail.Provider {
 	if strings.HasPrefix(v, "exec:") {
 		return mailexec.NewProvider(strings.TrimPrefix(v, "exec:"))
 	}
@@ -810,23 +824,23 @@ func newMailProviderNamed(v string, store beads.Store, cached bool) mail.Provide
 		return mail.NewFailFake()
 	default:
 		if cached {
-			return beadmail.NewCached(store)
+			return beadmail.NewCachedWithStores(msgStore, sessStore)
 		}
-		return beadmail.New(store)
+		return beadmail.NewWithStores(msgStore, sessStore)
 	}
 }
 
 // openCityMailProvider opens the city's bead store and wraps it in a
 // mail.Provider. Returns (nil, exitCode) on failure.
 //
-// Relocation note: the returned beadmail provider uses this one store for BOTH
-// messaging-class ops AND session-class reads/writes (session.ListAllSessionBeads
-// / ResolveSessionID / RepairEmptyType, for mail addressing/identity resolution).
-// It is intentionally NOT routed through cliSessionStore here: splitting the two
-// classes is the two-store mail-provider follow-up parked at resolveMailMessagesStore
-// (class_store.go). Until then a [beads.classes.sessions] relocation leaves these
-// session reads/writes on the generic store — a known deferred gap, not a bug in
-// the loadProviderSessionSnapshot route above.
+// Relocation: the beadmail provider does messaging-class message persistence AND
+// session-class reads/writes for mail addressing/identity (session.ListAllSessionBeads
+// / ResolveSessionID / RepairEmptyType). Both are routed through their
+// coordination-class seams — messages via resolveMailMessagesStore, session reads
+// via cliSessionStore — so a [beads.classes.messaging] or [beads.classes.sessions]
+// relocation reaches CLI mail the same way it reaches the running controller
+// (newCityMailProvider, class_store.go). Byte-identical until a class backend is
+// configured (both resolvers are identity at the single-store bd backend).
 func openCityMailProvider(stderr io.Writer, cmdName string) (mail.Provider, int) {
 	// For exec: and test doubles, no store needed.
 	v := mailProviderName()
@@ -834,11 +848,17 @@ func openCityMailProvider(stderr io.Writer, cmdName string) (mail.Provider, int)
 		return newCommandMailProvider(nil), 0
 	}
 
-	store, code := openCityStore(stderr, cmdName)
+	store, cityPath, code := openCityStoreWithPath(stderr, cmdName)
 	if store == nil {
 		return nil, code
 	}
-	return newCommandMailProvider(store), 0
+	// The no-refresh cfg loader matches the other hot CLI roots (cmd_prime,
+	// completion): loadCityConfig's builtin-pack refresh is inappropriate here. A
+	// failed load yields nil cfg, which the class resolvers treat as identity.
+	cfg, _ := loadCityConfigWithoutBuiltinPackRefresh(cityPath, io.Discard)
+	msgStore := resolveMailMessagesStore(store, cfg, cityPath, nil)
+	sessStore := cliSessionStore(store, cfg, cityPath)
+	return newMailProviderWithSessionStore(msgStore, sessStore), 0
 }
 
 // eventsProviderName returns the events provider name.
