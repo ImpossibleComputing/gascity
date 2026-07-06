@@ -17,6 +17,12 @@ type MemStore struct {
 	beads []Bead
 	deps  []Dep
 	seq   int
+	// honorExplicitID makes Create keep a caller-supplied non-empty, non-colliding
+	// bead ID instead of overwriting it with the sequence id. Off by default so
+	// NewMemStore is byte-identical to before; opt in with NewMemStoreHonoringIDs
+	// for tests that need a store which mirrors a real bd store's `--id` behavior
+	// (e.g. the infra store's reserved-prefix minting).
+	honorExplicitID bool
 }
 
 var _ ConditionalAssignmentReleaser = (*MemStore)(nil)
@@ -24,6 +30,15 @@ var _ ConditionalAssignmentReleaser = (*MemStore)(nil)
 // NewMemStore returns a new empty MemStore.
 func NewMemStore() *MemStore {
 	return &MemStore{}
+}
+
+// NewMemStoreHonoringIDs returns an empty MemStore that honors a caller-supplied
+// explicit bead ID on Create (matching BdStore's `bd create --id` semantics),
+// falling back to the sequence id only when no id is set or the supplied id
+// already exists. Use it where a test needs a store that round-trips stable ids
+// like a real bd/Dolt store does — the default NewMemStore clobbers every id.
+func NewMemStoreHonoringIDs() *MemStore {
+	return &MemStore{honorExplicitID: true}
 }
 
 // NewMemStoreFrom returns a MemStore seeded with existing beads, deps, and
@@ -78,7 +93,12 @@ func (m *MemStore) Create(b Bead) (Bead, error) {
 	defer m.mu.Unlock()
 
 	m.seq++
-	b.ID = fmt.Sprintf("gc-%d", m.seq)
+	// Honor a caller-supplied explicit ID only when opted in (see
+	// NewMemStoreHonoringIDs) and it does not collide; otherwise mint the
+	// sequence id. Default MemStore always mints, staying byte-identical.
+	if explicit := strings.TrimSpace(b.ID); !m.honorExplicitID || explicit == "" || m.hasBeadID(explicit) {
+		b.ID = fmt.Sprintf("gc-%d", m.seq)
+	}
 	b.Status = "open"
 	if b.Type == "" {
 		b.Type = "task"
@@ -105,6 +125,17 @@ func (m *MemStore) Create(b Bead) (Bead, error) {
 		})
 	}
 	return cloneBead(stored), nil
+}
+
+// hasBeadID reports whether a bead with the given id already exists. Callers must
+// hold m.mu.
+func (m *MemStore) hasBeadID(id string) bool {
+	for i := range m.beads {
+		if m.beads[i].ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Update modifies fields of an existing bead. Only non-nil fields in opts

@@ -69,7 +69,14 @@ func newSplitCity(t *testing.T) *splitCity {
 	cfg := &config.City{}
 	work := wrapStoreWithBeadPolicies(beads.NewMemStore(), cfg)
 	rig := wrapStoreWithBeadPolicies(beads.NewMemStore(), cfg)
-	infra := wrapStoreWithBeadPolicies(beads.NewMemStore(), cfg)
+	// The infra store is wrapped the way production wraps it
+	// (wrapInfraStoreWithBeadPolicies), so it mints reserved-prefix ids on every
+	// explicit-ID-less create — matching openCityInfraStoreResultAt. Its backing
+	// store honors explicit ids (NewMemStoreHonoringIDs) because a real bd store
+	// honors the explicit --id the mint pre-fills, whereas the default MemStore
+	// clobbers every id to gc-N; the id-honoring backing makes the fast tier
+	// observe the minted reserved prefix exactly as a real Dolt store would.
+	infra := wrapInfraStoreWithBeadPolicies(beads.NewMemStoreHonoringIDs(), cfg)
 	const rigName = "rig-one"
 	cityPath := t.TempDir()
 	cs := &controllerState{
@@ -503,27 +510,42 @@ func sideName(infra bool) string {
 	return "domain store"
 }
 
-// TestInfraStoreIDPrefixBoundary is the ID-prefix half of the invariant, gated
-// on E2.4. Once E2.4 mints per-class reserved-prefix IDs (gcs-/gcm-/gcn-/gco-/
-// gcg-) in the infra store, every infra-store bead ID must carry a reserved
-// class prefix and no domain-store bead may. E2.4 has NOT landed, so MemStore
-// still mints plain bd-N IDs; asserting the prefix now would be a false-red.
-// The test documents the intended assertion and skips until E2.4 wires
-// wrapInfraStoreWithBeadPolicies + mintReservedClassIDs.
+// TestInfraStoreIDPrefixBoundary is the ID-prefix half of the invariant, landed
+// with E2.4. The infra store is opened through wrapInfraStoreWithBeadPolicies,
+// which mints reserved-prefix IDs (config.MintInfraBeadID → the "gcg" infra scope
+// prefix) on every explicit-ID-less create, and MemStore now honors a pre-set
+// ID, so the fast harness observes the mint. The invariant: every infra-store
+// bead id's prefix segment satisfies config.IsReservedClassPrefix, and no
+// domain-store bead id does — the ID-space boundary a stranded by-id read relies
+// on to resolve into the right store post-split.
 func TestInfraStoreIDPrefixBoundary(t *testing.T) {
-	t.Skip("E2.4 worklist: reserved-prefix ID minting (wrapInfraStoreWithBeadPolicies + mintReservedClassIDs) " +
-		"is not implemented; infra beads still mint plain bd-N IDs. When E2.4 lands, assert every infra-store " +
-		"bead id's prefix segment satisfies config.IsReservedClassPrefix and no domain-store bead id does.")
-
 	sc := newSplitCity(t)
 	sc.runRoutedCreators(t)
-	list, err := sc.infraStore.List(beads.ListQuery{IncludeClosed: true, TierMode: beads.TierBoth, AllowScan: true})
+
+	infra, err := sc.infraStore.List(beads.ListQuery{IncludeClosed: true, TierMode: beads.TierBoth, AllowScan: true})
 	if err != nil {
 		t.Fatalf("infra List: %v", err)
 	}
-	for _, b := range list {
+	if len(infra) == 0 {
+		t.Fatal("infra store holds no beads after the representative run; the mint boundary is vacuous")
+	}
+	for _, b := range infra {
 		if !config.IsReservedClassPrefix(idPrefixSegment(b.ID)) {
-			t.Errorf("infra-store bead %q lacks a reserved class prefix", b.ID)
+			t.Errorf("infra-store bead %q (type=%q labels=%v) lacks a reserved class prefix", b.ID, b.Type, b.Labels)
+		}
+	}
+
+	// The other half: no domain-store bead may carry a reserved class prefix, so
+	// the by-id read arms never misroute a work bead into the infra store.
+	for name, store := range sc.domainStores() {
+		domain, err := store.List(beads.ListQuery{IncludeClosed: true, TierMode: beads.TierBoth, AllowScan: true})
+		if err != nil {
+			t.Fatalf("domain %q List: %v", name, err)
+		}
+		for _, b := range domain {
+			if config.IsReservedClassPrefix(idPrefixSegment(b.ID)) {
+				t.Errorf("domain-store %q bead %q (type=%q) carries a reserved class prefix", name, b.ID, b.Type)
+			}
 		}
 	}
 }

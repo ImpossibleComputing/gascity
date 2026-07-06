@@ -1850,8 +1850,20 @@ func (cr *CityRuntime) reloadConfigTraced(
 	if err := config.ValidateRigs(nextCfg.Rigs, config.EffectiveHQPrefix(nextCfg)); err != nil {
 		appendWarning(fmt.Sprintf("config reload: %v", err))
 	}
-	for _, w := range config.ReservedPrefixWarnings(nextCfg.Rigs, config.EffectiveHQPrefix(nextCfg)) {
-		appendWarning(fmt.Sprintf("config reload: %s", w))
+	if reserved := config.ReservedPrefixWarnings(nextCfg.Rigs, config.EffectiveHQPrefix(nextCfg)); len(reserved) > 0 {
+		// On a split city the infra store actively mints these prefixes, so a
+		// work-store prefix that shadows one is a hard ambiguity rather than a
+		// forward-looking advisory. A live reload cannot abort the running
+		// controller, so surface it as an error-level reload warning (gc start
+		// blocks the same collision outright).
+		split := cityHasInfraStore(cityRoot)
+		for _, w := range reserved {
+			if split {
+				appendWarning(fmt.Sprintf("config reload: ERROR: %s (split city — rename before the collision misroutes infra beads)", w))
+			} else {
+				appendWarning(fmt.Sprintf("config reload: %s", w))
+			}
+		}
 	}
 	resolveRigPaths(cityRoot, nextCfg.Rigs)
 	var lifecycleErr error

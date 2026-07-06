@@ -1436,6 +1436,21 @@ func doInit(fs fsys.FS, cityPath string, wiz wizardConfig, nameOverride string, 
 			return 1
 		}
 	}
+	// Provision the domain/infra store split for a NEW city when opted in
+	// (GC_INFRA_STORE_SPLIT). This seeds the .gc/infra scope's canonical .beads
+	// config + metadata (its own Dolt database, issue_prefix = the infra scope
+	// prefix), mirroring the hosted-Dolt canonical-config block above: gc init
+	// only writes config; the live `bd init` of the infra database happens at
+	// gc start. The presence of the seeded scope IS the activation boundary
+	// (cityHasInfraStore), so an EXISTING city — which never has this scope —
+	// stays single-store and byte-identical. Gated OFF by default so a plain
+	// gc init is unchanged.
+	if initShouldSeedInfraStore() {
+		if err := seedInitInfraScope(cityPath); err != nil {
+			fmt.Fprintf(stderr, "gc init: seeding infra bead store scope: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
 
 	switch {
 	case wiz.interactive:
@@ -1544,6 +1559,28 @@ func bootstrapScopedFileProviderCityFS(fs fsys.FS, cityPath string) error {
 		return nil
 	}
 	return fs.WriteFile(beadsPath, []byte("{\"seq\":0,\"beads\":[]}\n"), 0o644)
+}
+
+// seedInitInfraScope seeds a NEW city's INFRA store scope at gc init time: it
+// writes the canonical .beads/config.yaml + metadata.json for the .gc/infra scope
+// (its own Dolt database named after the infra scope prefix), reusing the same
+// deferred-seed mechanism gc init uses for the city/rig scopes when Dolt is not
+// yet running. Writing config.yaml is what makes cityHasInfraStore true, so the
+// split activates on the next gc start (which bd-inits the database). The infra
+// store is a Dolt-backed coordination store; on a file-provider city there is no
+// second Dolt store to seed, so this is a no-op there and the city stays
+// single-store.
+func seedInitInfraScope(cityPath string) error {
+	if !cityUsesBdStoreContract(cityPath) {
+		return nil
+	}
+	if err := os.MkdirAll(infraScopeRoot(cityPath), 0o755); err != nil {
+		return fmt.Errorf("creating infra scope dir: %w", err)
+	}
+	if err := seedDeferredManagedBeadsErr(cityPath, infraScopeRoot(cityPath), config.InfraScopePrefix, ""); err != nil {
+		return fmt.Errorf("seeding infra scope canonical config: %w", err)
+	}
+	return nil
 }
 
 // writeInitAgentPrompts creates the agents/ directory and writes only the

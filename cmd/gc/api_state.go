@@ -535,6 +535,13 @@ func (cs *controllerState) autocloseStoreRefLocked(beadID string) string {
 			return workflowStoreRefForDir(rigPath, cityPath, cityName, cs.cfg)
 		}
 	}
+	// A reserved-prefix (infra, gcg-) bead deliberately gets no store-ref here: the
+	// molecule/wisp graph walk resolves through GraphBeadStore() (the infra store)
+	// in runBeadCloseAutoclose, and infra workflow roots carry the SourceStoreRef
+	// of their originating WORK source bead (a rig/city ref), not a synthetic
+	// infra ref — so an empty ref (bead-id-only match) is correct and a synthetic
+	// "city-infra" ref would mismatch every stamped root. Byte-identical to the
+	// pre-split fall-through for these ids.
 	return ""
 }
 
@@ -612,6 +619,14 @@ func (cs *controllerState) beadEventConfiguredStoreLocked(id string) (beads.Stor
 			matchedLen = len(prefix)
 			matchedStore = store
 		}
+	}
+	// A reserved coordination-class id-prefix (gcg/gcs/gcm/gco/gcn) is owned by
+	// the city infra store on a split city — the infra store mints those prefixes,
+	// so a bead.* event for such an id routes straight to the infra cache instead
+	// of the all-stores fallback. On a single-store city cityInfraStore is nil, so
+	// this never matches and resolution is byte-identical to before.
+	if cs.cityInfraStore != nil {
+		match(config.InfraScopePrefix, cs.cityInfraStore)
 	}
 	match(config.EffectiveHQPrefix(cs.cfg), cs.cityBeadStore)
 	for _, rig := range cs.cfg.Rigs {
@@ -1309,10 +1324,10 @@ func (cs *controllerState) SessionsBeadStore() beads.SessionStore {
 	return beads.SessionStore{Store: resolveSessionStore(cs.cityBeadStore, cs.cityInfraStore, cs.cfg, cs.cityPath, cs.eventProv)}
 }
 
-// GraphBeadStore returns the store backing graph-class beads. At the default backend
-// resolveGraphStore returns cityBeadStore, so this is byte-identical to CityBeadStore;
-// when [beads.classes.graph] is relocated it returns the dedicated graph store at the
-// legacy .gc/beads.sqlite location (or the gcg Postgres schema). cs.eventProv is
+// GraphBeadStore returns the store backing graph-class beads. On a single-store
+// city resolveGraphStore returns cityBeadStore, so this is byte-identical to
+// CityBeadStore; on a split city it returns the city infra store, which owns the
+// graph coordination class (and mints the gcg- reserved prefix). cs.eventProv is
 // passed for signature parity with the other accessors but is ignored by
 // resolveGraphStore: the graph store stays event-silent, matching the prior Router
 // graph leg. The result is wrapped in the strongly-typed beads.GraphStore so the

@@ -574,6 +574,15 @@ func slingSourceStoreRootForCandidate(cfg *config.City, cityPath, beadID string)
 	if cfg == nil || !isBeadIDCandidate(beadID) {
 		return "", "", false
 	}
+	// A reserved coordination-class id-prefix (the infra scope's "gcg") resolves
+	// to the infra scope root on a split city, so `gc sling <gcg-...>` opens the
+	// store that actually holds the infra/graph bead. Gated on cityHasInfraStore
+	// so a single-store city keeps the historical HQ/rig-only resolution.
+	if cityHasInfraStore(cityPath) {
+		if bp := sling.BeadPrefix(beadID); config.IsReservedClassPrefix(bp) {
+			return resolveStoreScopeRoot(cityPath, infraScopeRoot(cityPath)), bp, true
+		}
+	}
 	bp := sling.BeadPrefixForCity(cfg, beadID)
 	if bp == "" {
 		return "", "", false

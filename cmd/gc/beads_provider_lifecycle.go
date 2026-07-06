@@ -216,6 +216,18 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 	if err := initAndHookDir(cityPath, cityPath, beadsPrefix); err != nil {
 		return fmt.Errorf("init city beads: %w", err)
 	}
+	// On a split city (the .gc/infra scope was seeded at gc init), bd-init the
+	// infra store's own Dolt database via the same scope-init machinery the city
+	// and rig scopes use — desiredScopeDoltConfigStateForInit handles a non-rig
+	// dir through its fabricated-rig fallback, so the infra scope rides the
+	// rig-shaped endpoint state (inherited-city endpoint, own database) with no
+	// contract change. A city with no seeded infra scope (every existing city)
+	// skips this entirely and stays single-store, byte-identical.
+	if cityHasInfraStore(cityPath) {
+		if err := initAndHookDir(cityPath, infraScopeRoot(cityPath), config.InfraScopePrefix); err != nil {
+			return fmt.Errorf("init city infra beads: %w", err)
+		}
+	}
 	for i := range cfg.Rigs {
 		if strings.TrimSpace(cfg.Rigs[i].Path) == "" {
 			continue
