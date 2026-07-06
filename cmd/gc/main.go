@@ -1161,31 +1161,62 @@ func openCityInfraStoreAt(cityPath string) (beads.Store, bool, error) {
 // failed. It is the CLI one-shot's lazy source of the infra store: nil ⇒ the
 // class resolvers route to the work store (identity), so one-shot commands stay
 // byte-identical on a single-store city while avoiding a re-open per resolve
-// call. Best-effort: an open error is logged and treated as absence, matching
-// the surrounding store handling. cfg is accepted for signature parity with the
-// resolve*Store callers and to key future per-config behavior; it is not read
-// today.
+// call. cfg is accepted for signature parity with the resolve*Store callers and
+// to key future per-config behavior; it is not read today.
+//
+// Caching policy is deliberate: only an AUTHORITATIVE result is memoized — a
+// successful non-nil open, or a real absence (cityHasInfraStore false, the marker
+// file drives the boundary). An open ERROR is NOT cached: it is a transient
+// failure (dolt server hiccup, credential blip), so it returns nil this call and
+// is retried on the next, rather than being poisoned into a permanent
+// route-to-work-store. This matters because the running controller reaches this
+// path (circuit-reset socket → cliSessionStore → resolveSessionStore), where a
+// single early open failure must not permanently strand session writes on the
+// domain store.
 func cachedCityInfraStore(cityPath string, _ *config.City) beads.Store {
 	key := filepath.Clean(cityPath)
 	if v, ok := cityInfraStoreCache.Load(key); ok {
 		store, _ := v.(beads.Store)
 		return store
 	}
-	store, _, err := openCityInfraStoreAt(cityPath)
+	store, present, err := cachedInfraStoreOpen(cityPath)
 	if err != nil {
+		// Transient failure: log and route to the work store this call, but do NOT
+		// cache the nil — the next call retries the open.
 		fmt.Fprintf(os.Stderr, "gc: city infra bead store: %v (routing to work store)\n", err) //nolint:errcheck // best-effort stderr
-		store = nil
+		return nil
 	}
-	actual, _ := cityInfraStoreCache.LoadOrStore(key, store)
-	result, _ := actual.(beads.Store)
-	return result
+	if !present {
+		// Authoritative absence (single-store city): cache nil so the miss path
+		// stays a cheap map hit and avoids re-stat'ing the marker per resolve call.
+		cityInfraStoreCache.Store(key, beads.Store(nil))
+		return nil
+	}
+	// Successful open. LoadOrStore resolves a concurrent-first-open race; if
+	// another goroutine won, close our now-redundant handle so it does not leak.
+	actual, loaded := cityInfraStoreCache.LoadOrStore(key, store)
+	winner, _ := actual.(beads.Store)
+	if loaded && winner != store && store != nil {
+		if closeErr := closeBeadStoreHandle(store); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "gc: close redundant city infra bead store: %v\n", closeErr) //nolint:errcheck // best-effort stderr
+		}
+	}
+	return winner
 }
 
 // cityInfraStoreCache memoizes the per-process infra store per clean cityPath so
-// CLI one-shots do not re-open it per resolve call. A nil entry (absence/error)
-// is cached too, so the miss path stays cheap. Mirrors the cityDoltConfigs cache
-// in beads_provider_lifecycle.go.
+// CLI one-shots do not re-open it per resolve call. Only authoritative results
+// are cached: a successful non-nil open, or a real absence (nil). Open errors are
+// NOT cached — they retry on the next call — so a transient failure never poisons
+// the route permanently. Mirrors the cityDoltConfigs cache in
+// beads_provider_lifecycle.go.
 var cityInfraStoreCache sync.Map // clean cityPath → beads.Store (may be nil)
+
+// cachedInfraStoreOpen is the open seam cachedCityInfraStore uses on a cache miss.
+// Production opens the real infra scope; tests swap it to inject the three
+// outcomes (success, authoritative absence, transient error) without spawning
+// dolt.
+var cachedInfraStoreOpen = openCityInfraStoreAt
 
 const fileStoreLayoutScopedV1 = "scope-local-v1"
 

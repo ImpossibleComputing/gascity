@@ -649,14 +649,23 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	// reload instead of writing to the old sink until the controller restarts.
 	usageSink := usageSinkForCity(cfg, cs.cityPath)
 	// Reopen the city's infra store symmetrically with the city store. Absent on
-	// a single-store city, so infraStore stays nil and class routing is identity.
-	var infraStore beads.Store
-	var cityInfraDiagnostic *beads.BeadsDiagnostic
-	if openedInfra, present, infraErr := newControllerStateOpenCityInfraStore(cs.cityPath); infraErr != nil {
+	// a single-store city, so newInfraStore stays nil and class routing is
+	// identity. Three outcomes are distinguished so the swap can retain a working
+	// handle across a transient open error (rather than silently deactivating the
+	// split): a successful reopen (present, no error) yields a fresh handle; a
+	// deactivation (present=false, no error) yields nil; an open error retains the
+	// prior handle. The retain decision is resolved below, coupled with the city
+	// store, so the mail provider and the class accessors never disagree about
+	// which infra store is live.
+	var newInfraStore beads.Store
+	var newInfraDiagnostic *beads.BeadsDiagnostic
+	openedInfra, infraPresent, infraErr := newControllerStateOpenCityInfraStore(cs.cityPath)
+	switch {
+	case infraErr != nil:
 		fmt.Fprintf(os.Stderr, "api: city infra bead store reload: %v\n", infraErr) //nolint:errcheck // best-effort stderr
-	} else if present {
-		infraStore = wrapWithCachingStore(cs.cacheCtx, openedInfra.Store, cs.eventProv, true)
-		cityInfraDiagnostic = diagnosticPtr(openedInfra.Diagnostic)
+	case infraPresent:
+		newInfraStore = wrapWithCachingStore(cs.cacheCtx, openedInfra.Store, cs.eventProv, true)
+		newInfraDiagnostic = diagnosticPtr(openedInfra.Diagnostic)
 	}
 	// Reopen city-level store for session beads and mail.
 	openedCityStore, err := newControllerStateOpenCityStore(cs.cityPath)
@@ -665,11 +674,28 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	}
 	cityStore := openedCityStore.Store
 	cityBeadsDiagnostic := diagnosticPtr(openedCityStore.Diagnostic)
+
+	// Compute the EFFECTIVE infra store used for BOTH the rebuilt mail provider and
+	// the class accessors so they can never disagree (split-brain). On a genuine
+	// open error the prior handle is retained; on a successful reopen or a real
+	// deactivation (present=false) the new value (fresh handle or nil) wins. This
+	// read is safe unlocked: update() is serialized by updateMu, so cs.cityInfraStore
+	// cannot change under us between here and the swap.
+	effectiveInfra := newInfraStore
+	effectiveInfraDiagnostic := newInfraDiagnostic
+	infraSwap := infraErr == nil // false ⇒ retain the prior handle unchanged
+	if !infraSwap {
+		cs.mu.RLock()
+		effectiveInfra = cs.cityInfraStore
+		effectiveInfraDiagnostic = cs.cityInfraDiagnostic
+		cs.mu.RUnlock()
+	}
+
 	var cityMailProv mail.Provider
 	var extSvc *extmsg.Services
 	if cityStore != nil {
 		cityStore = wrapWithCachingStore(cs.cacheCtx, cityStore, cs.eventProv, true)
-		cityMailProv = newCityMailProvider(cityStore, infraStore, cfg, cs.cityPath, cs.eventProv)
+		cityMailProv = newCityMailProvider(cityStore, effectiveInfra, cfg, cs.cityPath, cs.eventProv)
 		svc := extmsg.NewServices(cityStore)
 		extSvc = &svc
 	}
@@ -678,6 +704,15 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	var oldCityStore beads.Store
 	var oldInfraStore beads.Store
 	var oldRigStores map[string]beads.Store
+	// The infra store's swap and close are coupled with the city store: the mail
+	// provider (which embeds effectiveInfra as its message + session store) is only
+	// rebuilt when the city store reopen succeeds. If the city reopen fails, the
+	// retained provider still references the old infra store, so the old infra
+	// handle must NOT be swapped out or closed (use-after-close). We only touch the
+	// infra store when cityStore != nil AND this is a real infra decision
+	// (infraSwap), and even then only close the old handle when it is no longer
+	// referenced by the effective (retained-or-new) value.
+	infraDecided := cityStore != nil && infraSwap
 	cs.mu.Lock()
 	cs.cfg = cfg
 	if rawCfg != nil {
@@ -687,10 +722,10 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	cs.usageSink = usageSink
 	oldRigStores = cs.beadStores
 	cs.beadStores = stores
-	if infraStore != nil {
+	if infraDecided {
 		oldInfraStore = cs.cityInfraStore
-		cs.cityInfraStore = infraStore
-		cs.cityInfraDiagnostic = cityInfraDiagnostic
+		cs.cityInfraStore = effectiveInfra
+		cs.cityInfraDiagnostic = effectiveInfraDiagnostic
 	}
 	if cityStore != nil {
 		oldCityStore = cs.cityBeadStore
@@ -704,8 +739,15 @@ func (cs *controllerState) update(cfg *config.City, sp runtime.Provider) {
 	}
 	// Keep prior non-nil store/provider if reopen fails.
 	cs.mu.Unlock()
-	if infraStore != nil && oldInfraStore != nil && oldInfraStore != infraStore {
+	if infraDecided && oldInfraStore != nil && oldInfraStore != effectiveInfra {
 		scheduleCloseBeadStoreHandle("city infra bead store", oldInfraStore)
+	}
+	// A fresh infra handle was opened (CachingStore reconciler running) but not
+	// adopted because the city reopen failed and the split swap is coupled with it.
+	// Close it so the reconcile goroutine and backing handle do not leak. nil on
+	// every single-store city, so this never fires there.
+	if !infraDecided && newInfraStore != nil {
+		scheduleCloseBeadStoreHandle("city infra bead store (unadopted reload)", newInfraStore)
 	}
 	if cityStore != nil && oldCityStore != nil && oldCityStore != cityStore {
 		scheduleCloseBeadStoreHandle("city bead store", oldCityStore)
