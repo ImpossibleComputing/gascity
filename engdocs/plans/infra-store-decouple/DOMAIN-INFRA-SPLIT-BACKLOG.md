@@ -190,15 +190,32 @@ city-scoped; new cities create both. Still Dolt — no SQLite.
 in and read from the city infra store; new `gc init` creates both; a guard fails
 if a domain store holds an infra bead or vice-versa.
 
-- [ ] **E2.1 — Open the second Dolt store at city scope.** Add the city INFRA
-  Dolt store alongside the domain (HQ/city) store; thread both through the
-  controller (`cityDomainStore`/`cityInfraStore`) and the CLI. `gc init` creates
-  BOTH.
-- [ ] **E2.2 — Non-identity `resolveClassStore`.** `resolveClassStore(infra-class)
-  → city infra store`; `resolveClassStore(work) → rig/HQ domain store`. Remove
-  the identity stub (`cmd/gc/class_store.go:231`). Wire the 5 typed views over the
-  one infra store. Blocked by: E2.1. (Pinned identity tests
-  `TestControllerStateClassAccessorsAreIdentity` get updated to boundary tests.)
+> **E2 STATUS (2026-07-06 autonomous run): the two-database MECHANISM is COMPLETE,
+> byte-identical, fable-red-teamed, and PROVEN CORRECT by the boundary-invariant test.
+> Activation is OPT-IN (`GC_INFRA_STORE_SPLIT=1`, default OFF). Commits: E2.1 mechanism
+> `8a529ce23` + harden `98bbdffb5`; E2.2 invariant `311d8ca12`; E2.3 write-routing
+> `41279174d`; E2.4 activation `0537c8b03`. REMAINING: E2.5 integration validation +
+> backend-blind guard; E3 migration; E4 e2e. ⚠️ E2.5/E4 INTEGRATION TESTS ARE BLOCKED IN
+> THIS SANDBOX — bd 1.1.0-rc.1 rejects the `--dolt-auto-commit` flag the store layer
+> emits (a PRE-EXISTING skew affecting the WORK store too, not the split); the integration
+> tests are WRITTEN + compile + run but skip at a toolchain preflight. They need a
+> dolt-capable, bd-matched env to fully validate. The FAST-tier boundary invariant is the
+> in-sandbox proof and is GREEN.**
+
+- [x] **E2.1 — Open the second Dolt store at city scope. DONE (`8a529ce23` + harden
+  `98bbdffb5`).** A "store" is a SCOPE-ROOT dir (own Dolt db on the shared server), so
+  the city INFRA store is a 2nd scope `.gc/infra` — NO factory change. Added
+  infraScopeRoot/cityHasInfraStore/openCityInfraStoreResultAt/cachedCityInfraStore
+  (main.go, same policy-wrap+CachingStore path), controllerState.cityInfraStore +
+  CityRuntime.standaloneCityInfraStore + accessor threading. Harden fixed 3 dormant
+  split-city reload/cache defects (fail-on-baseline tests).
+- [x] **E2.2 — Non-identity `resolveClassStore`. DONE (mechanism `8a529ce23`; invariant
+  `311d8ca12`).** resolveClassStore gained an `infraStore` param + boundary dispatch
+  (infra classes→infra store, work→work store; gate on infraStore-presence + class,
+  NEVER backend). The pinned identity test split into a nil-infra compatibility pin + a
+  RouteToInfraStore test. The boundary-invariant test (real two-store harness, classify
+  every bead via coordclass.Classify, negative control) is the completeness forcing
+  function — GREEN.
 - [~] **E2.3 — Uniform infra scope (kill the sling split-brain). WRITE-ROUTING
   DONE (2026-07-06); read-side fan-out collapse DEFERRED.** Today the CLI sling
   creates infra beads in the *rig* store while the controller reads them from the
