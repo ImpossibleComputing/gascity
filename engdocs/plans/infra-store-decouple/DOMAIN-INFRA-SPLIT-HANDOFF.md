@@ -2,7 +2,24 @@
 
 **Branch** `upstream/object-front-doors-cleanup` (base `main`), **PR #3839 DRAFT**,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`.
-**HEAD `7a1869e38`** (always `git rev-parse HEAD`; re-grep every line number below).
+**HEAD `6706af8c3`** (always `git rev-parse HEAD`; re-grep every line number below).
+
+> **CONT (2026-07-06) — E1.6 DONE + audit finding.** A parallel census
+> (`raw/e1-census-wf_61848080.json`: 1 adversarial E1.6 auditor + 5 E1.1 file
+> censuses) proved E1.6's cross-store member+source seam (shipped in `#3773`) was
+> **already threaded** (member Get/SetMetadata via `storeref.Resolve`/
+> `drainMemberOwningStore`, source chain via `opts.ResolveStoreRef`) but had **3
+> residual gaps**. Fixed the 2 byte-identical ones (commit `6706af8c3`):
+> `drain.go` `drainProjectedBlockerIDs`/`orderDrainMembersByDependencies` read a
+> member's dep edges on the ambient store — routed through a new probe-free
+> `drainMemberDepStore` (owning-store when `MemberStores` set, else ambient) + 2
+> two-store canaries. **Deferred the 3rd** (`retry.go resolveRequiredArtifactWorktree`)
+> because `opts.ResolveStoreRef` is ALREADY live in prod → routing it is a real
+> behavior change (latent cross-store-source bug fix), not a byte-identical E1
+> conversion; needs its own analysis + owner sign-off (see backlog E1.6). E1.1
+> census in the same artifact: `cmd_sling.go` and `cmd_start.go` are **clean-surgical**
+> with concrete plans; `cmd_wait`/`cmd_nudge`/`cmd_handoff+drain` are entangled.
+> **Next: E1.1 clean-surgical files, then the entangled set.**
 
 **The backlog is `DOMAIN-INFRA-SPLIT-BACKLOG.md` (E1→E5). Read it with this doc.**
 This handoff is the *why* and the *don't-re-derive-it-wrong*; the backlog is the
@@ -89,7 +106,8 @@ Remaining (E1 in the backlog):
 - The non-session infra classes' periphery (graph/nudges/orders; mail mostly done).
 - internal/api (~8 handlers), internal/worker, internal/session own dogfood
   (`SESSION-PERIPHERY-CLOSURE-PLAN.md` Phases D/E/F).
-- The dispatch/convoy cross-store member+source reads.
+- ~~The dispatch/convoy cross-store member+source reads.~~ **DONE (E1.6, commit
+  `6706af8c3`)** except the deferred behavior-change `retry.go` source read.
 - Delete the `storeref` crutch + add the "no raw class-store access" guard.
 
 ## Where to start

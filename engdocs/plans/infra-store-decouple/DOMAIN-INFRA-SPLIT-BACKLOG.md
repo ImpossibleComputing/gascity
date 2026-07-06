@@ -99,13 +99,35 @@ cover every touched file; the crutch is gone except the bare-CLI-id lookup.
   (`manager.go`, `chat.go`, `named_config.go`, `names.go`, `submit.go`). Convert
   the decision-path reads; leave the codec + Create-path constructors.
   *Extends:* closure-plan Phase F (riskiest — its own session).
-- [ ] **E1.6 — dispatch/convoy cross-store member+source reads.** The sites that
-  read a *related* bead of a known class (`convoy/membership.go` `store.Get(itemID)`,
-  `drain.go` members, `runtime.go` `source_bead_id`/`source_store_ref`) must grab
-  the store the reference's role names, not the ambient store. These are the
-  co-residence sites the graph audit found — the caller knows the class from *why*
-  it holds the id.
+- [x] **E1.6 — dispatch/convoy cross-store member+source reads.** The sites that
+  read a *related* bead of a known class must grab the store the reference's role
+  names, not the ambient store. These are the co-residence sites the graph audit
+  found — the caller knows the class from *why* it holds the id.
   *Extends:* the `MemberStores`/`ResolveStoreRef` seam already threaded here.
+  **DONE (2026-07-06, commit `6706af8c3`).** An adversarial audit of the seam
+  (`raw/e1-census-wf_61848080.json`) confirmed the `#3773` seam already routes the
+  member Get/SetMetadata (`convoy/membership.go` `storeref.Resolve` over
+  `memberStores`; `drain.go` reservation Get/SetMetadata via `drainMemberOwningStore`)
+  and the source-chain reads (`runtime.go walkSourceBeadChain` via `opts.ResolveStoreRef`),
+  BUT found 3 residual gaps. Two were byte-identical to fix (dormant `MemberStores`,
+  empty in prod until E2) and are FIXED: `drain.go` `drainProjectedBlockerIDs:637`
+  and `orderDrainMembersByDependencies:849` read a member's dep edges on the ambient
+  store — a dep edge is co-resident with its source bead, so after E2 the ambient
+  read returns empty and silently collapses member ordering / drops projected
+  blockers. Routed both through a new `drainMemberDepStore(store, memberID, opts)`
+  (owning-store when `MemberStores` set, else ambient store probe-free); added two
+  two-store regression canaries that fail on a bare `store.DepList`. Full gates +
+  revert-canary + fable byte-identity review (COULD-NOT-REFUTE ×5).
+  **DEFERRED — NOT byte-identical (own follow-up, needs owner sign-off):**
+  `retry.go` `resolveRequiredArtifactWorktree:436` reads a `gc.source_bead_id`
+  parent via bare `store.Get`, ignoring `gc.source_store_ref` + `opts.ResolveStoreRef`.
+  Unlike the drain gaps, `opts.ResolveStoreRef` is ALREADY populated in prod
+  (`cmd_convoy_dispatch.go:211`) and `gc.source_store_ref` is present on adopt-PR
+  roots TODAY, so routing it via the ref is a real behavior change RIGHT NOW (it
+  would fix a latent cross-store-source degradation to `missing_required_artifact_context`
+  that `walkSourceBeadChain` already handles correctly) — a genuine bug fix, not a
+  byte-identical E1 conversion. Confirm the required-artifact worktree semantics for
+  cross-store sources, add a test, and land it as its own behavior-affecting change.
 - [ ] **E1.7 — Delete the crutch + add the invariant guard.** Remove the
   `storeref` probe-all fallback everywhere except the bare-CLI-id lookup
   (`gc show <id>`). Add a guard test that forbids new raw class-bead store access
