@@ -77,11 +77,18 @@ while `resolveClassStore` is still identity, so every change is byte-identical.
 outside its class accessor / the domain-task path; the front-door guard tests
 cover every touched file; the crutch is gone except the bare-CLI-id lookup.
 
-- [ ] **E1.1 — Deferred CLI entangled set.** Route the parked roots the
-  relocation pass deferred: `cmd_wait.go`, `cmd_handoff.go` + `cmd_runtime_drain.go`
-  (paired, share `sessionRestartableByController`/`clearRestartRequest`),
-  `cmd_nudge.go`, `cmd_sling.go`, `cmd_start.go` reconcile cascade.
-  *Extends:* `RELOCATION-ROUTING-HANDOFF.md` "Deferred" set.
+- [x] **E1.1 — Deferred CLI entangled set. DONE (2026-07-06).** All 5 routed +
+  guard-listed: cmd_start (`4b4961146`), cmd_sling (`cea22bf59`), and the entangled
+  trio cmd_handoff+cmd_runtime_drain / cmd_wait / cmd_nudge (`4d847d0f3`, designed by a
+  fable design workflow, implemented by opus, reviewed by a fable red-team workflow that
+  caught + we fixed a MEDIUM nudge-dispatcher class-mix defect). **E1.2 RESIDUALS the
+  red-team flagged (thread a work store once openNudgeBeadStore relocates):** (a)
+  cmd_wait.go:659 inline `beads.NudgesStore{Store: store}` (work store) vs
+  withdrawQueuedWaitNudges's openNudgeBeadStore; (b) the CLI nudge delivery tree
+  (cmdNudgePoll/cmdNudgeDrainWithFormat) derives its session store from the
+  openNudgeBeadStore base (nudges-class-routed, identity=work today only via nil cfg).
+  *Extends:* `RELOCATION-ROUTING-HANDOFF.md` "Deferred" set. Plans:
+  `raw/e11-design-wf_0ed69479.json`, `raw/e11-plans-extracted.txt`.
   **cmd_start.go DONE (2026-07-06, commit `4b4961146`).** Routed the full
   standalone reconcile-cascade SESSION arm (2× loadSessionBeadSnapshot, 3×
   buildDesiredStateWithSessionBeads LEADING store, 3× sync, 1× reconcile) through
