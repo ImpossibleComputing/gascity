@@ -286,6 +286,23 @@ func TestMetadataInfoOnlyFilesStayOnInfoSnapshot(t *testing.T) {
 // router (its session reads go through store args, not front-door construction) this
 // guard is a regression canary for the file, not a completeness proof — the
 // end-to-end relocation acceptance test remains authoritative.
+//
+// cmd_sling.go routes its sling-nudge session access (doSlingNudge session
+// lookups, deliverSlingNudge's observe/handle/last-nudge stamp via
+// cliSessionStore/cliSessionFrontDoor derived from the target's cfg+cityPath, and
+// printNudgePreview) while the queued-nudge enqueue stays on the plain store
+// (nudges class, its own E1.2 routing). TWO sling-root session sites remain
+// DEFERRED because their store is threaded cross-package and cannot be routed at
+// the CLI root: (a) cliDirectSessionResolver (populateSlingDepsCallbacks →
+// internal/sling → internal/graphroute → resolveSessionIDMaterializingNamed)
+// materializes session beads on the WORK source store and needs a two-store
+// SlingDeps/graphroute.Deps split (a session-class store added to the deps); and
+// (b) the resolveGraphStepBinding* helpers DEFINED here read session state on a
+// store supplied by their cmd_convoy_dispatch.go caller (never called from a sling
+// root), owned by that caller's effort. So the positive cliSessionStore( tripwire
+// protects the routed sling-nudge arm but NOT those two deferred cross-package
+// sites — consistent with this guard being a regression canary, not a completeness
+// proof.
 var sessionRelocationRoutedFiles = []string{
 	"cmd_session_wake.go",
 	"cmd_session_pin.go",
@@ -303,6 +320,7 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_citystatus.go",
 	"city_status_snapshot.go",
 	"cmd_start.go",
+	"cmd_sling.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a
