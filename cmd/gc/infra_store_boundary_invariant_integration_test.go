@@ -4,7 +4,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,41 +17,45 @@ import (
 // This is the E2.5 integration-tier of the domain/infra store boundary invariant
 // (design step 2b). Where the fast tier (infra_store_boundary_invariant_test.go)
 // runs the production wrapper stack over MemStore, this tier runs it over the
-// REAL two-store shape: a doltlite (embedded Dolt) city with a seeded .gc/infra
-// scope, brought up through the true production lifecycle (doInit's infra seed +
-// startBeadsLifecycle's infra bd-init), with every store opened through the true
-// production open path (openStoreResultAtForCity / openCityInfraStoreResultAt,
-// incl. wrapStoreWithBeadPolicies / wrapInfraStoreWithBeadPolicies + reserved-
-// prefix minting). It proves the split holds end-to-end against real Dolt, and
-// that an existing single-store city (no infra scope) is left untouched.
+// REAL two-store shape against a live, gc-MANAGED Dolt sql-server: a city (hq)
+// scope, a rig (fe) scope, AND a third .gc/infra (gcg) scope, each a distinct
+// Dolt database on the same server. Every store is brought up through the true
+// production lifecycle (seedInitInfraScope's canonical managed-Dolt scope config
+// + startBeadsLifecycle's initAndHookDir infra bd-init) and opened through the
+// true production open path (openCityStoreAt / openCityInfraStoreAt, incl.
+// wrapStoreWithBeadPolicies / wrapInfraStoreWithBeadPolicies + reserved-prefix
+// minting). It proves the split holds end-to-end against real Dolt, and that an
+// existing single-store city (no infra scope) is left untouched.
 //
 // It reuses the package-exported assertStoreClassBoundary helper verbatim — that
 // is exactly why the fast tier exported it.
 //
-// REQUIRES a clean dolt-capable environment. `bd` must resolve to an isolated
-// embedded-Dolt store (HOME + BEADS_DIR scrubbed); in an environment where bd is
-// federated onto a shared live ledger the init aborts, so the test skips rather
-// than write into the wrong store.
+// It rides the SAME managed-Dolt harness the passing cmd/gc process tests use
+// (setupManagedBdWaitTestCity), so it is gated behind GC_FAST_UNIT=0 (run
+// `make test-cmd-gc-process` for full coverage) and skips — never falsely fails —
+// on a machine without a working bd/dolt toolchain.
 
 func TestInfraStoreBoundaryInvariantIntegration(t *testing.T) {
-	if _, err := exec.LookPath("bd"); err != nil {
-		t.Skip("bd CLI required for the real two-store infra boundary integration test")
-	}
-	clearInheritedBeadsEnv(t)
-	configureTestDoltIdentityEnv(t)
-	t.Setenv("GC_BEADS_BACKEND", "doltlite")
-	t.Setenv("BEADS_BACKEND", "doltlite")
-	t.Setenv("BD_NON_INTERACTIVE", "1")
+	// Activate the split for the managed-Dolt city seeded by the harness: with
+	// GC_INFRA_STORE_SPLIT=1, seedInitInfraScope writes the .gc/infra canonical
+	// scope config (its own Dolt database), the same opt-in gc init uses.
 	t.Setenv("GC_INFRA_STORE_SPLIT", "1")
 
-	cityPath := shortSocketTempDir(t, "gc-infra-split-")
-	disableManagedDoltRecoveryForTest(t)
-	cleanupManagedDoltTestCity(t, cityPath)
+	// setupManagedBdWaitTestCity stands up a real, gc-managed Dolt sql-server with
+	// a city (hq) scope and a frontend rig (fe) scope — two live Dolt databases —
+	// and publishes the managed-Dolt runtime state so store opens resolve the
+	// server port. It gates on GC_FAST_UNIT=0 and skips when bd/dolt are absent.
+	cityPath, _ := setupManagedBdWaitTestCity(t)
 
-	writeDoltliteCityTOMLForInfraSplit(t, cityPath)
-	materializeBuiltinPacksForTest(t, cityPath)
+	cfg, _, err := loadCityConfigWithBuiltinPacks(cityPath)
+	if err != nil {
+		t.Fatalf("load city config: %v", err)
+	}
 
-	// gc init's infra-scope seed writes the .gc/infra canonical scope config.
+	// seedInitInfraScope writes the .gc/infra scope's canonical managed-Dolt
+	// config.yaml + metadata.json (issue_prefix=gcg, its own dolt_database), the
+	// exact production infra-seed gc init performs. Writing config.yaml is what
+	// makes cityHasInfraStore true and activates the split.
 	if err := seedInitInfraScope(cityPath); err != nil {
 		t.Fatalf("seedInitInfraScope: %v", err)
 	}
@@ -60,16 +63,12 @@ func TestInfraStoreBoundaryInvariantIntegration(t *testing.T) {
 		t.Fatal("cityHasInfraStore is false after seeding the infra scope; the split did not activate")
 	}
 
-	cfg, _, err := loadCityConfigWithBuiltinPacks(cityPath)
-	if err != nil {
-		t.Fatalf("load city config: %v", err)
+	// bd-init the infra store's own Dolt database on the running managed server —
+	// the exact call startBeadsLifecycle makes for the infra scope. This creates
+	// the third Dolt database (gcg) alongside hq and fe.
+	if err := initAndHookDir(cityPath, infraScopeRoot(cityPath), config.InfraScopePrefix); err != nil {
+		t.Fatalf("initAndHookDir(infra scope): %v", err)
 	}
-
-	// gc start: bd-init both the city (hq) and the infra (gcg) Dolt databases.
-	if err := startBeadsLifecycle(cityPath, "infra-split", cfg, os.Stderr); err != nil {
-		t.Fatalf("startBeadsLifecycle: %v", err)
-	}
-	t.Cleanup(func() { _ = shutdownBeadsProvider(cityPath) })
 
 	// Open both stores through the true production open path.
 	workStore, err := openCityStoreAt(cityPath)
@@ -81,18 +80,7 @@ func TestInfraStoreBoundaryInvariantIntegration(t *testing.T) {
 		t.Fatalf("open city infra store: %v", err)
 	}
 	if !present || infraStore == nil {
-		t.Fatal("infra store not present after startBeadsLifecycle on a split city")
-	}
-
-	// Preflight: a trivial create on the WORK store proves the local bd/dolt
-	// toolchain is version-compatible with this gascity build. If it fails on a
-	// bd-version skew (e.g. an unknown-flag / unsupported-backend mismatch) the
-	// whole real-store lifecycle is inoperable here — for EVERY store, not just
-	// the infra one — so skip rather than report a false split failure. This is
-	// the "needs a dolt-capable, version-matched environment" guard.
-	if _, err := workStore.Create(beads.Bead{Title: "bd toolchain preflight", Type: "task"}); err != nil {
-		t.Skipf("bd/dolt toolchain is not version-compatible with this build (work-store create failed: %v); "+
-			"the real two-store lifecycle needs a dolt-capable, bd-version-matched environment", err)
+		t.Fatal("infra store not present after bd-initing the infra scope on a split city")
 	}
 
 	// Seed a representative infra bead mix through the production accessors, each
@@ -109,30 +97,8 @@ func TestInfraStoreBoundaryInvariantIntegration(t *testing.T) {
 	assertReservedPrefixBoundary(t, workStore, infraStore)
 
 	// An EXISTING single-store city — one with no seeded infra scope — must stay
-	// single-store: no infra scope, byte-identical lifecycle.
+	// single-store: no infra scope, byte-identical routing.
 	assertSingleStoreCityUntouched(t)
-}
-
-func writeDoltliteCityTOMLForInfraSplit(t *testing.T, cityPath string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := "[workspace]\nname = \"infra-split\"\n\n" +
-		"[beads]\nprovider = \"bd\"\nbackend = \"doltlite\"\n\n" +
-		"[[agent]]\nname = \"mayor\"\nstart_command = \"echo hello\"\n"
-	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// The city scope's canonical doltlite metadata (matches the bd-store bridge
-	// tests' shape) so startBeadsLifecycle bd-inits an embedded Dolt DB.
-	if err := os.MkdirAll(filepath.Join(cityPath, ".beads"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	meta := `{"backend":"doltlite","database":"doltlite","dolt_database":"hq"}`
-	if err := os.WriteFile(filepath.Join(cityPath, ".beads", "metadata.json"), []byte(meta), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // seedRepresentativeInfraBeads creates one bead of each infra coordination class
@@ -203,14 +169,21 @@ func assertReservedPrefixBoundary(t *testing.T, workStore, infraStore beads.Stor
 	}
 }
 
-// assertSingleStoreCityUntouched brings up a second doltlite city WITHOUT the
-// infra-store split (GC_INFRA_STORE_SPLIT off for its seed) and confirms it stays
-// single-store: no infra scope, and the infra store opener reports absence.
+// assertSingleStoreCityUntouched confirms a managed-Dolt city WITHOUT the
+// infra-store split stays single-store: cityHasInfraStore is false, no .gc/infra
+// scope exists, and the infra opener reports absence (so class routing is
+// identity and the city is byte-identical to upstream Gas City).
+//
+// It does not need a second live Dolt server: openCityInfraStoreResultAt
+// short-circuits on cityHasInfraStore before touching Dolt, so a scaffolded
+// managed-Dolt city with no seeded infra scope is sufficient to prove the split
+// never leaked into a non-seeded city.
 func assertSingleStoreCityUntouched(t *testing.T) {
 	t.Helper()
 	cityPath := shortSocketTempDir(t, "gc-single-store-")
-	cleanupManagedDoltTestCity(t, cityPath)
-	writeDoltliteCityTOMLForInfraSplit(t, cityPath)
+	if _, err := writeManagedBdWaitTestCityScaffold(cityPath); err != nil {
+		t.Fatalf("writeManagedBdWaitTestCityScaffold: %v", err)
+	}
 	materializeBuiltinPacksForTest(t, cityPath)
 
 	// Deliberately DO NOT seed the infra scope: this is an existing single-store
@@ -222,15 +195,9 @@ func assertSingleStoreCityUntouched(t *testing.T) {
 	if _, err := os.Stat(infraScopeRoot(cityPath)); !os.IsNotExist(err) {
 		t.Fatalf("single-store city has an .gc/infra dir (err=%v); it must be untouched", err)
 	}
-	cfg, _, err := loadCityConfigWithBuiltinPacks(cityPath)
-	if err != nil {
-		t.Fatalf("load single-store city config: %v", err)
+	if _, err := os.Stat(filepath.Join(infraScopeRoot(cityPath), ".beads", "config.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("single-store city has an infra scope config (err=%v); it must be untouched", err)
 	}
-	if err := startBeadsLifecycle(cityPath, "single-store", cfg, os.Stderr); err != nil {
-		t.Fatalf("startBeadsLifecycle (single-store): %v", err)
-	}
-	t.Cleanup(func() { _ = shutdownBeadsProvider(cityPath) })
-
 	if _, present, err := openCityInfraStoreAt(cityPath); err != nil {
 		t.Fatalf("open infra store (single-store): %v", err)
 	} else if present {
