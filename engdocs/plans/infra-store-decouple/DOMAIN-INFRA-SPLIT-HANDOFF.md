@@ -32,8 +32,45 @@ worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`.
 > refuted the defer; round 2 confirmed the fix). **Discipline update for the rest of E1.1:
 > validate every "leave-plain/defer" decision against the DAEMON's store-role assignment
 > in city_runtime.go — the daemon is the authority on session-vs-work, not a static read
-> of the callee, and not the census.** **Next: cmd_sling.go (clean-surgical), then the
-> entangled cmd_nudge / cmd_wait / cmd_handoff+cmd_runtime_drain set.**
+> of the callee, and not the census.**
+>
+> **CONT (same session) — E1.1 cmd_sling.go DONE (commit `cea22bf59`).** Routed the
+> sling-nudge session arm (doSlingNudge lookups; deliverSlingNudge observe/handle/stamp via
+> a sessStore from target.cfg+cityPath, NO signature change; printNudgePreview +cityPath
+> param) through cliSessionStore/cliSessionFrontDoor; queued-nudge enqueue stays plain.
+> **Census wrong a 3rd time** (called deliverSlingNudge "clean-surgical"; it is multi-class
+> session+nudge). Fable COULD-NOT-REFUTE; documented 2 DEFERRED cross-package sling-root
+> session sites (cliDirectSessionResolver, resolveGraphStepBinding*).
+>
+> **OWNER DECISION: complete ALL of E1, SEQUENTIAL FULL-QUALITY** (one verified+pushed
+> commit per file/group; NO worktree fan-out; per file: re-verified per-consumer census
+> vs the DAEMON/controller routing + byte-identity + revert-canary + fable review).
+> E1 done so far: E1.6 (2 fixed, 1 deferred), E1.1 cmd_start + cmd_sling. **Remaining E1
+> roadmap:** E1.1 → cmd_nudge, cmd_wait, cmd_handoff+cmd_runtime_drain; then E1.2 (graph/
+> nudges/orders periphery), E1.3 (~25 internal/api), E1.4 (internal/worker), E1.5 (~31
+> internal/session dogfood), E1.7 (delete storeref crutch + invariant guard).
+>
+> ### NEXT UNIT — cmd_nudge.go census (ready to execute)
+> 2460 lines, multi-class. The ~8 PURE nudge-queue roots stay on the NudgesStore (leave
+> untouched): claimDueQueuedNudgesMatching@1684, listQueuedNudges@1724,
+> listQueuedNudgesForTarget@1764, enqueueQueuedNudgeWithStore@1857, ackQueuedNudgesWithOutcome@1959,
+> releaseQueuedNudgeClaims@2012, recordQueuedNudgeFailureDetailed@2071 (all open
+> `openNudgeBeadStore(cityPath)` → nudgeFrontDoor / markQueuedNudgeTerminal only).
+> The DELIVERY roots open the nudge store AND reuse its `.Store` for SESSION ops — route
+> those SESSION sites to `cliSessionStore(<nudgeStore>.Store, cfg, cityPath)` /
+> `cliSessionFrontDoor(...)`, keep the nudge enqueue/record/ack on the NudgesStore:
+>   - cmdNudgeDrainWithFormat@452: `sessionFrontDoor(deliveryStore.Store)`@455 → cliSessionFrontDoor; stamp@517/524.
+>   - deliverSessionNudge@697: `workerHandleForNudgeTarget`@744; `requestManagedNudgeWake`@843 → `session.WakeSession(store,…)`@860 (SESSION write).
+>   - sendMailNotify@1019: workerObserveNudgeTarget@995/1033, workerHandleForNudgeTarget@1038, `sessionFrontDoor(store)`@1050→stamp@1052.
+>   - resolveNudgeTarget@1087: `resolveSessionIDMaterializingNamed(cityPath,cfg,store.Store,…)`@1089.
+>   - the @1260 delivery root: `sessionFrontDoor(deliveryStore)`@1264, workerHandleForNudgeTarget@1297, stamp@1329.
+>   - withNudgeTargetFence@1412: `loadSessionBeads(store)`@1422 (SESSION; shared with cmd_sling — leaf, route at call sites).
+> Shared session leaves (workerObserveNudgeTarget@926, workerHandleForNudgeTarget@874,
+> requestManagedNudgeWake@852, stampLastNudgeDeliveredAt@1333) take a `store` param and are
+> ALSO called from cmd_sling.go (already routed there) — keep signatures, route at each
+> call site. **VALIDATE the session/nudge split against nudge_dispatcher.go** (the controller
+> delivery analog) before editing — the census was wrong on cmd_start AND cmd_sling.
+> Guard-list cmd_nudge.go once its `sessionFrontDoor(store...)` needles are converted.
 
 **The backlog is `DOMAIN-INFRA-SPLIT-BACKLOG.md` (E1→E5). Read it with this doc.**
 This handoff is the *why* and the *don't-re-derive-it-wrong*; the backlog is the
