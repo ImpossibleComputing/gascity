@@ -265,14 +265,27 @@ func TestMetadataInfoOnlyFilesStayOnInfoSnapshot(t *testing.T) {
 // way it protects providers.go's snapshot route, consistent with this guard being
 // a regression canary rather than a completeness proof.
 //
-// Two files are intentionally ABSENT even though they route: controller.go (its
+// controller.go is intentionally ABSENT even though it routes: its
 // session-circuit-reset socket handler routes, but the file also holds the
 // already-safe param-threaded runtime `sessionFrontDoor(store.Store)` at the
-// gracefulStop path, which the substring needle cannot distinguish) and
-// cmd_start.go (its adoption barrier routes, but its whole-city reconcile cascade
-// legitimately wraps `beads.SessionStore{Store: oneShotStore}` — a separate
-// mirror-of-runtime follow-up). Both are protected by in-code comments and the
-// end-to-end relocation acceptance test rather than this file-level guard.
+// gracefulStop path, which the substring needle cannot distinguish. It is
+// protected by in-code comments and the end-to-end relocation acceptance test
+// rather than this file-level guard.
+//
+// cmd_start.go's standalone reconcile cascade routes its full SESSION arm to
+// mirror the daemon's store-role split (CityRuntime.buildDesiredState /
+// controlDispatcherTick): the leading store of buildDesiredStateWithSessionBeads,
+// loadSessionBeadSnapshot, syncSessionBeadsWithSnapshotAndRigStores, and
+// reconcileSessionBeadsAtPathWithNamedDemand all take the session-class store via
+// cliSessionStore/cliSessionFrontDoor, with rigStores as the per-rig WORK tail. The
+// one residual — releaseOrphanedPoolAssignmentsWhenSnapshotsComplete's
+// liveOpenSessionAssignmentExists session read — stays on the plain store exactly as
+// the daemon leaves it on cityBeadStore(), a shared work-release-boundary follow-up,
+// not a cmd_start gap. The positive cliSessionStore( tripwire protects the routed
+// arm; no unrouted sessionFrontDoor(store...) needle is carried. As a non-front-door
+// router (its session reads go through store args, not front-door construction) this
+// guard is a regression canary for the file, not a completeness proof — the
+// end-to-end relocation acceptance test remains authoritative.
 var sessionRelocationRoutedFiles = []string{
 	"cmd_session_wake.go",
 	"cmd_session_pin.go",
@@ -289,6 +302,7 @@ var sessionRelocationRoutedFiles = []string{
 	"cmd_status.go",
 	"cmd_citystatus.go",
 	"city_status_snapshot.go",
+	"cmd_start.go",
 }
 
 // sessionRelocationForbidden are the UNROUTED session-front-door constructions a
