@@ -2,7 +2,29 @@
 
 **Branch** `upstream/object-front-doors-cleanup` (base `main`), **PR #3839 DRAFT**,
 worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`.
-**HEAD `6706af8c3`** (always `git rev-parse HEAD`; re-grep every line number below).
+**HEAD moves fast — always `git rev-parse HEAD`; re-grep every line number below.**
+
+> **AUTONOMOUS RUN (2026-07-06, "complete the full two-DB refactor, don't stop until
+> done; Fable for design, opus for impl, fable red-team for review").** Pipeline per
+> unit: fable DESIGN workflow (controller-validated plan) → opus IMPLEMENTATION (main
+> ctx or opus subagent) → fable RED-TEAM workflow (adversarial byte-identity + class
+> review) → fix → commit+push. **E1.6 DONE + E1.1 DONE (all 5 CLI files).** The red-team
+> caught real defects at cmd_start (census wrongly deferred buildDesiredState) and
+> cmd_nudge (session store derived from the nudges base) — both fixed; this is why the
+> red-team gate is non-negotiable.
+>
+> **STRATEGY for the rest (E1.2–E1.5, E1.7, E2–E4).** E1.2 (graph/nudges/orders CLI
+> periphery), E1.3 (~25 internal/api), E1.4 (internal/worker), E1.5 (~31 internal/session
+> dogfood) are large. RATHER THAN blind-route all 50+ files, the reliable completeness
+> gate is **E2.5's boundary-invariant test (classify every bead in each store, fail on
+> a domain/infra mismatch) run on the REAL two-store shape (E4)** — misses are CAUGHT,
+> not silent. So: do the tractable/obvious E1.2 routing, then BUILD E2 (two Dolt stores
+> + non-identity resolveClassStore + the boundary-invariant test) and E4 (e2e on the
+> two-store shape), and let the invariant test DRIVE completeness (TDD: it fails → route
+> the surfaced site → passes). The controller is already fully class-routed; E1.1 closed
+> the CLI session/mail/nudge/wait paths; the invariant test finds the residual graph/
+> orders/api/session-dogfood misses more reliably than a blind sweep. **HEAD (post-E1.1)
+> ~`3f93191b6`.** Next: E1.2 design→impl→review, then E2.
 
 > **CONT (2026-07-06) — E1.6 DONE + audit finding.** A parallel census
 > (`raw/e1-census-wf_61848080.json`: 1 adversarial E1.6 auditor + 5 E1.1 file
