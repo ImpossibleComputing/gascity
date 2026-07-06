@@ -7,9 +7,14 @@ Paste the block below into a fresh session.
 Continue the **CLI session relocation-routing** pass on branch
 `upstream/object-front-doors-cleanup` (base `main`, DRAFT PR #3839, worktree
 `/data/projects/gascity/.claude/worktrees/object-front-doors`; run `git rev-parse HEAD` —
-should be at/after `b7e359895`). **15 files routed so far** (CONT-41 added cmd_restart,
-completion, providers; CONT-42 added cmd_session.go — all 10 gc session command roots;
-CONT-43 added the gc status trio: cmd_status.go, cmd_citystatus.go, city_status_snapshot.go).
+should be at/after `85c659be1`). **15 cmd/gc files routed + the beadmail two-store split**
+(CONT-42 cmd_session.go 10 roots; CONT-43 the gc status trio; CONT-44 cmd_mail via the
+beadmail messaging/session two-store split — the LAST non-deferred blind root).
+
+**NO non-deferred blind roots remain.** The next work is a real decision (pick with the owner):
+either **Phase 6** (write the SUBSTITUTE routing test — see below; the real E2E is blocked on
+building the relocation mechanism) or start the **DEFERRED entangled set** (cmd_wait,
+cmd_handoff+cmd_runtime_drain, cmd_nudge, cmd_sling, cmd_start cascade).
 
 **Read first, in order:**
 1. `engdocs/plans/infra-store-decouple/RELOCATION-ROUTING-HANDOFF.md` — the current-state
@@ -31,13 +36,28 @@ CONT-43 added the gc status trio: cmd_status.go, cmd_citystatus.go, city_status_
   (paired shared-helper effort), cmd_nudge.go, cmd_sling.go, cmd_start.go reconcile cascade.
 
 **IMMEDIATE WORK (pick with the owner):**
-- **cmd_mail.go** (12 subcommands) — the session reads are in the SHARED beadmail provider, not the
-  subcommands. Route `openCityMailProvider` (providers.go@814) ONCE — but this is the two-store mail-provider
-  follow-up (resolveMailMessagesStore), i.e. split the beadmail store into messaging-class + session-class.
-  Larger than a substring route; scope with the owner. (This is now the LAST non-deferred blind root.)
-- After cmd_mail: only the DEFERRED entangled set remains (see below) + **Phase 6** (the end-to-end
-  `[beads.classes.sessions]` relocation acceptance test — the authoritative check the substring guard cannot
-  provide). Consider scoping Phase 6 with the owner once the blind roots close.
+- **Phase 6 SUBSTITUTE routing test (recommended, writable today, ~hours, zero prod risk).** The LITERAL
+  end-to-end `[beads.classes.sessions]` test is BLOCKED: the relocation mechanism does not exist yet —
+  `resolveClassStore` (class_store.go:231) is a pure identity stub, and `config.BeadsConfig` has no
+  `Classes` field so `[beads.classes.sessions]` decodes into nothing (see the HANDOFF "Acceptance"
+  section). Instead upgrade the substring guard to a behavioral proof: (A) seam-parity — drive
+  `cliSessionStore`/`cliSessionFrontDoor` with a recording fake `beads.Store`, assert every session op
+  hits the injected store; (B) classifier-create — assert `createTarget(coordclass.Classify(b))` routes
+  session+gc:wait→ClassSessions, work/mail/nudge→their classes. Reuse `countingStore`/`recordingStore`.
+- **OR the DEFERRED entangled set** (each its own coordinated effort): cmd_handoff.go+cmd_runtime_drain.go
+  (paired; also closes cmd_handoff.go:312 `beadmail.New` — the last single-store mail construction),
+  cmd_wait.go (owner-approved), cmd_nudge.go, cmd_sling.go, cmd_start.go reconcile cascade.
+- **OR build the relocation MECHANISM** (the multi-day feature that makes the whole pass pay off +
+  unblocks the real E2E): a `BeadsConfig.Classes` config struct + a class-keyed store opener + a
+  non-identity `resolveClassStore`. Deserves its own spec.
+
+**DONE at CONT-44 (do not redo):** cmd_mail — the two-store beadmail split (commit `85c659be1`).
+`beadmail.Provider` gained a `sessionStore` field; `New`/`NewCached` are identity shims over new
+`NewWithStores`/`NewCachedWithStores` (0 caller edits, 77 callers byte-identical); the 11 session sites
+route to `p.sessionStore` (Reply's original-MESSAGE Get correctly stayed on `store`); both prod paths
+wired (`openCityMailProvider` CLI via `cliSessionStore`, `newCityMailProvider` controller via
+`resolveSessionStore`). providers.go now FULLY routed (was PARTIAL). Fable review = GO (COULD-NOT-REFUTE).
+The only residual single-store beadmail construction is cmd_handoff.go:312 (in the deferred paired set).
 
 **DONE at CONT-43 (do not redo):** the gc status trio — cmd_status.go (`gc rig status`),
 cmd_citystatus.go + city_status_snapshot.go (`gc status`). SURGICAL/multi-class: routed the session reads

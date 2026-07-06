@@ -568,3 +568,46 @@ Full gates: gofmt · build · vet · golangci-lint 0 · targeted status+guard te
 adversarial review. REMAINING immediate = cmd_mail.go (two-store mail-provider follow-up, the last
 non-deferred blind root); then the deferred entangled set (cmd_wait, cmd_handoff+cmd_runtime_drain,
 cmd_nudge, cmd_sling, cmd_start cascade) + Phase 6 acceptance test.
+
+---
+
+**Session 2026-07-06 (CONT-44) — cmd_mail DONE via the beadmail two-store split; the LAST
+non-deferred blind root is closed + the deferred two-store mail-provider follow-up resolved.**
+Commit `85c659be1` (4 files) on `upstream/object-front-doors-cleanup` (#3839 DRAFT). Detail in
+`RELOCATION-ROUTING-{HANDOFF,NEXT-SESSION-PROMPT}.md`.
+
+The session access lived in the SHARED beadmail provider, not the 12 cmd_mail subcommands. Split
+`beadmail.Provider` into a messaging store (`store`) + a session store (`sessionStore`) via new
+`NewWithStores`/`NewCachedWithStores`; `New`/`NewCached` became identity shims (msg==sess) so all 77
+existing callers (74 in cmd_mail_test.go + cmd_handoff.go + fake_state_test.go + providers_test.go) are
+byte-identical and untouched. Per-consumer census classified all 30 `p.store` sites: 11 SESSION sites →
+`p.sessionStore` (cachedSessionBeads guard/ListAllSessionBeads/cache.get; resolveSenderRoute
+guard/ResolveSessionID/session-bead Get; recipientRoutes guard; recipientSessionMatchesByCurrentAddress
+Get/RepairEmptyType; recipientSessionMatchesByMetadata List/RepairEmptyType); the 19 MESSAGING sites
+stayed on `store` — the landmine being **Reply's original-MESSAGE Get (stayed on `store`)** vs
+resolveSenderRoute's session-bead Get (moved). Wired both prod paths through the class seams:
+`openCityMailProvider` (CLI — `openCityStore`→`openCityStoreWithPath` for cityPath, session via
+`cliSessionStore`, no-refresh cfg loader) and `newCityMailProvider` (controller — session via
+`resolveSessionStore`, using the resolveMailMessagesStore it previously discarded). providers.go is now
+FULLY routed (was PARTIAL); its guard note updated. Gates: gofmt·build·vet·golangci-lint 0·beadmail +
+cmd/gc mail/provider/guard tests·revert-canary (neutralized BOTH providers.go `cliSessionStore(`
+tripwires via space-insertion → guard fired naming the file → restored)·**fable adversarial byte-identity
+review = GO, COULD-NOT-REFUTE on all 4 claims**. Documented delta: the `GC_MAIL=<custom>` path now parses
+city.toml (applyFeatureFlags global write) where it loaded no config before — inert (no gc-mail path reads
+those globals), the accepted no-refresh-loader side effect.
+
+**KEY STRATEGIC FINDING — Phase 6 is blocked on building the relocation mechanism.** A 3-agent scoping
+workflow (wf_4b0f0fb4-974) + independent ground-truth proved the literal end-to-end
+`[beads.classes.sessions]` relocation acceptance test CANNOT be written today: (1) `resolveClassStore`
+(class_store.go:231) is a pure identity stub ignoring cfg/class (pinned by
+`TestControllerStateClassAccessorsAreIdentity` by-pointer); (2) `config.BeadsConfig` has NO `Classes`
+field, so `[beads.classes.sessions]` decodes into nothing (`BeadPolicyConfig` only has a `Storage`
+retention tier, not a backend selector); (3) the beads factory `StoreOpenOptions` has no class dimension.
+So configuring a distinct sessions backend opens no distinct store. The real E2E needs a multi-day
+production feature first (Classes config struct + class-keyed opener + non-identity resolveClassStore).
+**Writable today** = a SUBSTITUTE routing test (seam-parity with a recording fake + classifier-create
+asserting `createTarget(coordclass.Classify(b))`), which upgrades the substring guard to a behavioral
+proof but can't prove the non-front-door reads were exhaustively routed. Recommend landing the substitute
+now, gating the full E2E behind the mechanism work. **No non-deferred blind roots remain** — the next
+session picks (with the owner) among: Phase 6 substitute test, the deferred entangled set, or building the
+mechanism.
