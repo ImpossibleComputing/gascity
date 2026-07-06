@@ -1117,6 +1117,25 @@ func infraScopeRoot(cityPath string) string {
 	return filepath.Join(cityPath, ".gc", "infra")
 }
 
+// initShouldSeedInfraStore reports whether `gc init` should provision a NEW city
+// with the domain/infra store split (a second INFRA Dolt store). It is gated OFF
+// by default so a plain `gc init` stays single-store and byte-identical to
+// upstream Gas City; set GC_INFRA_STORE_SPLIT=1 to activate the split for a newly
+// created city. Existing cities are never affected — activation is the presence
+// of the seeded .gc/infra scope (cityHasInfraStore), which only this seed writes.
+// The gate is intentionally an env opt-in rather than a default so the split can
+// be flipped LIVE for new cities (and the E2.5 integration test) without changing
+// the behavior of every existing `gc init` invocation; whether new cities should
+// default to two-store is an owner decision left for a follow-up.
+func initShouldSeedInfraStore() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GC_INFRA_STORE_SPLIT"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // cityHasInfraStore reports whether cityPath has a domain/infra store split. The
 // presence of the infra scope's canonical .beads/config.yaml IS the activation
 // boundary: no existing city has this dir, so this returns false everywhere until
@@ -1139,7 +1158,12 @@ func openCityInfraStoreResultAt(cityPath string) (beads.StoreOpenResult, bool, e
 	if !cityHasInfraStore(cityPath) {
 		return beads.StoreOpenResult{}, false, nil
 	}
-	result, err := openStoreResultAtForCity(infraScopeRoot(cityPath), cityPath)
+	// The infra store opens through the SAME production path as the work store,
+	// but with the reserved-prefix minting wrapper so its coordination beads carry
+	// the infra scope's reserved class prefix (the ID-prefix half of the boundary
+	// invariant). It is the single wrapper LAYER, so the optional-capability
+	// assertions the create paths rely on stay intact.
+	result, err := openStoreResultAtForCityWith(infraScopeRoot(cityPath), cityPath, wrapInfraStoreWithBeadPolicies)
 	if err != nil {
 		return beads.StoreOpenResult{}, true, err
 	}
@@ -1291,6 +1315,16 @@ func openStoreAtForCity(storePath, cityPath string) (beads.Store, error) {
 }
 
 func openStoreResultAtForCity(storePath, cityPath string) (beads.StoreOpenResult, error) {
+	return openStoreResultAtForCityWith(storePath, cityPath, wrapStoreWithBeadPolicies)
+}
+
+// openStoreResultAtForCityWith is openStoreResultAtForCity with an injectable
+// policy-wrap step. The work store uses wrapStoreWithBeadPolicies (the default);
+// the infra store uses wrapInfraStoreWithBeadPolicies so infra beads mint
+// reserved-prefix ids. wrap is the single wrapper LAYER (never re-wrapped), so
+// the optional-capability assertions (GraphApplyFor / HandlesFor /
+// StorageCreateStore) stay intact regardless of which variant is used.
+func openStoreResultAtForCityWith(storePath, cityPath string, wrap func(beads.Store, *config.City) beads.Store) (beads.StoreOpenResult, error) {
 	runtimeCityPath := cityPath
 	if runtimeCityPath == "" {
 		runtimeCityPath = cityForStoreDir(storePath)
@@ -1307,7 +1341,7 @@ func openStoreResultAtForCity(storePath, cityPath string) (beads.StoreOpenResult
 	}
 	if strings.HasPrefix(provider, "exec:") && !providerUsesBdStoreContract(provider) {
 		store, err := openExecStoreAtForCity(provider, scopeRoot, runtimeCityPath)
-		return beads.StoreOpenResult{Store: wrapStoreWithBeadPolicies(store, cfg), Diagnostic: beads.ExecStoreDiagnostic()}, err
+		return beads.StoreOpenResult{Store: wrap(store, cfg), Diagnostic: beads.ExecStoreDiagnostic()}, err
 	}
 	result, err := beads.OpenStoreAtForCity(context.Background(), beads.StoreOpenOptions{
 		ScopeRoot:        scopeRoot,
@@ -1338,7 +1372,7 @@ func openStoreResultAtForCity(storePath, cityPath string) (beads.StoreOpenResult
 	if err != nil {
 		return beads.StoreOpenResult{}, err
 	}
-	result.Store = wrapStoreWithBeadPolicies(result.Store, cfg)
+	result.Store = wrap(result.Store, cfg)
 	return result, nil
 }
 

@@ -8,14 +8,15 @@ import (
 	"github.com/gastownhall/gascity/internal/mail"
 )
 
-// This file is the controller/CLI-side seam of the per-class store refactor.
-// It gives each coordination class a named accessor so a future per-class
-// backend becomes a change here rather than at every call site. On a
-// single-store city every class collapses to the same concrete store, so these
-// are identity helpers today: each returns the exact wrapped+cached store the
-// call site already uses, never a re-wrapped instance, so optional-capability
-// type assertions (GraphApplyFor, HandlesFor, StorageCreateStore, Counter, ...)
-// keep working.
+// This file is the controller/CLI-side seam of the domain/infra store split. It
+// gives each coordination class a named accessor so class routing is a change
+// here rather than at every call site. On a single-store city every class
+// collapses to the same concrete store, so these are identity helpers; on a split
+// city the infra store owns the coordination classes (sessions, graph, messaging,
+// orders, nudges) and the work store owns the work class. Either way an accessor
+// returns the exact wrapped+cached store — never a re-wrapped instance — so the
+// optional-capability type assertions (GraphApplyFor, HandlesFor,
+// StorageCreateStore, Counter, ...) keep working.
 
 // graphBeadStore returns the store that owns graph (workflow/v2) beads. It
 // delegates to the exported GraphBeadStore() accessor so the api.State surface
