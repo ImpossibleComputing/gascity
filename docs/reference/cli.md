@@ -53,6 +53,7 @@ gc [flags]
 | [gc mail](#gc-mail) | Send and receive messages between agents and humans |
 | [gc maintenance](#gc-maintenance) | Dolt store maintenance (gc + snapshot) |
 | [gc mcp](#gc-mcp) | Inspect projected MCP config |
+| [gc migrate](#gc-migrate) | Run opt-in data migrations |
 | [gc nudge](#gc-nudge) | Inspect and deliver deferred nudges |
 | [gc order](#gc-order) | Manage orders (scheduled and event-driven dispatch) |
 | [gc pack](#gc-pack) | Manage remote pack sources |
@@ -2288,6 +2289,58 @@ gc mcp list [flags]
 | `--agent` | string |  | show the projected MCP config for this agent |
 | `--json` | bool |  | Output one JSONL result record |
 | `--session` | string |  | show the projected MCP config for this session |
+
+## gc migrate
+
+Run owner-gated, stop-the-world data migrations on the city.
+
+These are explicit, one-time upgrades — never run automatically at gc start.
+Stop the city first (gc stop) before running a migration.
+
+```
+gc migrate
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| [gc migrate infra-store](#gc-migrate-infra-store) | Migrate a single-db city to the domain/infra two-store layout |
+
+## gc migrate infra-store
+
+Upgrade an existing single-Dolt-db city to the two-store layout.
+
+Infrastructure-class beads (sessions, mail, nudges, orders, and the whole
+formula/orchestration explosion) move into a dedicated city infra store; work
+beads (tasks, epics, bugs, features, user convoys) stay in the domain stores
+untouched. Bead ids are preserved — legacy infra beads keep their HQ/rig-era
+prefix. Cross-boundary dependency edges are kept co-resident with their source
+bead (dangling across the boundary, resolved by the two-store Go seams).
+
+The migration is idempotent, resumable, and crash-safe: it recomputes its plan
+from live store state on every run (no status file), copies before deleting, and
+verifies before deleting, so a crash leaves only re-runnable states and a re-run
+on a migrated city moves nothing.
+
+Stop the city first (gc stop). This command refuses to run while a controller is
+alive. External/hosted Dolt cities are not supported.
+
+```
+gc migrate infra-store [flags]
+```
+
+**Example:**
+
+```
+gc stop
+gc migrate infra-store
+gc migrate infra-store --dry-run
+gc migrate infra-store --json
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--dry-run` | bool |  | report the migration plan without making any writes |
+| `--json` | bool |  | emit the reconciliation ledger as JSON |
 
 ## gc nudge
 
