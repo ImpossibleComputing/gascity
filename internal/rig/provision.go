@@ -1,6 +1,7 @@
 package rig
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/git"
 )
 
 // Provision runs the full rig-add provisioning against the injected deps.
@@ -66,6 +68,24 @@ func Provision(deps Deps, req ProvisionRequest) (config.Rig, ProvisionResult, er
 	rigPathExists, err := StatRigPath(fs, rigPath, req.Adopt)
 	if err != nil {
 		return config.Rig{}, result, err
+	}
+
+	// Step 2.5: clone from --git-url (C3/G15). Guarded by a non-nil
+	// Deps.CloneGitURL so the CLI local path (which passes nil) stays
+	// byte-identical. This step only MATERIALIZES the rig directory that the rest
+	// of Provision already knows how to consume: after a successful clone rigPath
+	// exists (with .git), so it flows through the existing git-detect (step 3) and
+	// skips the MkdirAll (step 10). The staging-dir→rename orchestration and the
+	// pre-clone SSRF host fence (internal/ssrf) are the server layer's job (C4);
+	// on failure that layer removes the partial staging dir. The error is already
+	// URL-redacted by git.Clone, and req.GitURL is never echoed here, so no
+	// embedded credential leaks into the returned error.
+	if deps.CloneGitURL != nil && strings.TrimSpace(req.GitURL) != "" {
+		opts := git.CloneOptions{RecurseSubmodules: req.RecurseSubmodules}
+		if err := deps.CloneGitURL(context.Background(), req.GitURL, rigPath, opts); err != nil {
+			return config.Rig{}, result, fmt.Errorf("cloning rig from git: %w", err)
+		}
+		rigPathExists = true
 	}
 
 	// Step 3: detect git and resolve the default branch.

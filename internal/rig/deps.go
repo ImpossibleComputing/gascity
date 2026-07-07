@@ -1,12 +1,14 @@
 package rig
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/git"
 )
 
 // Deps carries everything the provisioning core needs. It follows the
@@ -51,6 +53,16 @@ type Deps struct {
 	// ProbeBranch returns the rig's git default branch, or "" when unknown.
 	// nil = skip the probe.
 	ProbeBranch func(rigPath string) string
+	// CloneGitURL populates staging dir dstDir from gitURL with the hardened
+	// clone (C3/G15). nil = the caller does not support --git-url (the CLI local
+	// path, or config-append-only), so the clone step is skipped and the flow
+	// stays byte-identical to a local `gc rig add <path>`. When set and it fails,
+	// provisioning is fatal and the server orchestration (C4) removes the staging
+	// dir on rollback. The ctx is the caller's provisioning deadline (G21);
+	// Provision passes context.Background() until it threads a deadline of its
+	// own. The staging-dir→rename orchestration and the pre-clone SSRF host fence
+	// (internal/ssrf) live in the caller, not here.
+	CloneGitURL func(ctx context.Context, gitURL, dstDir string, opts git.CloneOptions) error
 	// NormalizeScopes reconciles canonical bd metadata/config/port mirrors before
 	// the config write (cmd/gc normalizeCanonicalBdScopeFiles). Runs under
 	// rollback protection. nil = fatal at the config-write step for callers that
@@ -89,6 +101,16 @@ type ProvisionRequest struct {
 	Includes       []string
 	StartSuspended bool
 	Adopt          bool
+	// GitURL, when set, is the remote the rig is cloned from at provisioning time
+	// via Deps.CloneGitURL (C3/G15). It is consumed by the clone and never
+	// persisted — no config.Rig field records it — so an embedded credential
+	// (https://user:token@host) cannot land in city.toml. Empty = no clone (the
+	// local `gc rig add <path>` path).
+	GitURL string
+	// RecurseSubmodules opts the provisioning clone back into submodule fetch.
+	// Off by default: a submodule URL is a second untrusted-URL surface the
+	// pre-clone SSRF host fence never saw.
+	RecurseSubmodules bool
 }
 
 // ProvisionResult carries the structured outcome the caller renders (CLI
