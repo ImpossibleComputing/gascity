@@ -117,19 +117,24 @@ func resolveReadTarget() (remoteClient *api.Client, isRemote bool, cityPath stri
 // a hardened city requires (gate G18). Because a remote client is
 // non-fallbackable (gate G1), a remote mutation error surfaces rather than
 // silently falling back to a local store. For a LOCAL target it returns
-// isRemote=false and the resolved cityPath, and the caller uses its existing
-// local seam.
-func resolveWriteTarget() (remoteClient *api.Client, isRemote bool, cityPath string, err error) {
+// isRemote=false and a nil client; the caller re-resolves the city through its
+// existing local seam (unlike the read side, no local cityPath is threaded — the
+// write callers already re-run resolveCity on the local branch).
+//
+// target is the resolved *remoteTarget when isRemote is true (nil for a local
+// target), so a caller can echo the target and build a resume recipe naming the
+// context/URL without re-running the resolver.
+func resolveWriteTarget() (remoteClient *api.Client, isRemote bool, target *remoteTarget, err error) {
 	ctx, err := resolveContextAllowRemote()
 	if err != nil {
-		return nil, false, "", err
+		return nil, false, nil, err
 	}
 	if ctx.Remote != nil {
 		c, berr := buildRemoteWriteClient(ctx.Remote)
 		if berr != nil {
-			return nil, true, "", berr
+			return nil, true, ctx.Remote, berr
 		}
-		return c, true, "", nil
+		return c, true, ctx.Remote, nil
 	}
-	return nil, false, ctx.CityPath, nil
+	return nil, false, nil, nil
 }

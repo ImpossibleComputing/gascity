@@ -19,7 +19,7 @@ import (
 // the name can be joined onto the server-derived rigs/ clone destination or the
 // per-name lock key (a whitespace name would otherwise 500 in withRigNameLock).
 func TestValidateRigNamePathContainment(t *testing.T) {
-	accept := []string{"web", "api-2", "café-%20", "a..b", "rig.v2"}
+	accept := []string{"web", "api-2", "api_v2", "a..b", "rig.v2"}
 	for _, name := range accept {
 		if err := validateRigName(name); err != nil {
 			t.Errorf("validateRigName(%q) = %v, want nil", name, err)
@@ -35,6 +35,14 @@ func TestValidateRigNamePathContainment(t *testing.T) {
 		`a\b`,        // windows-style separator
 		"rigs/../hq", // traversal
 		"123",        // JSON-inferable numeric (preserved)
+		// Tightened allowlist (fix #9): a derived-from-git-URL basename could
+		// smuggle these into a filename / lock key / URL path segment.
+		"web%20",                // percent (URL-encoded space)
+		"a?b",                   // query separator
+		"a#b",                   // fragment separator
+		"a b",                   // embedded space
+		"café",                  // non-ASCII rune
+		strings.Repeat("a", 65), // > 64 chars
 	}
 	for _, name := range reject {
 		if err := validateRigName(name); !errors.Is(err, errInvalidRigName) {

@@ -69,6 +69,8 @@ func newRigAddCmd(stdout, stderr io.Writer) *cobra.Command {
 	var defaultBranchFlag string
 	var adoptFlag bool
 	var jsonOutput bool
+	var gitURLFlag string
+	var requestIDFlag string
 	cmd := &cobra.Command{
 		Use:   "add <path>",
 		Short: "Register a project as a rig",
@@ -105,6 +107,56 @@ check remains informational.`,
   gc rig add /path/to/existing --adopt`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
+			// Remote city: drive server-side provisioning over the control plane
+			// before any local city/config/store work. The branch runs ahead of both
+			// resolveCity() paths below so a resolved remote target never touches
+			// local disk (gate G1). A remote error is non-fallbackable.
+			remoteC, isRemote, target, rerr := resolveWriteTarget()
+			if rerr != nil {
+				if jsonOutput {
+					if writeJSONError(stdout, stderr, "city_resolve_failed", fmt.Sprintf("gc rig add: %v", rerr), 1) != 0 {
+						return errExit
+					}
+					return nil
+				}
+				fmt.Fprintf(stderr, "gc rig add: %v\n", rerr) //nolint:errcheck // best-effort stderr
+				return errExit
+			}
+			if isRemote {
+				if cmdRigAddRemote(remoteC, target, args, gitURLFlag, requestIDFlag, nameFlag, prefixFlag, defaultBranchFlag, includes, startSuspended, adoptFlag, jsonOutput, stdout, stderr) != 0 {
+					return errExit
+				}
+				return nil
+			}
+			// LOCAL path (byte-identical to the pre-C7 behavior). --git-url is a
+			// remote-only feature in C7: local clone semantics are un-specced, and
+			// teaching the local path to clone would risk the byte-identical local
+			// output the gate protects. Refuse it loudly.
+			if strings.TrimSpace(gitURLFlag) != "" {
+				msg := "gc rig add: --git-url requires a remote city target (--context/--city-url); for a local city run `git clone` then `gc rig add <path>`"
+				if jsonOutput {
+					if writeJSONError(stdout, stderr, "unsupported_local", msg, 1) != 0 {
+						return errExit
+					}
+					return nil
+				}
+				fmt.Fprintln(stderr, msg) //nolint:errcheck // best-effort stderr
+				return errExit
+			}
+			// --request-id is the idempotency key for a server-side --git-url
+			// provision; it has no meaning locally. Refuse it loudly rather than
+			// silently ignoring it (symmetric with the --git-url guard above).
+			if strings.TrimSpace(requestIDFlag) != "" {
+				msg := "gc rig add: --request-id requires a remote city target (--context/--city-url); it is the idempotency key for a server-side --git-url provision"
+				if jsonOutput {
+					if writeJSONError(stdout, stderr, "unsupported_local", msg, 1) != 0 {
+						return errExit
+					}
+					return nil
+				}
+				fmt.Fprintln(stderr, msg) //nolint:errcheck // best-effort stderr
+				return errExit
+			}
 			if jsonOutput {
 				cityPath, err := resolveCity()
 				if err != nil {
@@ -133,12 +185,14 @@ check remains informational.`,
 		},
 	}
 	cmd.Flags().StringArrayVar(&includes, "include", nil, "pack source for rig agents (repeatable; writes canonical rig imports)")
-	cmd.Flags().StringVar(&nameFlag, "name", "", "rig name (default: directory basename)")
+	cmd.Flags().StringVar(&nameFlag, "name", "", "rig name (default: directory basename, or git URL basename for --git-url)")
 	cmd.Flags().StringVar(&prefixFlag, "prefix", "", "bead ID prefix (default: derived from name)")
 	cmd.Flags().StringVar(&defaultBranchFlag, "default-branch", "", "mainline branch (default: auto-detect from origin/HEAD or current branch)")
 	cmd.Flags().BoolVar(&startSuspended, "start-suspended", false, "add rig in suspended state (dormant-by-default)")
 	cmd.Flags().BoolVar(&adoptFlag, "adopt", false, "adopt existing .beads/ directory (skip init)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSONL format")
+	cmd.Flags().StringVar(&gitURLFlag, "git-url", "", "git URL to clone into a new rig on a REMOTE city (server-side provisioning)")
+	cmd.Flags().StringVar(&requestIDFlag, "request-id", "", "idempotency key for a remote --git-url add; reuse it to resume/retry a provision")
 	return cmd
 }
 

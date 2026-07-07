@@ -29280,11 +29280,12 @@ func (r GetV0CityByCityNameRigsResponse) StatusCode() int {
 }
 
 type CreateRigResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *RigCreateResponseBody
-	JSON201      *RigCreateResponseBody
-	JSON202      *RigCreateResponseBody
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *RigCreateResponseBody
+	JSON201                       *RigCreateResponseBody
+	JSON202                       *RigCreateResponseBody
+	ApplicationproblemJSONDefault *ErrorModel
 }
 
 // Status returns HTTPResponse.Status
@@ -35867,6 +35868,13 @@ func ParseCreateRigResponse(rsp *http.Response) (*CreateRigResponse, error) {
 			return nil, err
 		}
 		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
 
 	}
 

@@ -125,6 +125,17 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	// genclient/dashboard get one type discriminated by status.
 	rigBodyRef := sm.humaAPI.OpenAPI().Components.Schemas.Schema(
 		reflect.TypeOf(RigCreateResponseBody{}), true, "RigCreateResponseBody")
+	// Huma's defineErrors only synthesizes the default application/problem+json
+	// error response when op.Responses has at most one entry (huma.go: the
+	// `len(op.Responses) <= 1` guard). Declaring the 200/202 union bodies manually
+	// trips that guard, so the default error response would be dropped and the
+	// generated CreateRigResponse would lose ApplicationproblemJSONDefault —
+	// degrading every 400/409 (including the structured 409 that carries the
+	// re-attach request_id + event_cursor) to a detail-less "API returned NNN".
+	// Restore it here so it references the same ErrorModel schema Huma emits for
+	// every other cityPost op.
+	errModelRef := sm.humaAPI.OpenAPI().Components.Schemas.Schema(
+		reflect.TypeOf(huma.ErrorModel{}), true, "ErrorModel")
 	cityRegister(sm, huma.Operation{
 		OperationID:   "create-rig",
 		Method:        http.MethodPost,
@@ -140,6 +151,10 @@ func (sm *SupervisorMux) registerCityRoutes() {
 			"202": {
 				Description: "Provisioning accepted; watch the city event stream from event_cursor for request.result.rig.create, rig.provision.progress, or request.failed with this request_id.",
 				Content:     map[string]*huma.MediaType{"application/json": {Schema: rigBodyRef}},
+			},
+			"default": {
+				Description: "Error",
+				Content:     map[string]*huma.MediaType{"application/problem+json": {Schema: errModelRef}},
 			},
 		},
 	}, (*Server).humaHandleRigCreate)

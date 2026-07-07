@@ -3196,10 +3196,12 @@ gc rig add /path/to/existing --adopt
 |------|------|---------|-------------|
 | `--adopt` | bool |  | adopt existing .beads/ directory (skip init) |
 | `--default-branch` | string |  | mainline branch (default: auto-detect from origin/HEAD or current branch) |
+| `--git-url` | string |  | git URL to clone into a new rig on a REMOTE city (server-side provisioning) |
 | `--include` | stringArray |  | pack source for rig agents (repeatable; writes canonical rig imports) |
 | `--json` | bool |  | Output in JSONL format |
-| `--name` | string |  | rig name (default: directory basename) |
+| `--name` | string |  | rig name (default: directory basename, or git URL basename for --git-url) |
 | `--prefix` | string |  | bead ID prefix (default: derived from name) |
+| `--request-id` | string |  | idempotency key for a remote --git-url add; reuse it to resume/retry a provision |
 | `--start-suspended` | bool |  | add rig in suspended state (dormant-by-default) |
 
 ## gc rig list

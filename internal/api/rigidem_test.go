@@ -143,12 +143,12 @@ func TestRigIdemValidateRequestID(t *testing.T) {
 }
 
 func TestRigIdemValidateRigName(t *testing.T) {
-	for _, name := range []string{"web", "api-2", "café-%20"} {
+	for _, name := range []string{"web", "api-2", "api_v2"} {
 		if err := validateRigName(name); err != nil {
 			t.Errorf("validateRigName(%q) = %v, want nil", name, err)
 		}
 	}
-	for _, name := range []string{"", "123", "true", "null", "42"} {
+	for _, name := range []string{"", "123", "true", "null", "42", "café-%20"} {
 		if err := validateRigName(name); !errors.Is(err, errInvalidRigName) {
 			t.Errorf("validateRigName(%q) = %v, want errInvalidRigName", name, err)
 		}

@@ -87,6 +87,14 @@ var errInvalidRigName = errors.New("invalid rig name")
 // construction.
 var requestIDCharset = regexp.MustCompile(`^[A-Za-z0-9._~:-]{8,200}$`)
 
+// rigNameCharset is the filename/URL-safe allowlist for a rig name. The name
+// becomes a filesystem path segment (rigs/<name>), a per-name lock key, a bd
+// metadata filter value, AND a /v0/city/{c}/rig/{name} URL path segment, so it
+// must exclude everything a derived-from-git-URL-basename name could smuggle in:
+// '%', '?', '#', space, and every non-ASCII rune. Mirrors the requestIDCharset
+// approach.
+var rigNameCharset = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
 // validateRequestID enforces G13 §2 for a client-supplied request_id. It
 // runs at the handler edge before any lock, index, or store access;
 // admitRigCreate assumes its input has already passed. The json.Valid guard
@@ -116,15 +124,21 @@ func validateRequestID(id string) error {
 // path-containment guard (a separator or ".." segment could steer the clone —
 // and its RemoveAll teardown — outside the rigs/ directory).
 func validateRigName(name string) error {
-	if strings.TrimSpace(name) == "" {
+	// Allowlist first: this alone rejects empty, whitespace, separators, '%',
+	// '?', '#', and every non-ASCII rune, collapsing the prior deny-list.
+	if !rigNameCharset.MatchString(name) {
 		return errInvalidRigName
 	}
+	// A purely numeric name (e.g. "123") passes the charset but is JSON-inferable,
+	// so it would hit the bd --metadata-field type-inference foot-gun on the
+	// durable rig_name scan; reject it as the request_id guard does.
 	if json.Valid([]byte(name)) {
 		return errInvalidRigName
 	}
-	// The name is joined onto the server-derived rigs/ path for a git_url add and
-	// keyed into the per-name lock. A path separator or a ".." path segment could
-	// escape rigs/, so reject them outright.
+	// The allowlist already excludes '/' and '\\', but a bare ".." (or a "../"
+	// pair that a future charset change might admit) must never steer the clone
+	// destination — filepath.Join("rigs", name) — or its RemoveAll teardown
+	// outside rigs/. Keep the containment guard as defense in depth.
 	if strings.ContainsAny(name, `/\`) {
 		return errInvalidRigName
 	}

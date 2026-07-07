@@ -27688,6 +27688,21 @@
                 "$ref": "#/components/headers/X-GC-Request-Id"
               }
             }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error",
+            "headers": {
+              "X-GC-Request-Id": {
+                "$ref": "#/components/headers/X-GC-Request-Id"
+              }
+            }
           }
         },
         "summary": "Create a rig"
