@@ -238,6 +238,24 @@ func runControlDispatcherWithStoreAndConfig(cityPath, storePath string, store be
 			opts.PrepareRecipe = func(recipe *formula.Recipe, source beads.Bead) error {
 				return decorateDrainItemRecipe(recipe, source, store, workflowStoreRefForDir(storePath, cityPath, loadedCityName(cfg, cityPath), cfg), loadedCityName(cfg, cityPath), cityPath, cfg)
 			}
+			// On a split city the drain control runs in the graph/infra store, but a
+			// v2 input convoy + its members + tracks edges live in the WORK store.
+			// Provide the work-class store tail so drain resolves membership and
+			// writes unit-convoy tracks across the boundary. openSourceWorkflowStores
+			// is work-class only (city HQ + rigs, never the infra store) — exactly
+			// the member tail. No-op on a single-store city.
+			if cityHasInfraStore(cityPath) {
+				memberViews, memberSkips, memberErr := openSourceWorkflowStores(cfg, cityPath, "")
+				if memberErr != nil {
+					return fmt.Errorf("opening drain member stores: %w", memberErr)
+				}
+				if len(memberSkips) > 0 {
+					return fmt.Errorf("drain member stores degraded: %s", formatSourceWorkflowStoreSkips(memberSkips))
+				}
+				for _, view := range memberViews {
+					opts.MemberStores = append(opts.MemberStores, view.store)
+				}
+			}
 		case "retry-eval":
 			sp := dispatchControlSessionProvider()
 			opts.RecycleSession = func(subject beads.Bead) error {
