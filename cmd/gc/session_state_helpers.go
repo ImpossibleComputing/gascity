@@ -45,6 +45,20 @@ func poolSessionIsLive(session beads.Bead) bool {
 	return true
 }
 
+// poolSessionIsLiveInfo is the session.Info mirror of poolSessionIsLive. It
+// reads the RAW state metadata (Info.MetadataState) and delegates the
+// drained/asleep-drained check to isDrainedSessionInfo, matching the bead
+// form's untrimmed-key reads.
+func poolSessionIsLiveInfo(i sessionpkg.Info) bool {
+	if strings.TrimSpace(i.MetadataState) == "asleep" {
+		return false
+	}
+	if isDrainedSessionInfo(i) {
+		return false
+	}
+	return true
+}
+
 // isPoolSessionSlotFreeable reports whether a session's bead is in a terminal
 // state where the pool slot it occupies can be freed — either explicitly
 // drained, or asleep from a normal idle transition. Sessions parked via
