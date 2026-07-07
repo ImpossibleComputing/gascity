@@ -1338,6 +1338,15 @@ func runController(
 	cs.startEmergencyEventRelay(ctx)
 	cs.startMaintenanceLoop(ctx)
 
+	// G13 §6 sweep-before-serve: reconcile orphan in_flight rig-create idem
+	// records (their goroutines did not survive this restart) BEFORE the API mux
+	// starts serving, so a same-id retry can never re-clone over un-torn-down
+	// debris. Best-effort — a partial-teardown failure is logged and leaves that
+	// one record un-retryable, never blocking startup.
+	if err := cs.sweepOrphanRigProvisions(ctx); err != nil {
+		fmt.Fprintf(stderr, "api: rig-create boot sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+	}
+
 	// Start API server if configured. Standalone city mode wraps the
 	// single city in a SupervisorMux so every endpoint is served at its
 	// real scoped path (/v0/city/{cityName}/...) — matching the

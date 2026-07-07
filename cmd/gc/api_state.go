@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1494,6 +1495,75 @@ func (cs *controllerState) DeleteAgent(name string) error {
 	})
 }
 
+// assertRigPathWithinCity rejects a resolved rig working-tree path that escapes
+// the city root. It guards EVERY HTTP rig-create entry — the sync path
+// (controllerState.CreateRig) and the async git_url path (ProvisionRigFromGit) —
+// plus the physical teardown (TeardownPartialRig): a hosted API caller must not
+// steer the server's MkdirAll+store-write (rig.Provision creates an absent path
+// and writes .beads/.gitignore/.env into it) or the clone/RemoveAll outside the
+// city via a "../" or absolute path. It mirrors the configedit path-containment
+// precedent.
+//
+// It is deliberately NOT applied to internal/rig.Provision itself or the cmd/gc
+// CLI wrapper: local `gc rig add <arbitrary/abs/path>` reaches rig.Provision
+// directly (never through this method) and legitimately registers rigs anywhere,
+// staying byte-identical. The error wraps configedit.ErrValidation so the async
+// failure mapper renders invalid_request and the sync mapper renders a 4xx rather
+// than a 500.
+func assertRigPathWithinCity(cityPath, resolved string) error {
+	// Lexical check first: rejects "../" escapes and absolute paths that resolve
+	// to a sibling/parent of the city.
+	if err := relWithinCity(cityPath, resolved); err != nil {
+		return err
+	}
+	// Symlink-aware check: a "../"-free lexical path can still escape through a
+	// symlinked ancestor (e.g. <city>/link -> /outside, then a clone into
+	// link/rig). Canonicalize the city root and the nearest EXISTING ancestor of
+	// the (not-yet-created) target and re-check containment on the real paths.
+	realCity, err := filepath.EvalSymlinks(cityPath)
+	if err != nil {
+		realCity = filepath.Clean(cityPath)
+	}
+	realTarget, err := realPathForContainment(resolved)
+	if err != nil {
+		return fmt.Errorf("%w: resolving rig path %s: %w", configedit.ErrValidation, resolved, err)
+	}
+	return relWithinCity(realCity, realTarget)
+}
+
+// relWithinCity reports the containment error if target is not lexically under
+// base (the shared check both the lexical and symlink-resolved passes use).
+func relWithinCity(base, target string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("%w: rig path %s escapes the city root", configedit.ErrValidation, target)
+	}
+	return nil
+}
+
+// realPathForContainment canonicalizes the nearest EXISTING ancestor of target
+// (a git_url clone destination is absent until the clone runs) so a symlinked
+// ancestor cannot smuggle the path outside the city, then re-appends the
+// not-yet-created tail. It returns target unchanged if nothing along the path
+// resolves.
+func realPathForContainment(target string) (string, error) {
+	cur := filepath.Clean(target)
+	tail := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(resolved, tail), nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(target), nil // reached the root; nothing resolvable
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
+}
+
 // CreateRig provisions a rig through internal/rig.Provision (Decision 7) and
 // commits it to controller state through the standard mutateAndPoke handshake.
 //
@@ -1512,6 +1582,16 @@ func (cs *controllerState) CreateRig(r config.Rig) error {
 	// Resolve against the city dir, never the daemon CWD, so a same-named rig
 	// in the controller's working directory can never win.
 	r.Path = resolveStoreScopeRoot(cs.cityPath, rigPath)
+	// City-root containment: the API rig-create must not write a rig outside the
+	// city sandbox. rig.Provision MkdirAll's an absent path and writes a beads
+	// store, .gitignore, and .beads/.env into it, so an uncontained client path
+	// (../-escaping or absolute) is a server-side dir-create + file-plant primitive
+	// outside the city — the same one the async git_url path guards against. The
+	// local CLI `gc rig add <arbitrary/abs path>` reaches rig.Provision directly,
+	// not through this method, so it stays uncontained by design.
+	if err := assertRigPathWithinCity(cs.cityPath, r.Path); err != nil {
+		return err
+	}
 	_, err := cs.provisionRigLocked(r, nil)
 	return err
 }
@@ -1522,7 +1602,10 @@ func (cs *controllerState) CreateRig(r config.Rig) error {
 // reuses CreateRig's provisioning handshake under the guard. When r.Path is
 // empty the server derives rigs/<name>. onStep (nil-safe) receives progress.
 // The returned rig carries the resolved prefix/branch for the terminal event.
-func (cs *controllerState) ProvisionRigFromGit(ctx context.Context, r config.Rig, gitURL string, onStep func(step, detail string, warn bool)) (config.Rig, error) {
+// The config.Rig result is consumed across the StateMutator boundary by
+// spawnRigProvision; unparam only sees cmd/gc's error-path test call sites,
+// which discard it, hence the directive.
+func (cs *controllerState) ProvisionRigFromGit(ctx context.Context, r config.Rig, gitURL string, onStep func(step, detail string, warn bool), onManifest func(api.RigProvisionManifest)) (config.Rig, error) { //nolint:unparam
 	gitURL = strings.TrimSpace(gitURL)
 	if gitURL == "" {
 		return config.Rig{}, fmt.Errorf("%w: git_url is required", configedit.ErrValidation)
@@ -1532,27 +1615,267 @@ func (cs *controllerState) ProvisionRigFromGit(ctx context.Context, r config.Rig
 		// Server-derived clone destination for git_url adds: rigs/<name> under
 		// the city dir. resolveStoreScopeRoot anchors it to the city, never CWD.
 		rawPath = filepath.Join("rigs", r.Name)
+	} else if filepath.IsAbs(rawPath) {
+		// For a git_url add the clone destination is server-derived; a client must
+		// not pin an absolute path (it could point outside the city, and the G14
+		// rollback would then RemoveAll a caller-controlled directory). A relative
+		// path is still permitted but is contained under the city root below.
+		return config.Rig{}, fmt.Errorf("%w: git_url rig add must not specify an absolute path", configedit.ErrValidation)
 	}
 	r.Path = resolveStoreScopeRoot(cs.cityPath, rawPath)
+
+	// City-root containment: a relative "../" path resolves outside the city, and
+	// the clone + its RemoveAll teardown must never escape it. Reject before any
+	// filesystem side effect (Stat/clone/manifest).
+	if err := assertRigPathWithinCity(cs.cityPath, r.Path); err != nil {
+		return config.Rig{}, err
+	}
 
 	// Clone OUTSIDE the config lock. The SSRF host fence runs before git; the
 	// URL is never echoed into the progress event (an embedded credential must
 	// not leak onto the event stream). git.Clone re-asserts the scheme allowlist
 	// fail-closed and refuses every non-https, network-reaching form.
+	//
+	// TODO(remote-gc §8, accepted same-user residual): a credential embedded in
+	// git_url is passed to git via argv and is visible in the process table to a
+	// same-user observer. Move to an askpass/credential-helper handoff if that
+	// residual is ever tightened.
 	if err := ensurePublicGitHost(gitURL); err != nil {
 		return config.Rig{}, err
 	}
+
+	// A git_url add requires an ABSENT path: the clone materializes the
+	// directory, so a preexisting one is both a collision and — for the G14
+	// rollback — a dir the request did NOT create and must never remove. Reject
+	// it here so created_dir in the manifest below is always ours to tear down.
+	if _, err := os.Stat(r.Path); err == nil {
+		return config.Rig{}, fmt.Errorf("%w: rig path %s already exists; git_url requires a new path", configedit.ErrValidation, r.Path)
+	} else if !os.IsNotExist(err) {
+		return config.Rig{}, fmt.Errorf("checking rig path %s: %w", r.Path, err)
+	}
+
+	// Record-then-create (C4c §2.2): manifest the dir we are about to create
+	// BEFORE the clone, so a crash mid-clone still leaves the debris findable by
+	// the boot sweep and a runtime failure tears down the partial clone.
+	if onManifest != nil {
+		onManifest(api.RigProvisionManifest{RigName: r.Name, CreatedDir: r.Path})
+	}
+
 	if onStep != nil {
 		onStep("clone", "  Cloning rig working tree from git", false)
 	}
 	if err := git.Clone(ctx, gitURL, r.Path, git.CloneOptions{}); err != nil {
-		return config.Rig{}, fmt.Errorf("cloning rig from git: %w", err)
+		// Wrap with rig.ErrCloneFailed so the async failure mapper classifies it
+		// as clone_failed (distinct from provision_failed). git.Clone already
+		// redacted any embedded credential from the error.
+		return config.Rig{}, fmt.Errorf("%w: %w", rig.ErrCloneFailed, err)
 	}
 
 	// Provision under the guard. The freshly-cloned dir exists (with .git), so
 	// rig.Provision flows it through the git-detect / fresh-add path — git_url
 	// never enters ProvisionRequest, so nothing here can regress the sync path.
-	return cs.provisionRigLocked(r, onStep)
+	provisioned, err := cs.provisionRigLocked(r, onStep)
+	if err != nil {
+		return config.Rig{}, err
+	}
+
+	// Provision succeeded: extend the manifest with the managed Dolt database
+	// this add minted (if any), so the rollback path can drop it.
+	if onManifest != nil {
+		onManifest(api.RigProvisionManifest{
+			RigName:    r.Name,
+			CreatedDir: r.Path,
+			DoltDB:     cs.provisionedManagedDoltDatabase(r.Path),
+		})
+	}
+	return provisioned, nil
+}
+
+// provisionedManagedDoltDatabase returns the managed Dolt database name a fresh
+// git_url add minted at rigPath, or "" when there is nothing this request may
+// drop: a file-store city, GC_DOLT=skip (the DB is deferred to the controller,
+// not created here), or a metadata.json without a dolt_database. It is the
+// ground truth for the manifest's DoltDB field (C4c §2.2).
+func (cs *controllerState) provisionedManagedDoltDatabase(rigPath string) string {
+	if !cityUsesBdStoreContract(cs.cityPath) || gcDoltSkip() {
+		return ""
+	}
+	db := readDeferredManagedDoltDatabase(filepath.Join(rigPath, ".beads", "metadata.json"), "")
+	return strings.TrimSpace(db)
+}
+
+// assertDroppableManagedDoltDatabase refuses to drop a managed Dolt database
+// name that collides with a reserved system database, the city's own database,
+// or any OTHER rig's managed database. The teardown's DoltDB comes from the
+// cloned repo's .beads/metadata.json (provisionedManagedDoltDatabase), so a
+// crafted repo could name "hq" or a cross-tenant DB; a mismatch is a hard error,
+// never a silent drop, so the caller leaves the record in_flight rather than
+// marking it clean over a database it must not have touched.
+//
+// TODO(remote-gc C4c): prefer deriving the managed DB name deterministically
+// from (city, prefix) for a fresh git_url add instead of trusting the cloned
+// metadata.json at all; this guard is the containment backstop until then.
+func (cs *controllerState) assertDroppableManagedDoltDatabase(rigName, dbName string) error {
+	db := strings.TrimSpace(dbName)
+	if db == "" {
+		return nil
+	}
+	if isReservedManagedDoltDatabase(db) {
+		return fmt.Errorf("%w: refusing to drop reserved dolt database %q during rig %q teardown", configedit.ErrValidation, db, rigName)
+	}
+	cfg := cs.Config()
+	cityDB := canonicalScopeDoltDatabase(cs.cityPath, cs.cityPath, config.EffectiveHQPrefix(cfg))
+	if strings.EqualFold(db, strings.TrimSpace(cityDB)) {
+		return fmt.Errorf("%w: refusing to drop dolt database %q during rig %q teardown: it is the city database", configedit.ErrValidation, db, rigName)
+	}
+	if cfg != nil {
+		for _, r := range cfg.Rigs {
+			if r.Name == rigName || strings.TrimSpace(r.Path) == "" {
+				continue
+			}
+			rigPath := r.Path
+			if !filepath.IsAbs(rigPath) {
+				rigPath = filepath.Join(cs.cityPath, rigPath)
+			}
+			otherDB := canonicalScopeDoltDatabase(cs.cityPath, rigPath, r.EffectivePrefix())
+			if strings.EqualFold(db, strings.TrimSpace(otherDB)) {
+				return fmt.Errorf("%w: refusing to drop dolt database %q during rig %q teardown: it belongs to rig %q", configedit.ErrValidation, db, rigName, r.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// controllerDropManagedDoltDatabase drops a managed Dolt database for the city.
+// It is a package var so the G14 rollback tests can inject a recorder without a
+// live Dolt server; production resolves the city's Dolt endpoint and issues the
+// identifier-escaped DROP through the same client the cleanup engine uses.
+var controllerDropManagedDoltDatabase = func(cs *controllerState, ctx context.Context, dbName string) error {
+	cfg := cs.Config()
+	host := ""
+	cityPort := 0
+	if cfg != nil {
+		host = strings.TrimSpace(cfg.Dolt.Host)
+		cityPort = cfg.Dolt.Port
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	resolution := ResolveDoltPort(PortResolverInput{
+		CityPort: cityPort,
+		Rigs:     loadResolverRigs(cs.cityPath, cfg),
+		FS:       fsys.OSFS{},
+	})
+	if err := fatalPortResolutionError(resolution); err != nil {
+		return fmt.Errorf("resolving dolt port: %w", err)
+	}
+	client, err := newSQLCleanupDoltClient(host, strconv.Itoa(resolution.Port))
+	if err != nil {
+		return fmt.Errorf("opening dolt connection: %w", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort cleanup
+	dropCtx, cancel := context.WithTimeout(ctx, cleanupDropTimeout)
+	defer cancel()
+	return client.DropDatabase(dropCtx, dbName)
+}
+
+// TeardownPartialRig is the physical half of the G14 atomic rollback (C4c §2.3),
+// shared by the runtime rollback, the re-clone poison pre-drop, and the boot
+// sweep. It removes the created working tree (subsuming its .beads store) and
+// drops the manifested managed Dolt database, then best-effort regenerates
+// routes from the on-disk config (the C2.4 R2 refresh-orphan repair). It only
+// ever removes resources the manifest claims THIS request created — a zero
+// manifest is a no-op. Dir/DB failures are returned (debris may remain, so the
+// caller must not mark the record rolled_back); the routes repair is
+// log-only, never gating, since routes are a projection, not debris.
+func (cs *controllerState) TeardownPartialRig(ctx context.Context, m api.RigProvisionManifest) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var errs error
+	if m.CreatedDir != "" {
+		// Re-assert city-root containment before the RemoveAll. CreatedDir is read
+		// back from the durable idempotency record by the boot sweep and the
+		// re-clone pre-drop, so a poisoned record (or a future non-contained writer)
+		// must never be able to drive an RemoveAll outside the city root.
+		if err := assertRigPathWithinCity(cs.cityPath, m.CreatedDir); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("refusing to remove rig dir: %w", err))
+		} else if err := os.RemoveAll(m.CreatedDir); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("removing rig dir %s: %w", m.CreatedDir, err))
+		}
+	}
+	if m.DoltDB != "" {
+		// Defense-in-depth: the DoltDB name is derived from the CLONED repo's
+		// .beads/metadata.json, so a crafted repo could name the city's own
+		// database or a cross-tenant rig's. Refuse the drop (hard error, never a
+		// silent skip) unless the name is safe to drop for THIS rig.
+		if err := cs.assertDroppableManagedDoltDatabase(m.RigName, m.DoltDB); err != nil {
+			errs = errors.Join(errs, err)
+		} else if err := controllerDropManagedDoltDatabase(cs, ctx, m.DoltDB); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("dropping dolt database %q: %w", m.DoltDB, err))
+		}
+	}
+	// Routes repair (best-effort, non-gating): after a refresh-failure rollback
+	// mutateAndPoke restores city.toml/site.toml but not routes.jsonl, so
+	// regenerate routes from the now-restored on-disk config. A load/write
+	// failure here is logged, never joined into the teardown error.
+	if err := cs.regenerateRoutesBestEffort(); err != nil {
+		log.Printf("api: rig teardown %q: regenerating routes: %v", m.RigName, err)
+	}
+	return errs
+}
+
+// regenerateRoutesBestEffort rewrites every rig's routes.jsonl from the current
+// on-disk config. Used by the rollback to drop a removed rig's stale routes.
+func (cs *controllerState) regenerateRoutesBestEffort() error {
+	cfg, _, err := loadCityConfigWithBuiltinPacks(cs.cityPath, extraConfigFiles...)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	return writeAllRigRoutes(collectRigRoutes(cs.cityPath, cfg))
+}
+
+// RigComplete reports whether a rig is fully provisioned — present in the loaded
+// config AND its bead store is structurally valid (a .beads/metadata.json is
+// present) — the boot-sweep completeness probe (C4c §4.2). A crash after
+// Provision committed but before the durable succeeded write leaves such a rig
+// under an in_flight record; the sweep must reconcile it forward, not destroy
+// it. prefix/defaultBranch are the result fields to record on that forward
+// reconcile.
+func (cs *controllerState) RigComplete(rigName string) (bool, string, string) {
+	cfg := cs.Config()
+	if cfg == nil {
+		return false, "", ""
+	}
+	for _, r := range cfg.Rigs {
+		if r.Name != rigName {
+			continue
+		}
+		rigPath := r.Path
+		if strings.TrimSpace(rigPath) == "" {
+			return false, "", ""
+		}
+		if !filepath.IsAbs(rigPath) {
+			rigPath = filepath.Join(cs.cityPath, rigPath)
+		}
+		if _, err := os.Stat(filepath.Join(rigPath, ".beads", "metadata.json")); err != nil {
+			return false, "", ""
+		}
+		return true, r.EffectivePrefix(), r.EffectiveDefaultBranch()
+	}
+	return false, "", ""
+}
+
+// sweepOrphanRigProvisions reconciles orphan in_flight rig-create idempotency
+// records at controller boot (G13 §6 sweep-before-serve). The caller MUST invoke
+// it before the API mux starts serving. Best-effort: it returns a joined error
+// for the caller to log and never blocks startup.
+func (cs *controllerState) sweepOrphanRigProvisions(ctx context.Context) error {
+	store := cs.CityBeadStore()
+	if store == nil {
+		return nil
+	}
+	return api.SweepOrphanRigProvisions(ctx, store, filepath.Clean(strings.TrimSpace(cs.cityPath)), cs)
 }
 
 // provisionRigLocked runs the config-write half of a rig add under the per-city
@@ -1697,17 +2020,21 @@ func (cs *controllerState) provisionRigLocked(r config.Rig, onStep func(step, de
 
 // ensurePublicGitHost SSRF-fences the host of a rig-clone git URL before git
 // runs, delegating to the shared internal/ssrf fence (also used by the pack
-// import path) so the two callers cannot drift. A non-URL form (scp/bare/ext)
-// has no host to fence here; git.Clone's scheme allowlist refuses every such
-// network-reaching form before it connects, so there is no unfenced path. A
-// blocked host is a validation error so the async handler maps it to a
-// blocked_host request.failed code.
+// import path) so the two callers cannot drift. The clone path uses the
+// FAIL-CLOSED EnsurePublicHostStrict variant: a resolution error blocks (the
+// clone is a fresh SSRF surface where an attacker can force a SERVFAIL to slip
+// past a fail-open fence and then win the DNS-rebinding TOCTOU at git's own
+// re-resolution). The pack path stays on the fail-open EnsurePublicHost. A
+// non-URL form (scp/bare/ext) has no host to fence here; git.Clone's scheme
+// allowlist refuses every such network-reaching form before it connects, so
+// there is no unfenced path. A blocked host is a validation error so the async
+// handler maps it to a blocked_host request.failed code.
 func ensurePublicGitHost(gitURL string) error {
 	u, err := url.Parse(strings.TrimSpace(gitURL))
 	if err != nil || u == nil || u.Hostname() == "" {
 		return nil
 	}
-	if err := ssrf.EnsurePublicHost(u.Hostname()); err != nil {
+	if err := ssrf.EnsurePublicHostStrict(u.Hostname()); err != nil {
 		return fmt.Errorf("%w: git host is blocked: %w", configedit.ErrValidation, err)
 	}
 	return nil

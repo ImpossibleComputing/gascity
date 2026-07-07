@@ -2011,6 +2011,14 @@ func reconcileCities(
 		cs.startBeadEventWatcher(cityCtx)
 		cs.startMaintenanceLoop(cityCtx)
 
+		// G13 §6 sweep-before-serve: reconcile this city's orphan in_flight
+		// rig-create idem records before it is published into the registry (and
+		// thus before the SupervisorMux can route a rig-create/sling request to
+		// it), so a same-id retry can never re-clone over un-torn-down debris.
+		if err := cs.sweepOrphanRigProvisions(cityCtx); err != nil {
+			fmt.Fprintf(stderr, "api: rig-create boot sweep (%s): %v\n", cityName, err) //nolint:errcheck // best-effort stderr
+		}
+
 		// Run pool on_boot hooks (same as runController does).
 		if err := runPostPrepareStep("running_pool_on_boot", func() error {
 			runPoolOnBoot(cfg, path, shellRunHook, stderr)

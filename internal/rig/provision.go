@@ -83,7 +83,7 @@ func Provision(deps Deps, req ProvisionRequest) (config.Rig, ProvisionResult, er
 	if deps.CloneGitURL != nil && strings.TrimSpace(req.GitURL) != "" {
 		opts := git.CloneOptions{RecurseSubmodules: req.RecurseSubmodules}
 		if err := deps.CloneGitURL(context.Background(), req.GitURL, rigPath, opts); err != nil {
-			return config.Rig{}, result, fmt.Errorf("cloning rig from git: %w", err)
+			return config.Rig{}, result, fmt.Errorf("%w: %w", ErrCloneFailed, err)
 		}
 		rigPathExists = true
 	}

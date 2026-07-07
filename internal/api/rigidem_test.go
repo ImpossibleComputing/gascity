@@ -236,7 +236,7 @@ func TestRigIdemAdmitNew(t *testing.T) {
 	idx := newRigIdemIndex()
 	body := RigCreateBody{Name: "web", Path: "/srv/web", GitURL: "g://x", RequestID: "req-new-00001"}
 
-	res, err := admitRigCreate(idx, store, fixedCursor("7"), nil, "c1", body)
+	res, err := admitRigCreate(idx, store, fixedCursor("7"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -281,12 +281,12 @@ func TestRigIdemAdmitInflightReplay(t *testing.T) {
 	idx := newRigIdemIndex()
 	body := RigCreateBody{Name: "web", Path: "/srv/web", GitURL: "g://x", RequestID: "req-replay-001"}
 
-	if _, err := admitRigCreate(idx, store, fixedCursor("7"), nil, "c1", body); err != nil {
+	if _, err := admitRigCreate(idx, store, fixedCursor("7"), nil, nil, "c1", body); err != nil {
 		t.Fatalf("first admit: %v", err)
 	}
 	// A second identical POST while the live entry exists replays the ORIGINAL
 	// cursor (7), not the cursor this call would capture (9), and spawns nothing.
-	res, err := admitRigCreate(idx, store, fixedCursor("9"), nil, "c1", body)
+	res, err := admitRigCreate(idx, store, fixedCursor("9"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("replay admit: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRigIdemAdmitExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := admitRigCreate(idx, store, fixedCursor("7"), nil, "c1", body)
+	res, err := admitRigCreate(idx, store, fixedCursor("7"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestRigIdemAdmitReclone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := admitRigCreate(idx, store, fixedCursor("8"), nil, "c1", body)
+	res, err := admitRigCreate(idx, store, fixedCursor("8"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestRigIdemAdmitOrphanNoReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := admitRigCreate(idx, store, fixedCursor("9"), nil, "c1", body)
+	res, err := admitRigCreate(idx, store, fixedCursor("9"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -427,12 +427,12 @@ func TestRigIdemAdmitRequestIDConflict(t *testing.T) {
 		store := beads.NewMemStore()
 		idx := newRigIdemIndex()
 		first := RigCreateBody{Name: "web", Path: "/srv/web", RequestID: "req-conf-0001"}
-		if _, err := admitRigCreate(idx, store, fixedCursor("1"), nil, "c1", first); err != nil {
+		if _, err := admitRigCreate(idx, store, fixedCursor("1"), nil, nil, "c1", first); err != nil {
 			t.Fatal(err)
 		}
 		// Same id, different body (name differs ⇒ digest differs).
 		second := RigCreateBody{Name: "web2", Path: "/srv/web2", RequestID: "req-conf-0001"}
-		_, err := admitRigCreate(idx, store, fixedCursor("1"), nil, "c1", second)
+		_, err := admitRigCreate(idx, store, fixedCursor("1"), nil, nil, "c1", second)
 		var rc *requestIDConflictError
 		if !errors.As(err, &rc) {
 			t.Fatalf("err = %v, want *requestIDConflictError", err)
@@ -457,7 +457,7 @@ func TestRigIdemAdmitRequestIDConflict(t *testing.T) {
 			t.Fatal(err)
 		}
 		changed := RigCreateBody{Name: "web", Path: "/srv/DIFFERENT", RequestID: "req-conf-0002"}
-		_, err = admitRigCreate(idx, store, fixedCursor("1"), nil, "c1", changed)
+		_, err = admitRigCreate(idx, store, fixedCursor("1"), nil, nil, "c1", changed)
 		var rc *requestIDConflictError
 		if !errors.As(err, &rc) {
 			t.Fatalf("err = %v, want *requestIDConflictError", err)
@@ -470,11 +470,11 @@ func TestRigIdemAdmitRigNameConflict(t *testing.T) {
 		store := beads.NewMemStore()
 		idx := newRigIdemIndex()
 		a := RigCreateBody{Name: "web", Path: "/srv/web", RequestID: "req-name-aaa1"}
-		if _, err := admitRigCreate(idx, store, fixedCursor("5"), nil, "c1", a); err != nil {
+		if _, err := admitRigCreate(idx, store, fixedCursor("5"), nil, nil, "c1", a); err != nil {
 			t.Fatal(err)
 		}
 		b := RigCreateBody{Name: "web", Path: "/srv/other", RequestID: "req-name-bbb2"}
-		_, err := admitRigCreate(idx, store, fixedCursor("5"), nil, "c1", b)
+		_, err := admitRigCreate(idx, store, fixedCursor("5"), nil, nil, "c1", b)
 		var nc *rigNameConflictError
 		if !errors.As(err, &nc) {
 			t.Fatalf("err = %v, want *rigNameConflictError", err)
@@ -489,7 +489,7 @@ func TestRigIdemAdmitRigNameConflict(t *testing.T) {
 		idx := newRigIdemIndex()
 		inConfig := func(name string) bool { return name == "web" }
 		b := RigCreateBody{Name: "web", Path: "/srv/web", RequestID: "req-cfg-00001"}
-		_, err := admitRigCreate(idx, store, fixedCursor("5"), inConfig, "c1", b)
+		_, err := admitRigCreate(idx, store, fixedCursor("5"), inConfig, nil, "c1", b)
 		var nc *rigNameConflictError
 		if !errors.As(err, &nc) {
 			t.Fatalf("err = %v, want *rigNameConflictError", err)
@@ -510,7 +510,7 @@ func TestRigIdemAdmitRigNameConflict(t *testing.T) {
 			t.Fatal(err)
 		}
 		b := RigCreateBody{Name: "web", Path: "/srv/web", RequestID: "req-scan-0001"}
-		_, err := admitRigCreate(idx, store, fixedCursor("5"), nil, "c1", b)
+		_, err := admitRigCreate(idx, store, fixedCursor("5"), nil, nil, "c1", b)
 		var nc *rigNameConflictError
 		if !errors.As(err, &nc) {
 			t.Fatalf("err = %v, want *rigNameConflictError", err)
@@ -527,7 +527,7 @@ func TestRigIdemAdmitAbsentRequestID(t *testing.T) {
 
 	// Absent id ⇒ synthetic correlation id, no durable record, but a byName
 	// marker so the name axis still protects the async provision.
-	res, err := admitRigCreate(idx, store, fixedCursor("2"), nil, "c2", RigCreateBody{Name: "web", Path: "/srv/web"})
+	res, err := admitRigCreate(idx, store, fixedCursor("2"), nil, nil, "c2", RigCreateBody{Name: "web", Path: "/srv/web"})
 	if err != nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -552,14 +552,14 @@ func TestRigIdemAdmitAbsentRequestID(t *testing.T) {
 	}
 
 	// A second absent-id add for the SAME name hits the name axis.
-	_, err = admitRigCreate(idx, store, fixedCursor("2"), nil, "c2", RigCreateBody{Name: "web", Path: "/srv/web2"})
+	_, err = admitRigCreate(idx, store, fixedCursor("2"), nil, nil, "c2", RigCreateBody{Name: "web", Path: "/srv/web2"})
 	var nc *rigNameConflictError
 	if !errors.As(err, &nc) {
 		t.Fatalf("second same-name absent-id add err = %v, want *rigNameConflictError", err)
 	}
 
 	// A different name proceeds.
-	res3, err := admitRigCreate(idx, store, fixedCursor("2"), nil, "c2", RigCreateBody{Name: "other", Path: "/srv/other"})
+	res3, err := admitRigCreate(idx, store, fixedCursor("2"), nil, nil, "c2", RigCreateBody{Name: "other", Path: "/srv/other"})
 	if err != nil {
 		t.Fatalf("different-name admit: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestRigIdemAdmitLedgerLagDoubleClone(t *testing.T) {
 	idx := newRigIdemIndex()
 	body := RigCreateBody{Name: "web", Path: "/srv/web", GitURL: "g://x", RequestID: "req-web-0001"}
 
-	r1, err := admitRigCreate(idx, store, fixedCursor("7"), nil, "c1", body)
+	r1, err := admitRigCreate(idx, store, fixedCursor("7"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("first admit: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestRigIdemAdmitLedgerLagDoubleClone(t *testing.T) {
 		t.Fatalf("first outcome = %d, want rigAdmitNew", r1.outcome)
 	}
 
-	r2, err := admitRigCreate(idx, store, fixedCursor("7"), nil, "c1", body)
+	r2, err := admitRigCreate(idx, store, fixedCursor("7"), nil, nil, "c1", body)
 	if err != nil {
 		t.Fatalf("second admit: %v", err)
 	}

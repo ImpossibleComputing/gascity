@@ -864,7 +864,7 @@ func TestControllerStateCreateRigPokesReconciler(t *testing.T) {
 	cs.pokeCh = make(chan struct{}, 1)
 	cs.configDirty = &atomic.Bool{}
 
-	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: t.TempDir()}); err != nil {
+	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: filepath.Join(cityDir, "rig1")}); err != nil {
 		t.Fatalf("CreateRig: %v", err)
 	}
 
@@ -904,7 +904,7 @@ func TestControllerStateCreateRigRejectsDuplicateName(t *testing.T) {
 	}
 	cs := newControllerState(context.Background(), cfg, runtime.NewFake(), events.NewFake(), "city1", cityDir)
 
-	firstPath := t.TempDir()
+	firstPath := filepath.Join(cityDir, "rig1")
 	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: firstPath}); err != nil {
 		t.Fatalf("first CreateRig: %v", err)
 	}
@@ -919,7 +919,7 @@ func TestControllerStateCreateRigRejectsDuplicateName(t *testing.T) {
 		t.Fatalf("duplicate CreateRig (same path) err = %v, want ErrAlreadyExists", err)
 	}
 	// Same name, different path — the guard keys on name, not path.
-	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: t.TempDir()}); !errors.Is(err, configedit.ErrAlreadyExists) {
+	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: filepath.Join(cityDir, "rig1-alt")}); !errors.Is(err, configedit.ErrAlreadyExists) {
 		t.Fatalf("duplicate CreateRig (different path) err = %v, want ErrAlreadyExists", err)
 	}
 
@@ -950,7 +950,7 @@ func TestControllerStateCreateRigDetectsDefaultBranch(t *testing.T) {
 	}
 	cs := newControllerState(context.Background(), cfg, runtime.NewFake(), events.NewFake(), "city1", cityDir)
 
-	rigDir := newRepoWithOriginHead(t, "master")
+	rigDir := newRepoWithOriginHeadAt(t, filepath.Join(cityDir, "rig1"), "master")
 	if err := cs.CreateRig(config.Rig{Name: "rig1", Path: rigDir}); err != nil {
 		t.Fatalf("CreateRig: %v", err)
 	}
@@ -961,6 +961,31 @@ func TestControllerStateCreateRigDetectsDefaultBranch(t *testing.T) {
 	}
 	if got.Rigs[0].DefaultBranch != "master" {
 		t.Fatalf("DefaultBranch = %q, want %q", got.Rigs[0].DefaultBranch, "master")
+	}
+}
+
+// TestControllerStateCreateRigRejectsOutOfCityPath pins the sync-path city-root
+// containment: the API rig-create is a server-side MkdirAll + store write, so an
+// absolute out-of-city path or a "../"-escaping path must be refused (with
+// ErrValidation → 4xx) before any filesystem side effect. The local CLI reaches
+// rig.Provision directly and is intentionally not constrained this way.
+func TestControllerStateCreateRigRejectsOutOfCityPath(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_DOLT", "skip")
+
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte("[workspace]\nname = \"city1\"\n"), 0o644); err != nil {
+		t.Fatalf("write city.toml: %v", err)
+	}
+	cs := newControllerState(context.Background(), &config.City{Workspace: config.Workspace{Name: "city1"}}, runtime.NewFake(), events.NewFake(), "city1", cityDir)
+
+	for _, p := range []string{filepath.Join(t.TempDir(), "escape"), "../escape"} {
+		if err := cs.CreateRig(config.Rig{Name: "evil", Path: p}); !errors.Is(err, configedit.ErrValidation) {
+			t.Errorf("CreateRig(path=%q) err = %v, want ErrValidation", p, err)
+		}
+	}
+	if got := cs.Config(); got != nil && len(got.Rigs) != 0 {
+		t.Fatalf("a rejected rig leaked into config: %+v", got.Rigs)
 	}
 }
 
@@ -1068,7 +1093,9 @@ func TestControllerStateMutationRollsBackWhenRefreshFails(t *testing.T) {
 	cs.pokeCh = make(chan struct{}, 1)
 	cs.configDirty = &atomic.Bool{}
 
-	err := cs.CreateRig(config.Rig{Name: "rig1", Path: t.TempDir()})
+	// In-city path so containment passes and the refresh-failure path (the thing
+	// this test exercises) is actually reached, not short-circuited.
+	err := cs.CreateRig(config.Rig{Name: "rig1", Path: filepath.Join(cityDir, "rig1")})
 	if err == nil {
 		t.Fatal("CreateRig should fail when refreshing the updated snapshot fails")
 	}
@@ -3144,7 +3171,7 @@ func TestControllerStateMutationsPokeController(t *testing.T) {
 		{
 			name: "create rig",
 			mutate: func(cs *controllerState) error {
-				return cs.CreateRig(config.Rig{Name: "rig2", Path: t.TempDir(), Prefix: "r2"})
+				return cs.CreateRig(config.Rig{Name: "rig2", Path: filepath.Join(cs.cityPath, "rig2"), Prefix: "r2"})
 			},
 			verify: func(t *testing.T, cfg *config.City, _ string) {
 				t.Helper()

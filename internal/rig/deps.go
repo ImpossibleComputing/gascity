@@ -11,6 +11,13 @@ import (
 	"github.com/gastownhall/gascity/internal/git"
 )
 
+// ErrCloneFailed wraps a git-clone failure on the rig-add path so callers can
+// classify it across an interface boundary (the async server maps it to a
+// clone_failed request.failed error_code, distinct from a generic
+// provision_failed). It is errors.Is-matchable; the underlying git error is
+// already URL-redacted by git.Clone before it reaches this wrapper.
+var ErrCloneFailed = errors.New("git clone failed")
+
 // Deps carries everything the provisioning core needs. It follows the
 // internal/sling.SlingDeps discipline: a small set of required infra fields plus
 // nil-optional injected funcs, so both the CLI (cmd/gc) and the API-side

@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/configedit"
+	"github.com/gastownhall/gascity/internal/rig"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/ssrf"
 	workdirutil "github.com/gastownhall/gascity/internal/workdir"
@@ -150,27 +152,35 @@ func (s *Server) rigCreateAsync(ctx context.Context, sm StateMutator, body RigCr
 		out    *RigCreateOutput
 		outErr error
 	)
+	// The name lock is the primary admission critical section; the request_id
+	// lock (taken INSIDE it, a fixed global order) serializes the request_id axis
+	// so two concurrent same-request_id POSTs under DIFFERENT name locks cannot
+	// each reserve a durable record for one (city, request_id).
 	lockErr := withRigNameLock(ctx, s.state.CityPath(), body.Name, func() error {
-		res, err := admitRigCreate(s.rigIdem, store, s.currentCityEventCursor, s.rigInConfig, city, body)
-		if err != nil {
-			outErr = s.mapRigAdmitError(err)
+		return withRigRequestIDLock(ctx, s.state.CityPath(), body.RequestID, func() error {
+			res, err := admitRigCreate(s.rigIdem, store, s.currentCityEventCursor, s.rigInConfig, s.rigComplete, city, body)
+			if err != nil {
+				outErr = s.mapRigAdmitError(err)
+				return nil
+			}
+			switch res.outcome {
+			case rigAdmitNew, rigAdmitReclone:
+				// The cursor was captured under this lock (res.eventCursor) and the
+				// live entry is registered; spawn the provision, then return 202.
+				// recloneManifest is non-empty only on a re-clone: the goroutine
+				// pre-drops the prior attempt's debris before it clones.
+				s.spawnRigProvision(sm, city, res.entry, body, gitURL, res.recloneManifest)
+				out = acceptedRigOutput(res)
+			case rigAdmitInflightReplay:
+				// A goroutine already owns this request_id; replay its cursor, no spawn.
+				out = acceptedRigOutput(res)
+			case rigAdmitExisting:
+				out = existingRigOutput(res)
+			default:
+				outErr = huma.Error500InternalServerError("unknown rig admission outcome")
+			}
 			return nil
-		}
-		switch res.outcome {
-		case rigAdmitNew, rigAdmitReclone:
-			// The cursor was captured under this lock (res.eventCursor) and the
-			// live entry is registered; spawn the provision, then return 202.
-			s.spawnRigProvision(sm, city, res.entry, body, gitURL)
-			out = acceptedRigOutput(res)
-		case rigAdmitInflightReplay:
-			// A goroutine already owns this request_id; replay its cursor, no spawn.
-			out = acceptedRigOutput(res)
-		case rigAdmitExisting:
-			out = existingRigOutput(res)
-		default:
-			outErr = huma.Error500InternalServerError("unknown rig admission outcome")
-		}
-		return nil
+		})
 	})
 	if lockErr != nil {
 		if errors.Is(lockErr, context.Canceled) || errors.Is(lockErr, context.DeadlineExceeded) {
@@ -246,9 +256,10 @@ func (s *Server) mapRigAdmitError(err error) error {
 }
 
 // spawnRigProvision launches the detached provisioning goroutine for a
-// fresh/re-clone admission. The live entry is already registered; this owns its
+// fresh/re-clone admission. The live entry is already registered; this owns the
+// G14 atomic rollback (drop-then-mark), the re-clone poison pre-drop, its
 // terminal drop + durable mark + terminal event.
-func (s *Server) spawnRigProvision(sm StateMutator, city string, entry *liveProvision, body RigCreateBody, gitURL string) {
+func (s *Server) spawnRigProvision(sm StateMutator, city string, entry *liveProvision, body RigCreateBody, gitURL string, recloneManifest RigProvisionManifest) {
 	store := s.state.CityBeadStore()
 	reqID := entry.requestID
 	name := body.Name
@@ -264,6 +275,18 @@ func (s *Server) spawnRigProvision(sm StateMutator, city string, entry *liveProv
 			}
 		}()
 		s.emitRigProvisionProgress(reqID, name, step, detail, warn)
+	}
+
+	// Manifest sink: record-then-create. Each checkpoint persists the created
+	// resource onto the durable record (crash recovery) AND updates the captured
+	// manifest the rollback path tears down (runtime recovery). Persist errors
+	// are logged, not fatal — a missed persist only widens the boot-sweep's job.
+	var manifest RigProvisionManifest
+	onManifest := func(m RigProvisionManifest) {
+		manifest = m
+		if err := persistManifest(store, entry.beadID, m); err != nil {
+			log.Printf("api: rig create %s: %v", reqID, err)
+		}
 	}
 
 	rigCfg := config.Rig{
@@ -282,19 +305,25 @@ func (s *Server) spawnRigProvision(sm StateMutator, city string, entry *liveProv
 			}
 		}()
 
-		provisioned, err := sm.ProvisionRigFromGit(context.Background(), rigCfg, gitURL, onStep)
-		if err != nil {
-			// Rollback (G13 §6 drop-then-mark). The full staging dir/DB teardown
-			// is TODO(C4c); here we mark the durable record re-executable and drop
-			// the live entry so a retry re-clones.
-			if entry.beadID != "" {
-				if mErr := markIdemRolledBack(store, entry.beadID); mErr != nil {
-					log.Printf("api: rig create %s: marking rolled_back: %v", reqID, mErr)
-				}
+		// Re-clone poison pre-drop (C4c §3): a prior failed attempt may have left
+		// a .beads store / dir at the rig path that would wedge the fresh-add
+		// guard. Tear it down before the clone. If it fails, debris remains — do
+		// not re-clone over it; fail the request (the record's manifest keys are
+		// still set, so the boot sweep or the next retry completes teardown).
+		if !recloneManifest.IsEmpty() {
+			if tErr := sm.TeardownPartialRig(context.Background(), recloneManifest); tErr != nil {
+				log.Printf("api: rig create %s: reclone pre-drop: %v", reqID, tErr)
+				s.rigIdem.remove(city, entry)
+				terminalized = true
+				s.emitRequestFailed(reqID, RequestOperationRigCreate, "provision_failed", tErr.Error())
+				return
 			}
-			s.rigIdem.remove(city, entry)
+		}
+
+		provisioned, err := sm.ProvisionRigFromGit(context.Background(), rigCfg, gitURL, onStep, onManifest)
+		if err != nil {
+			s.rollbackFailedProvision(sm, store, city, entry, manifest, err)
 			terminalized = true
-			s.emitRequestFailed(reqID, RequestOperationRigCreate, rigProvisionFailureCode(err), err.Error())
 			return
 		}
 
@@ -303,14 +332,41 @@ func (s *Server) spawnRigProvision(sm StateMutator, city string, entry *liveProv
 		prefix := provisioned.EffectivePrefix()
 		branch := provisioned.EffectiveDefaultBranch()
 		if entry.beadID != "" {
-			if mErr := markIdemSucceeded(store, entry.beadID, name, prefix, branch); mErr != nil {
-				log.Printf("api: rig create %s: marking succeeded: %v", reqID, mErr)
+			if mErr := markIdemSucceededWithRetry(store, entry.beadID, name, prefix, branch); mErr != nil {
+				// The provision SUCCEEDED but the durable succeeded write did not
+				// land. Leave the record in_flight: a same-id retry's completeness
+				// probe (admitRigCreate) or the boot sweep forward-reconciles it to
+				// succeeded rather than re-cloning over the now-live rig.
+				log.Printf("api: rig create %s: marking succeeded after %d retries: %v (record stays in_flight; forward-reconciled on retry/sweep)", reqID, markIdemSucceededRetries, mErr)
 			}
 		}
 		s.rigIdem.remove(city, entry)
 		terminalized = true
 		s.emitRigCreateSucceeded(reqID, name, prefix, branch)
 	}()
+}
+
+// rollbackFailedProvision runs the G14 drop-then-mark rollback after a failed
+// ProvisionRigFromGit (C4c §2.3): tear down the manifested dir/DB, and ONLY when
+// that succeeds mark the durable record rolled_back so a same-digest retry finds
+// clean ground. If teardown fails, the record stays in_flight (debris on disk),
+// but the live entry is dropped so the retry routes to re-clone (which pre-drops)
+// rather than hanging on a dead replay. Either way the terminal request.failed
+// carries the classified error_code.
+func (s *Server) rollbackFailedProvision(sm StateMutator, store beads.Store, city string, entry *liveProvision, manifest RigProvisionManifest, cause error) {
+	reqID := entry.requestID
+	teardownOK := true
+	if tErr := sm.TeardownPartialRig(context.Background(), manifest); tErr != nil {
+		teardownOK = false
+		log.Printf("api: rig create %s: rollback teardown: %v", reqID, tErr)
+	}
+	if teardownOK && entry.beadID != "" {
+		if mErr := markIdemRolledBack(store, entry.beadID); mErr != nil {
+			log.Printf("api: rig create %s: marking rolled_back: %v", reqID, mErr)
+		}
+	}
+	s.rigIdem.remove(city, entry)
+	s.emitRequestFailed(reqID, RequestOperationRigCreate, rigProvisionFailureCode(cause), cause.Error())
 }
 
 // waitRigVisible polls Config() until the rig appears (the G17 visibility
@@ -329,6 +385,21 @@ func (s *Server) waitRigVisible(name string) {
 		}
 		time.Sleep(rigVisibilityPoll)
 	}
+}
+
+// rigComplete adapts the optional RigComplete prober on the underlying state
+// (controllerState satisfies it) into the admission completeness predicate: it
+// reports whether a rig is fully provisioned so admitRigCreate can forward-
+// reconcile an orphan in_flight record whose rig is already live instead of
+// re-cloning over it. When the state does not implement the prober (e.g. a
+// read-only projection), it reports incomplete and admission re-clones as before.
+func (s *Server) rigComplete(name string) (complete bool, prefix, defaultBranch string) {
+	if p, ok := s.state.(interface {
+		RigComplete(rigName string) (bool, string, string)
+	}); ok {
+		return p.RigComplete(name)
+	}
+	return false, "", ""
 }
 
 // rigInConfig reports whether the city config currently holds a rig by name.
@@ -353,15 +424,18 @@ func (s *Server) rigIdemCity() string {
 }
 
 // rigProvisionFailureCode maps an async provisioning error to a stable
-// request.failed error_code. clone failures currently ride the provision_failed
-// catch-all; a dedicated clone_failed code is TODO(C4c) once the clone step
-// carries a matchable sentinel across the StateMutator boundary.
+// request.failed error_code. A blocked host (the SSRF fence) is checked before
+// the clone sentinel because the fence returns before git runs; a git.Clone
+// failure carries rig.ErrCloneFailed across the StateMutator boundary and maps
+// to the dedicated clone_failed code (C4c §5).
 func rigProvisionFailureCode(err error) string {
 	switch {
 	case errors.Is(err, ssrf.ErrBlockedHost):
 		return "blocked_host"
 	case errors.Is(err, configedit.ErrAlreadyExists):
 		return "already_exists"
+	case errors.Is(err, rig.ErrCloneFailed):
+		return "clone_failed"
 	case errors.Is(err, configedit.ErrValidation):
 		return "invalid_request"
 	default:

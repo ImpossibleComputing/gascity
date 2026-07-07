@@ -61,11 +61,32 @@ var HostResolver = func(host string) ([]net.IP, error) {
 // are allowed. A resolution error is NOT treated as a block: the subsequent git
 // fetch performs its own resolution and surfaces the failure there, and the
 // fence only blocks on a positively-internal address (matching the pack fence's
-// long-standing behavior).
+// long-standing behavior). Use EnsurePublicHostStrict on a fresh network surface
+// (the rig-clone path) where a resolution error must fail closed.
 //
 // The returned error wraps ErrEmptyHost for a blank host and ErrBlockedHost for
 // an internal one.
 func EnsurePublicHost(host string) error {
+	return ensurePublicHost(host, false)
+}
+
+// EnsurePublicHostStrict is EnsurePublicHost with fail-closed resolution: a DNS
+// resolution error is treated as a block (wrapping ErrBlockedHost), not allowed
+// through. It is the variant the rig-clone provisioning path uses (C3/G15),
+// because a clone is a fresh SSRF surface where an attacker can force a SERVFAIL
+// (or otherwise poison resolution) to slip past the fail-open fence and then
+// win the DNS-rebinding TOCTOU at git's own re-resolution. The pack-import fence
+// stays on the fail-open EnsurePublicHost — its long-standing behavior — so this
+// hardening is scoped to the new clone surface only.
+func EnsurePublicHostStrict(host string) error {
+	return ensurePublicHost(host, true)
+}
+
+// ensurePublicHost is the shared classifier for EnsurePublicHost (failClosed
+// false) and EnsurePublicHostStrict (failClosed true). The only difference is
+// how a HostResolver error is handled: allowed through when fail-open, blocked
+// when fail-closed.
+func ensurePublicHost(host string, failClosed bool) error {
 	lower := strings.ToLower(strings.TrimSpace(host))
 	if lower == "" {
 		return ErrEmptyHost
@@ -93,6 +114,9 @@ func EnsurePublicHost(host string) error {
 	}
 	ips, err := HostResolver(host)
 	if err != nil {
+		if failClosed {
+			return blockedHostErr(host, "host resolution failed")
+		}
 		return nil
 	}
 	for _, ip := range ips {

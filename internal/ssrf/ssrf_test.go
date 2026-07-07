@@ -119,6 +119,43 @@ func TestEnsurePublicHost_ResolutionErrorDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestEnsurePublicHostStrict_ResolutionErrorBlocks(t *testing.T) {
+	// The fail-closed variant treats a resolution error as a block (the clone
+	// path's fence): an attacker forcing a SERVFAIL must not slip past to win the
+	// DNS-rebinding TOCTOU at git's own re-resolution. The fail-open variant on
+	// the SAME host allows it — the whole point of the split.
+	restore := stubResolver(t, nil)
+	defer restore()
+
+	if err := EnsurePublicHostStrict("unresolvable.invalid"); !errors.Is(err, ErrBlockedHost) {
+		t.Errorf("EnsurePublicHostStrict on resolution error = %v, want ErrBlockedHost", err)
+	}
+	if err := EnsurePublicHost("unresolvable.invalid"); err != nil {
+		t.Errorf("EnsurePublicHost on resolution error = %v, want nil (fail-open contrast)", err)
+	}
+}
+
+func TestEnsurePublicHostStrict_AllowsPublicAndBlocksInternal(t *testing.T) {
+	// Fail-closed only changes the resolution-error arm: a public host still
+	// passes, an internal-resolving host still blocks, an empty host still
+	// reports ErrEmptyHost.
+	restore := stubResolver(t, map[string][]net.IP{
+		"github.com":       {net.ParseIP("140.82.112.3")},
+		"evil.example.com": {net.ParseIP("169.254.169.254")},
+	})
+	defer restore()
+
+	if err := EnsurePublicHostStrict("github.com"); err != nil {
+		t.Errorf("EnsurePublicHostStrict(github.com) = %v, want nil", err)
+	}
+	if err := EnsurePublicHostStrict("evil.example.com"); !errors.Is(err, ErrBlockedHost) {
+		t.Errorf("EnsurePublicHostStrict(evil) = %v, want ErrBlockedHost", err)
+	}
+	if err := EnsurePublicHostStrict("  "); !errors.Is(err, ErrEmptyHost) {
+		t.Errorf("EnsurePublicHostStrict(empty) = %v, want ErrEmptyHost", err)
+	}
+}
+
 func TestParseLooseIPv4_NonNumericIsNil(t *testing.T) {
 	for _, host := range []string{"github.com", "example.org", "not.an.ip.addr", ""} {
 		if ip := ParseLooseIPv4(host); ip != nil {

@@ -68,9 +68,9 @@ func TestWithRigNameLockSerializes(t *testing.T) {
 	}
 
 	// After the last waiter departs, the map entry is deleted (no leak).
-	rigNameLocksMu.Lock()
-	_, present := rigNameLocks[city+"\x00web"]
-	rigNameLocksMu.Unlock()
+	rigNameLockSet.mu.Lock()
+	_, present := rigNameLockSet.locks[city+"\x00web"]
+	rigNameLockSet.mu.Unlock()
 	if present {
 		t.Fatal("rig name lock entry leaked after all waiters released")
 	}
