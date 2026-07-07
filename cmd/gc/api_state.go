@@ -1664,7 +1664,7 @@ func (cs *controllerState) ProvisionRigFromGit(ctx context.Context, r config.Rig
 	if onStep != nil {
 		onStep("clone", "  Cloning rig working tree from git", false)
 	}
-	if err := git.Clone(ctx, gitURL, r.Path, git.CloneOptions{}); err != nil {
+	if err := rigCloneGit(ctx, gitURL, r.Path, git.CloneOptions{}); err != nil {
 		// Wrap with rig.ErrCloneFailed so the async failure mapper classifies it
 		// as clone_failed (distinct from provision_failed). git.Clone already
 		// redacted any embedded credential from the error.
@@ -1690,6 +1690,16 @@ func (cs *controllerState) ProvisionRigFromGit(ctx context.Context, r config.Rig
 	}
 	return provisioned, nil
 }
+
+// rigCloneGit is the git-fetch boundary of ProvisionRigFromGit. It is a package
+// var mirroring the controllerDropManagedDoltDatabase precedent so the capstone
+// wire E2E (cmd/gc/capstone_e2e_test.go) can stub the single clone call —
+// materializing a working tree without a real network fetch — while every other
+// step of the async rig-add stays real (SSRF fence, record-then-create manifest,
+// rig.Provision, the G14 rollback, the G17 visibility barrier, typed events).
+// Production defaults to git.Clone, so the bind is byte-identical; package main
+// is unimportable, so the seam cannot leak into any other consumer.
+var rigCloneGit = git.Clone
 
 // provisionedManagedDoltDatabase returns the managed Dolt database name a fresh
 // git_url add minted at rigPath, or "" when there is nothing this request may
