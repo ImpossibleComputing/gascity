@@ -2053,6 +2053,13 @@ type APIConfig struct {
 	// gate writes fails closed if the key is ever dropped. The
 	// GC_CITY_WRITE_REQUIRED=1 env var has the same effect.
 	WriteAuthRequired bool `toml:"write_auth_required,omitempty"`
+	// WriteAuthAllowUnverified acknowledges running a non-loopback bind with
+	// allow_mutations and NO write-auth verify key — an unauthenticated write
+	// plane fronted only by the network. Without it, that combination is a
+	// fail-closed startup error (gate G10) so a hardened deployment cannot boot
+	// wide open by omission. Set it (or GC_CITY_WRITE_ALLOW_UNVERIFIED=1) only for
+	// a network-fronted deployment that intentionally trusts its perimeter.
+	WriteAuthAllowUnverified bool `toml:"write_auth_allow_unverified,omitempty"`
 }
 
 // BindOrDefault returns the bind address, defaulting to "127.0.0.1".

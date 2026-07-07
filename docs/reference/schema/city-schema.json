@@ -46,6 +46,10 @@
         "write_auth_required": {
           "type": "boolean",
           "description": "WriteAuthRequired makes a missing or empty WriteAuthVerifyKey a startup\nerror instead of silently disabling the gate, so a config that intends to\ngate writes fails closed if the key is ever dropped. The\nGC_CITY_WRITE_REQUIRED=1 env var has the same effect."
+        },
+        "write_auth_allow_unverified": {
+          "type": "boolean",
+          "description": "WriteAuthAllowUnverified acknowledges running a non-loopback bind with\nallow_mutations and NO write-auth verify key — an unauthenticated write\nplane fronted only by the network. Without it, that combination is a\nfail-closed startup error (gate G10) so a hardened deployment cannot boot\nwide open by omission. Set it (or GC_CITY_WRITE_ALLOW_UNVERIFIED=1) only for\na network-fronted deployment that intentionally trusts its perimeter."
         }
       },
       "additionalProperties": false,
