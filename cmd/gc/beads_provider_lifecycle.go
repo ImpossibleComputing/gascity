@@ -240,8 +240,11 @@ func startBeadsLifecycle(cityPath, _ string, cfg *config.City, stderr io.Writer)
 	if err := normalizeCanonicalBdScopeFiles(cityPath, cfg, stderr); err != nil {
 		return err
 	}
-	// Regenerate routes for cross-rig routing.
-	if len(cfg.Rigs) > 0 {
+	// Regenerate routes for cross-rig routing. A split city needs routes even
+	// with no rigs, so bd's prefix routing resolves the infra scope's "gcg" ids
+	// from the domain scopes (and vice versa) — collectRigRoutes adds the infra
+	// scope on a split city.
+	if len(cfg.Rigs) > 0 || cityHasInfraStore(cityPath) {
 		allRigs := collectRigRoutes(cityPath, cfg)
 		if err := writeAllRoutes(allRigs); err != nil {
 			return fmt.Errorf("writing routes: %w", err)

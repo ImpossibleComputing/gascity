@@ -344,9 +344,16 @@ func (s *Server) resolveStoreByPrefix(prefix string) beads.Store {
 				return store
 			}
 		}
-		// Fallback: the route pointed to the same rig.
-		if store, exists := stores[rig.Name]; exists {
-			return store
+		// Fallback: the route resolved to this rig itself (a self-route). Only
+		// then return this rig's store — a route resolving to some OTHER path that
+		// is not a known rig (e.g. the reserved "gcg" → .gc/infra route a split
+		// city now writes into every scope's routes.jsonl) must NOT be captured
+		// here; it falls through so the caller's class-prefix arm can route it to
+		// the infra/graph store.
+		if cleanPath == filepath.Clean(rigPath) {
+			if store, exists := stores[rig.Name]; exists {
+				return store
+			}
 		}
 	}
 	return nil

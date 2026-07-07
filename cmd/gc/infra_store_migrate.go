@@ -285,22 +285,29 @@ func ensureInfraScopeForMigration(cityPath string, cfg *config.City) error {
 	return nil
 }
 
-// writeInfraScopeRoutes writes the infra scope's routes.jsonl so bd's prefix
-// routing can resolve a cross-boundary dependency target read-only in the domain
-// store it lives in. §2: bd dep add hard-fails when the target neither resolves
-// locally nor differs in prefix, so a same-prefix cross-boundary edge
-// (gcy-cv1 → gcy-45, both HQ-prefixed but now in different stores) needs the
-// infra scope to know how to reach the HQ db. The routes map every rig prefix
-// (HQ + configured rigs) to its directory, relative to the infra scope root.
+// writeInfraScopeRoutes writes routes.jsonl for every scope after a migration so
+// bd's prefix routing resolves cross-boundary dependency targets read-only in the
+// store they live in, in BOTH directions: the infra scope learns the domain
+// prefixes (a same-prefix cross-boundary edge gcy-cv1 → gcy-45, both HQ-prefixed
+// but now in different stores, needs the infra scope to reach the HQ db), and the
+// domain scopes learn "gcg" → .gc/infra. collectRigRoutes already includes the
+// infra scope on a split city (cityHasInfraStore is true by the time migration
+// reaches here), and writeAllRoutes writes a per-scope file mapping every entry,
+// so this is the same bidirectional route set a fresh two-store `gc start` emits.
 func writeInfraScopeRoutes(cityPath string, cfg *config.City) error {
 	rigs := collectRigRoutes(cityPath, cfg)
-	rigs = append(rigs, rigRoute{Prefix: config.InfraScopePrefix, AbsDir: infraScopeRoot(cityPath)})
-	routes, err := generateRoutesFor(rigRoute{Prefix: config.InfraScopePrefix, AbsDir: infraScopeRoot(cityPath)}, rigs)
-	if err != nil {
-		return fmt.Errorf("generating infra scope routes: %w", err)
+	hasInfra := false
+	for _, r := range rigs {
+		if r.Prefix == config.InfraScopePrefix {
+			hasInfra = true
+			break
+		}
 	}
-	if err := writeRoutesFile(infraScopeRoot(cityPath), routes); err != nil {
-		return fmt.Errorf("writing infra scope routes.jsonl: %w", err)
+	if !hasInfra {
+		return fmt.Errorf("migrate infra-store: infra scope missing from route set (cityHasInfraStore false?)")
+	}
+	if err := writeAllRoutes(rigs); err != nil {
+		return fmt.Errorf("writing infra + domain scope routes.jsonl: %w", err)
 	}
 	return nil
 }
