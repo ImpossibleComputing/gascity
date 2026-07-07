@@ -209,6 +209,7 @@ type SupervisorRequestPayload struct {
 	Host            string `json:"host,omitempty" doc:"Canonical Host header without port."`
 	OriginAllowed   bool   `json:"origin_allowed" doc:"Whether the Origin header, if present, matched CORS policy."`
 	Phase           string `json:"phase" enum:"start,complete" doc:"Audit phase. Long-lived event streams emit a start record immediately after Host validation, then a complete record when the handler returns. Non-stream requests emit complete only."`
+	RequestID       string `json:"request_id,omitempty" doc:"The server-minted X-GC-Request-Id echoed to the client, so a client can correlate a failed request with this audit record and the api: log line."`
 }
 
 // IsEventPayload marks SupervisorRequestPayload as an events.Payload variant.

@@ -191,6 +191,20 @@ func remoteCheckRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// RequestIDForError extracts the server-minted X-GC-Request-Id from a response
+// header, formatted as "request_id=<id>" for inclusion in an error message (or
+// "" when absent). It lets a failed request be correlated with the server's
+// api: log line and the SupervisorRequest audit record. The remote read-set
+// enablement threads this into the api.Client error strings and the CLI's
+// failure target-echo line (gate G9, client half).
+func RequestIDForError(h http.Header) string {
+	id := strings.TrimSpace(h.Get("X-GC-Request-Id"))
+	if id == "" {
+		return ""
+	}
+	return "request_id=" + id
+}
+
 // stripSensitiveHeaders removes the Authorization header and every X-GC-*
 // control/grant header from h. Header map keys are already canonicalized by
 // net/http (X-GC-Request -> X-Gc-Request), so a case-insensitive x-gc- prefix

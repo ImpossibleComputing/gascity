@@ -230,6 +230,17 @@ func TestNewRemoteCityScopedClient_TLSAndHeaders(t *testing.T) {
 	})
 }
 
+func TestRequestIDForError(t *testing.T) {
+	h := http.Header{}
+	if got := RequestIDForError(h); got != "" {
+		t.Errorf("absent id -> %q, want empty", got)
+	}
+	h.Set("X-GC-Request-Id", "abc123")
+	if got := RequestIDForError(h); got != "request_id=abc123" {
+		t.Errorf("RequestIDForError = %q", got)
+	}
+}
+
 // The core no-fallback property (gate G1): every error a LOCAL client would
 // fall back on is non-fallbackable for a REMOTE client, so a remote read/write
 // error is surfaced instead of silently rerouted to a local store. The guard is

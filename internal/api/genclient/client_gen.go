@@ -3360,6 +3360,9 @@ type SupervisorRequestPayload struct {
 	// RemoteAddrClass Network class of the remote address, not the raw address.
 	RemoteAddrClass SupervisorRequestPayloadRemoteAddrClass `json:"remote_addr_class"`
 
+	// RequestId The server-minted X-GC-Request-Id echoed to the client, so a client can correlate a failed request with this audit record and the api: log line.
+	RequestId *string `json:"request_id,omitempty"`
+
 	// Status HTTP response status code. Start-phase records use 0 before the final response status is known.
 	Status int64 `json:"status"`
 }

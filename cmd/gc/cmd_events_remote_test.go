@@ -5,9 +5,57 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/clientcontext"
 )
+
+// G7: the shared stream-status classifier decides reconnect/reauth/permanent
+// identically for the city and supervisor streams.
+func TestClassifyStreamStatus(t *testing.T) {
+	cases := []struct {
+		status    int
+		retry     string
+		reconnect bool
+		reauth    bool
+		delay     time.Duration
+	}{
+		{http.StatusServiceUnavailable, "", true, false, 0},                // 503 → reconnect (backoff)
+		{http.StatusServiceUnavailable, "5", true, false, 5 * time.Second}, // 503 + Retry-After
+		{http.StatusTooManyRequests, "12", true, false, 12 * time.Second},  // 429 + Retry-After
+		{http.StatusUnauthorized, "", false, true, 0},                      // 401 → reauth
+		{http.StatusForbidden, "", false, false, 0},                        // 403 → permanent
+		{http.StatusNotFound, "5", false, false, 0},                        // 404 → permanent (Retry-After ignored)
+		{http.StatusMisdirectedRequest, "", false, false, 0},               // 421 → permanent
+		{http.StatusBadGateway, "", false, false, 0},                       // 502 → permanent
+	}
+	for _, c := range cases {
+		got := classifyStreamStatus(c.status, c.retry)
+		if got.reconnect != c.reconnect || got.reauth != c.reauth || got.delay != c.delay {
+			t.Errorf("classifyStreamStatus(%d, %q) = %+v, want {reconnect:%v reauth:%v delay:%v}",
+				c.status, c.retry, got, c.reconnect, c.reauth, c.delay)
+		}
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if d := parseRetryAfter("30"); d != 30*time.Second {
+		t.Errorf("30 -> %v", d)
+	}
+	if d := parseRetryAfter(""); d != 0 {
+		t.Errorf("empty -> %v", d)
+	}
+	if d := parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT"); d != 0 {
+		t.Errorf("http-date -> %v (want 0; delta-seconds only)", d)
+	}
+	if d := parseRetryAfter("-5"); d != 0 {
+		t.Errorf("negative -> %v", d)
+	}
+	// A hostile Retry-After is capped.
+	if d := parseRetryAfter("100000"); d != streamReconnectMax*4 {
+		t.Errorf("huge -> %v, want cap %v", d, streamReconnectMax*4)
+	}
+}
 
 // --api and a remote flag (--city-url/--context) both select a remote city and
 // share the flag tier, so combining them is a loud conflict (gate G3).

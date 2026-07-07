@@ -8062,6 +8062,10 @@
             ],
             "type": "string"
           },
+          "request_id": {
+            "description": "The server-minted X-GC-Request-Id echoed to the client, so a client can correlate a failed request with this audit record and the api: log line.",
+            "type": "string"
+          },
           "status": {
             "description": "HTTP response status code. Start-phase records use 0 before the final response status is known.",
             "format": "int64",
