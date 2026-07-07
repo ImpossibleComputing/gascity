@@ -11,9 +11,15 @@ The **interface (front-door) layer is merged to OSS main** (#4017). The
 `feat/domain-infra-store-split`), and two red-team fixes landed. An audit then
 found the split is **not worker-complete**: 16 cross-store landmines, one root
 pattern. The unifying design is settled (composite `claimableStore` +
-composite-aware `gc ready`). Next up: **P0** — make a formula actually *run* on a
-split city (dispatcher discovery + worker claim), then the DAG-complete parent
-lifecycle. All TDD, tests fail-on-split-first.
+composite-aware `gc ready`).
+
+**P0 is now DONE (landmines #1 + #2):** a formula RUNS on a split city — the
+control-dispatcher discovers infra control beads (targeted env/scope swap, NOT
+the rejected supervisor-cache port) and a worker claims infra graph steps
+(composite `claimableStore` + `gc ready` raw-JSON passthrough + by-prefix claim
+routing). Proven by `TestSplitCity_DispatcherDiscoversInfraControlBeads` and
+`TestSplitCity_HookClaimFindsInfraStepBead` on real managed Dolt. Next up: **P1**
+— the DAG-complete parent lifecycle. All TDD, tests fail-on-split-first.
 
 ## Branch state
 
@@ -74,14 +80,23 @@ the correct store, with a fail-*loud* guard.
 
 ## Next steps (sequencing — all TDD, integration gated by `GC_FAST_UNIT=0`)
 
-1. **P0 (the gate — nothing else is testable until a formula runs on a split city):**
-   - Port the deployed control-ready discovery pattern (landmine #1): supervisor-
-     cached `ListReadyBeads` + `internal/beads/control_ready_filter.go` +
-     `ErrControllerAPIUnavailable` transient mapping. Source: `fix-main-ci`
-     commits `d9a23e6fb`/`3c2173765`/`c2257d206`.
-   - Build the composite `claimableStore` + make `gc ready` read it; switch the
-     split-city `work_query` to `gc ready` (landmine #2).
-   - Tests first: `TestSplitCity_DispatcherDiscoversInfraControlBeads`,
+1. **P0 (the gate) — DONE.** A formula runs on a split city.
+   - Landmine #1 (control-dispatch discovery): fixed with a targeted env/scope
+     swap in `runWorkflowServe`, gated to the control-dispatcher agent, pointing
+     discovery + the per-bead control-store open at `infraScopeRoot`. The deployed
+     supervisor-cached `ListReadyBeads` port was **rejected** for this branch:
+     evidence showed the reference is single-store (its ready handler federates
+     city+rigs only, never a distinct infra store) and routes through a supervisor
+     the managed-Dolt harness never starts (untestable per the DoD). This matches
+     the settled design ("control dispatch stays graph-only; do NOT federate").
+     The supervisor-cached port remains an optional future production-stall
+     hardening item (it would also need an infra-federation arm added).
+   - Landmine #2 (worker claim): composite `claimableStore` (`cmd/gc/claimable_store.go`)
+     + `gc ready` (a bd-shaped raw-JSON passthrough, `cmd/gc/cmd_ready.go`) + the
+     split-city work_query/count-form switched to `gc ready`
+     (`cmd/gc/split_city_work_query.go`) + the claim mutation routed by prefix to
+     the infra store (`cmd/gc/split_city_claim.go`).
+   - Both tests green (fail-on-split-first): `TestSplitCity_DispatcherDiscoversInfraControlBeads`,
      `TestSplitCity_HookClaimFindsInfraStepBead`.
 2. **P1 (lifecycle):** `source_store_ref` no-op→error (#3), bidirectional
    `routes.jsonl` on E2-born cities (#6), then **build** parent progress + DAG-

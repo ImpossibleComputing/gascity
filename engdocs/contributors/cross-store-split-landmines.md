@@ -36,13 +36,27 @@ Status: `broken-on-split` (open) · `fixed-on-deployed-branch` (proven port) ·
 
 ### P0 — nothing is reachable until dispatcher + workers see infra beads
 1. **Control-dispatcher serve-loop discovery never scans infra** —
-   `cmd/gc/dispatch_runtime.go:771` (`controllerWorkQueryEnv` city/rig only).
-   DAGs stall at dispatch. **fixed-on-deployed-branch** (supervisor-cached
-   `ListReadyBeads` + `internal/beads/control_ready_filter.go`; commits
-   `d9a23e6fb`/`3c2173765`/`c2257d206`) — port it.
-2. **`gc hook --claim` never federates infra** — `cmd/gc/hook_cross_store.go:39`.
-   Workers spawn, find no graph steps, exit (churn). **broken-on-split** →
-   composite `gc ready`.
+   `cmd/gc/dispatch_runtime.go` `runWorkflowServe` (env from `controllerWorkQueryEnv`,
+   city/rig only). DAGs stall at dispatch. **FIXED (this branch).** The deployed
+   supervisor-cached `ListReadyBeads` port was rejected: the reference is
+   single-store (`GraphBeadStore()==CityBeadStore()`), its ready handler federates
+   city+rigs only (never a distinct infra store), and it routes through a
+   supervisor API the managed-Dolt test harness never starts (untestable per the
+   DoD). Fixed instead with the settled design ("control dispatch stays graph-only
+   → point it at the graph store; do NOT federate"): a targeted env/scope swap in
+   `runWorkflowServe`, gated to the control-dispatcher agent on a split city, that
+   points both discovery (`workEnv`→BEADS_DIR) and the per-bead control-store open
+   (`workDir`) at `infraScopeRoot`. Test:
+   `TestSplitCity_DispatcherDiscoversInfraControlBeads` (integration, managed Dolt).
+2. **`gc hook --claim` never federates infra** — `cmd/gc/hook_cross_store.go`
+   (rig/city only). Workers spawn, find no graph steps, exit (churn).
+   **FIXED (this branch)** via the composite `claimableStore` + `gc ready`:
+   `cmd/gc/claimable_store.go` (work ∪ infra Ready/List fan-out, by-prefix Get,
+   fail-loud), `gc ready` (`cmd/gc/cmd_ready.go`, bd-shaped array, raw-JSON
+   passthrough), the split-city work_query/count-form switched to `gc ready`
+   (`cmd/gc/split_city_work_query.go`), and the claim mutation routed by prefix to
+   the infra store (`cmd/gc/split_city_claim.go`). Test:
+   `TestSplitCity_HookClaimFindsInfraStepBead` (integration, managed Dolt).
 
 ### P1 — DAG-complete parent lifecycle + link integrity
 3. **Empty/mis-stamped `gc.source_store_ref` → silent `deleted_parent` no-op →
@@ -114,9 +128,14 @@ Fast-unit: `TestWalkSourceBeadChain_MissingRef_IsErrorNotSilentNoop` (3),
 
 ## Sequencing
 
-1. **P0 first** — nothing else is testable until the dispatcher and workers can
-   see infra beads: port the control-ready pattern (1) + composite `gc ready`
-   (2). Write tests 1, 2 (fail → pass).
+1. **P0 — DONE (this branch).** A formula now RUNS on a split city: the
+   control-dispatcher discovers infra control beads (#1, env/scope swap) and a
+   worker claims infra graph steps (#2, composite `gc ready` + by-prefix claim
+   routing). Both proven by `TestSplitCity_DispatcherDiscoversInfraControlBeads`
+   and `TestSplitCity_HookClaimFindsInfraStepBead` on real managed Dolt
+   (fail-on-split-first, then green). Commits `13626f769` (#1),
+   `63235fe0a`/`2ed2fc961` (#2a/#2b), `3cc26e376` (gc ready passthrough),
+   `4d99a00cc` (#2c).
 2. **P1** — `source_store_ref` no-op→error (3), routes.jsonl bidirectionality
    (6), then BUILD progress + dep-unblocking (4, 5), drain membership (7).
 3. **P2/P3** — the remaining reads/links, each a "route this read through the
