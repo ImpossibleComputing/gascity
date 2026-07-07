@@ -97,15 +97,34 @@ worktree `/data/projects/gascity/.claude/worktrees/object-front-doors`.
 > (raw SQL DELETE — bd delete text-rewrites staying neighbors, verified live). E3 design:
 > E3-MIGRATION-DESIGN.md.
 >
-> **REMAINING = E4.4 command-sweep e2e (E4.1/2/3/5/6 are covered by the E2.5 + E3
-> integration tests) + polish:** E4.4 = run a representative gc command sweep on a
-> two-store city, assert each succeeds AND the boundary invariant holds after (no
-> leakage). Then the DEFERRED read-side fan-out (coordClassStoreCandidates session-arm
-> collapse + openSourceWorkflowStores graph-vs-by-id split — byte-identical today) and
-> the E1.2 tail (autoclose/formula-cook graph reads) + E1.3/E1.4/E1.5 — the boundary
-> invariant + E4.4 sweep surface any real leak. Integration tests: `GC_FAST_UNIT=0 go
-> test -tags integration ./cmd/gc/ -run 'InfraStore|Migrate' -timeout 20m` (managed Dolt).
-> **HEAD ~`e34971672`.** Next: E4.4 command sweep, then read-side fan-out + E1 tail.
+> **THE DOMAIN/INFRA TWO-DATABASE SPLIT IS COMPLETE (2026-07-07).** Everything below is
+> done + real-Dolt-validated:
+> - **E4.4 command-sweep e2e** (`448a86151`): live two-store city, representative gc
+>   command sweep, boundary invariant holds after EACH command — NO leakage (PASS 153s).
+>   With E2.5 + E3 that covers E4.1–E4.6.
+> - **Read-side fan-out** (`8ecc09f22`): coordClassStoreCandidates = already-covered (the
+>   session read's leading candidate IS the infra store on a split city); openSourceWorkflow
+>   Stores = REAL GAP fixed (graph-root reads now include the infra store, gated).
+> - **E1.2 tail** (`6a5183a02`): ALL graph-read CLI roots were real split-city gaps — fixed
+>   (molecule/wisp autoclose graphStoreOpt, control-dispatcher processing+discovery,
+>   cmdWorkflowDelete dedup, formula cook graph.v2 attach, version-check) + a graph
+>   relocation guard. gc close / gc convoy control / gc formula cook now correct on a split city.
+> - **E1.3 internal/api** (`b5b25a251`): REAL GAPS fixed — the API sling handler built
+>   SlingDeps WITHOUT GraphStore (molecules→work store on a split city, the API twin of the
+>   CLI sling gap) + 6 session reads on the work store. **E1.4 worker + E1.5 session = CLEAN**
+>   (store-agnostic libraries, caller-routed).
+>
+> **STATUS: DONE.** E1 (interface standardization) + E2 (two Dolt stores, non-identity
+> resolveClassStore, activation) + E3 (in-place migration, crash-safe) + E4 (exhaustive e2e,
+> command sweep, no leakage) — all landed, byte-identical for legacy single-store cities,
+> proven end-to-end on real managed Dolt. Enforced going forward by the boundary-invariant
+> test (write side), TestClassStoreDispatchIsBackendBlind (backend-blind dispatch), and the
+> session/graph relocation-root guards. Integration suite: `GC_FAST_UNIT=0 go test -tags
+> integration ./cmd/gc/ -run 'InfraStore|Migrate' -timeout 30m`. **Owner call still open:**
+> flip the new-city default from GC_INFRA_STORE_SPLIT-gated to two-store-by-default (one line
+> in initShouldSeedInfraStore). Optional follow-ups (byte-identical today, not gaps): E5
+> (per-class backend swap Dolt→SQLite/PG — the boundary makes it a no-op); the v1
+> molecule.Attach CLI path documented note; hosted/external-Dolt migration (refused in E3 v1).
 
 > **CONT (2026-07-06) — E1.6 DONE + audit finding.** A parallel census
 > (`raw/e1-census-wf_61848080.json`: 1 adversarial E1.6 auditor + 5 E1.1 file
