@@ -412,7 +412,7 @@ func (s *Server) humaHandleBeadGraph(_ context.Context, input *BeadGraphInput) (
 		return nil, huma.Error404NotFound("bead " + rootID + " not found")
 	}
 
-	graphBeads, parentEdges, err := collectBeadGraph(foundStore, root)
+	graphBeads, parentEdges, err := collectBeadGraph(foundStore, root, s.memberStoreComplement(foundStore)...)
 	if err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
