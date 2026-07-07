@@ -20,8 +20,14 @@ func newReadyCmd(stdout, stderr io.Writer) *cobra.Command {
 	var opts readyOpts
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "ready",
-		Short: "List ready (claimable) work across a split city's stores",
+		Use: "ready",
+		// gc ready emits a bd-compatible JSON array (issue_type/parent wire tags)
+		// that the hook decode and reconciler jq paths already parse, so it opts out
+		// of the structured --json contract the same way `gc bd` does: it owns its
+		// (bd-shaped) payload. This lets the split-city work_query pass --json
+		// through to it verbatim instead of the contract rejecting it.
+		Annotations: map[string]string{jsonRawPassthroughAnnotation: "true"},
+		Short:       "List ready (claimable) work across a split city's stores",
 		Long: `List ready, claimable work as a JSON array, federating the work store and the
 infra store (graph-class steps) on a split city.
 
@@ -50,8 +56,11 @@ The flags mirror the "bd ready" contract the default work_query builds:
 	cmd.Flags().BoolVar(&opts.includeEphemeral, "include-ephemeral", false, "include the wisp/ephemeral tier")
 	cmd.Flags().StringVar(&opts.status, "status", "", "status mode: empty = ready work; in_progress = list assigned in-progress work")
 	cmd.Flags().BoolVar(&opts.count, "count", false, "print the number of matching beads instead of the array")
-	// --json is accepted for parity with `bd ready --json`; output is always JSON.
-	cmd.Flags().BoolVar(&jsonOut, "json", true, "output JSON (always on; accepted for bd-ready parity)")
+	// --json is accepted for parity with `bd ready --json` (the work_query carries
+	// it); output is always a JSON array regardless. gc ready is a raw-JSON
+	// passthrough (see the command Annotations) so this flag is not the structured
+	// --json contract flag.
+	cmd.Flags().BoolVar(&jsonOut, "json", true, "accept --json for bd-ready parity (output is always a JSON array)")
 	return cmd
 }
 

@@ -44,9 +44,14 @@ func splitCityPoolDemandQuery(cityPath string, a *config.Agent, beadsCfg config.
 //     recovery) → "gc ready --status in_progress --assignee="
 //   - "bd ready" (assigned-ready, routed-pool, and migration tiers) → "gc ready"
 //
-// "bd query" (the legacy-ephemeral fallback tiers) is deliberately NOT rewritten:
-// it targets a retirement window (ga-dhf44) and reads ephemeral wisps, not the
-// graph step path P0 needs. Returns query unchanged on a legacy single-store city.
+// `gc ready` accepts the same --json/--metadata-field/--unassigned/--exclude-type/
+// --sort/--limit flags and emits the same bd-compatible JSON array, so the flags
+// the bd tiers carried are left untouched. (It is a raw-JSON passthrough command,
+// like `gc bd`, so --json flows through instead of tripping the structured-output
+// contract.) "bd query" (the legacy-ephemeral fallback tiers) is deliberately NOT
+// rewritten: it targets a retirement window (ga-dhf44) and reads ephemeral wisps,
+// not the graph step path P0 needs. Returns query unchanged on a legacy
+// single-store city.
 func rewriteDefaultReadyForSplitCity(cityPath, query string) string {
 	if !cityHasInfraStore(cityPath) {
 		return query

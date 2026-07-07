@@ -3011,7 +3011,7 @@ gc ready [flags]
 | `--count` | bool |  | print the number of matching beads instead of the array |
 | `--exclude-type` | stringArray |  | drop beads of this issue type (repeatable) |
 | `--include-ephemeral` | bool |  | include the wisp/ephemeral tier |
-| `--json` | bool | `true` | output JSON (always on; accepted for bd-ready parity) |
+| `--json` | bool | `true` | accept --json for bd-ready parity (output is always a JSON array) |
 | `--limit` | int |  | max beads to return (0 = unlimited) |
 | `--metadata-field` | stringArray |  | require metadata key=value (repeatable) |
 | `--sort` | string |  | sort order: oldest\|newest (default: ready priority order) |

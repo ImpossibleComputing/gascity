@@ -52,6 +52,12 @@ func TestSplitCityWorkQuerySwapsReadyBinary(t *testing.T) {
 	if !strings.Contains(got, "bd query") {
 		t.Errorf("split-city work_query should leave the `bd query` legacy tier intact:\n%s", got)
 	}
+	// --json is preserved verbatim: gc ready is a raw-JSON passthrough (like gc bd)
+	// that accepts --json and emits a bd-compatible array, so the flag is not
+	// stripped — only the bd verbs are swapped.
+	if !strings.Contains(got, "--json") {
+		t.Errorf("split-city work_query should preserve --json flags on gc ready:\n%s", got)
+	}
 }
 
 func TestSplitCityWorkQueryUnchangedOnSingleStore(t *testing.T) {
