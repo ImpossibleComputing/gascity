@@ -470,6 +470,49 @@ func TestReqDigest(t *testing.T) {
 	}
 }
 
+// ReqDigestFromBodyHash is the body-hash-first entry point a minter uses: it
+// receives the hex sha256 of the body (never the body itself) and MUST produce
+// the identical digest ReqDigest computes from the raw body. Every case
+// ReqDigest binds — method, path, query canonicalization, empty vs non-empty
+// body, percent-encoded path — must round-trip through it byte-for-byte, or a
+// client-computed grant would never match the server's ReqDigest.
+func TestReqDigestFromBodyHash(t *testing.T) {
+	hexBody := func(b []byte) string {
+		h := sha256.Sum256(b)
+		return hex.EncodeToString(h[:])
+	}
+	cases := []struct {
+		name, method, path, rawQuery string
+		body                         []byte
+	}{
+		{"query-less", "POST", "/v0/city/acme/agents", "", []byte(`{"a":1}`)},
+		{"empty-body", "POST", "/v0/city/acme/agents", "", nil},
+		{"nil-vs-empty", "POST", "/v0/city/acme/agents", "", []byte{}},
+		{"query-bearing", "DELETE", "/v0/city/acme/workflow/x", "delete=true", []byte(`{}`)},
+		{"unordered-query", "DELETE", "/v0/city/acme/workflow/x", "b=2&a=1", []byte(`{}`)},
+		{"semantically-empty-query", "POST", "/v0/city/acme/agents", "&", []byte(`{"a":1}`)},
+		{"percent-encoded-path", "POST", "/v0/city/my%20city/agents", "", []byte(`{"a":1}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := ReqDigest(tc.method, tc.path, tc.rawQuery, tc.body)
+			got := ReqDigestFromBodyHash(tc.method, tc.path, tc.rawQuery, hexBody(tc.body))
+			if got != want {
+				t.Fatalf("ReqDigestFromBodyHash = %s, want ReqDigest = %s", got, want)
+			}
+		})
+	}
+
+	// The two entry points must diverge only on how the body reaches them: a
+	// different body hash must change the digest, proving the hash is actually
+	// folded into the preimage rather than ignored.
+	same := ReqDigestFromBodyHash("POST", "/x", "", hexBody([]byte("one")))
+	diff := ReqDigestFromBodyHash("POST", "/x", "", hexBody([]byte("two")))
+	if same == diff {
+		t.Fatal("ReqDigestFromBodyHash insensitive to the body hash")
+	}
+}
+
 // A caller that mutates its own Options.Keys slice after New must not be able to
 // change the verifier's trust root: New must deep-copy each public key.
 func TestNew_DeepCopiesKeys(t *testing.T) {
