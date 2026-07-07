@@ -698,7 +698,7 @@ conflicting live workflow from the same source is an error.`,
 						}
 						if existing != nil {
 							result = existing
-							return ensureFormulaCookAttachDep(store, attach, result.RootID)
+							return ensureFormulaCookAttachDep(store, graphStore, attach, result.RootID, storeRef)
 						}
 						if roots, err := formulaCookLiveInputConvoyGraphRoots(graphStore, inv.InputConvoy, graphRootKey); err != nil {
 							return err
@@ -732,7 +732,7 @@ conflicting live workflow from the same source is an error.`,
 							}
 							return err
 						}
-						return ensureFormulaCookAttachDep(store, attach, result.RootID)
+						return ensureFormulaCookAttachDep(store, graphStore, attach, result.RootID, storeRef)
 					})
 					if err != nil {
 						return formulaCommandError(stderr, "gc formula cook", jsonOutput, err)
@@ -912,21 +912,46 @@ func decorateFormulaCookGraphV2Recipe(recipe *formula.Recipe, vars map[string]st
 	return graphroute.DecorateGraphWorkflowRecipe(recipe, graphroute.GraphWorkflowRouteVars(recipe, vars), "", "formula-cook", "", storeRef, "", "", store, cityName, cfg, cliGraphrouteDeps(cityPath))
 }
 
-func ensureFormulaCookAttachDep(store beads.Store, attachBeadID, rootID string) error {
-	if store == nil || strings.TrimSpace(attachBeadID) == "" || strings.TrimSpace(rootID) == "" {
+func ensureFormulaCookAttachDep(workStore, graphStore beads.Store, attachBeadID, rootID, storeRef string) error {
+	if workStore == nil || strings.TrimSpace(attachBeadID) == "" || strings.TrimSpace(rootID) == "" {
 		return nil
 	}
-	deps, err := store.DepList(attachBeadID, "down")
-	if err != nil {
-		return fmt.Errorf("checking attach dependency %s -> %s: %w", attachBeadID, rootID, err)
-	}
-	for _, dep := range deps {
-		if dep.IssueID == attachBeadID && dep.DependsOnID == rootID && dep.Type == "blocks" {
-			return nil
+	// Single-store city: cliGraphStore is identity, so the root is co-resident
+	// with the source bead — keep the local `blocks` edge, byte-identical.
+	if graphStore == nil || graphStore == workStore {
+		deps, err := workStore.DepList(attachBeadID, "down")
+		if err != nil {
+			return fmt.Errorf("checking attach dependency %s -> %s: %w", attachBeadID, rootID, err)
 		}
+		for _, dep := range deps {
+			if dep.IssueID == attachBeadID && dep.DependsOnID == rootID && dep.Type == "blocks" {
+				return nil
+			}
+		}
+		if err := workStore.DepAdd(attachBeadID, rootID, "blocks"); err != nil {
+			return fmt.Errorf("wiring attach dependency %s -> %s: %w", attachBeadID, rootID, err)
+		}
+		return nil
 	}
-	if err := store.DepAdd(attachBeadID, rootID, "blocks"); err != nil {
-		return fmt.Errorf("wiring attach dependency %s -> %s: %w", attachBeadID, rootID, err)
+	// Split city: the workflow root (gcg-) lives in the graph/infra store. A
+	// work-store `blocks` edge to it is a cross-prefix dep that bd stores
+	// non-blocking (never consulted for readiness → parent READY mid-DAG,
+	// double-execute) and the composite ready read cannot resolve. Fail LOUD if
+	// the root is absent, then stamp bidirectional linkage the composite ready
+	// read enforces (gc.attached_workflow_root on the parent) instead of a
+	// dangling dep.
+	if _, err := graphStore.Get(rootID); err != nil {
+		return fmt.Errorf("attach workflow root %s not found in graph store: %w", rootID, err)
+	}
+	if err := workStore.SetMetadata(attachBeadID, beadmeta.AttachedWorkflowRootMetadataKey, rootID); err != nil {
+		return fmt.Errorf("marking attach parent %s with workflow root %s: %w", attachBeadID, rootID, err)
+	}
+	linkage := map[string]string{beadmeta.AttachBeadIDMetadataKey: attachBeadID}
+	if strings.TrimSpace(storeRef) != "" {
+		linkage[beadmeta.AttachStoreRefMetadataKey] = storeRef
+	}
+	if err := graphStore.SetMetadataBatch(rootID, linkage); err != nil {
+		return fmt.Errorf("back-linking attach parent %s onto workflow root %s: %w", attachBeadID, rootID, err)
 	}
 	return nil
 }

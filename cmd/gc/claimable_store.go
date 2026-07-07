@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/sling"
@@ -80,8 +82,41 @@ func (c *claimableStore) Ready(q beads.ReadyQuery) ([]beads.Bead, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claimable ready: %w", err)
 	}
-	sortReadyBeadsCanonical(merged)
-	return applyBeadLimit(merged, q.Limit), nil
+	filtered, err := c.filterCrossStoreAttachBlocked(merged)
+	if err != nil {
+		return nil, err
+	}
+	sortReadyBeadsCanonical(filtered)
+	return applyBeadLimit(filtered, q.Limit), nil
+}
+
+// filterCrossStoreAttachBlocked drops beads that are blocked by an attached
+// workflow root in the OTHER store. bd cannot express a cross-store `blocks`
+// edge, so `gc formula cook --attach` on a split city stamps
+// gc.attached_workflow_root on the work-store source bead instead of a dangling
+// dep (landmine #4); the composite ready read is the one seam that owns both
+// stores, so it enforces the block here: the parent is claimable only once the
+// infra-resident root closes. A dangling marker (root missing in its owning
+// store) fails LOUD, matching the composite's fail-loud contract. Beads without
+// the marker (the overwhelming majority) pass through untouched.
+func (c *claimableStore) filterCrossStoreAttachBlocked(beadsIn []beads.Bead) ([]beads.Bead, error) {
+	out := make([]beads.Bead, 0, len(beadsIn))
+	for _, b := range beadsIn {
+		rootID := strings.TrimSpace(b.Metadata[beadmeta.AttachedWorkflowRootMetadataKey])
+		if rootID == "" {
+			out = append(out, b)
+			continue
+		}
+		root, err := c.storeForID(rootID).Get(rootID)
+		if err != nil {
+			return nil, fmt.Errorf("claimable ready: resolving attached workflow root %s for %s: %w", rootID, b.ID, err)
+		}
+		if root.Status == "closed" {
+			out = append(out, b) // DAG finished (pass or fail) → parent unblocked
+		}
+		// else: root still open → parent blocked, drop it.
+	}
+	return out, nil
 }
 
 // List returns the merged List set across the legs, deduped by id, fail-loud on

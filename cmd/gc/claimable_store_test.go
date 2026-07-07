@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -130,5 +131,46 @@ func TestSortReadyBeadsCanonical(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("canonical ready order = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestClaimableReady_AttachParentBlockedWhileInfraRootOpen(t *testing.T) {
+	work := beads.NewMemStoreHonoringIDs()
+	infra := beads.NewMemStoreHonoringIDs()
+	mustCreateBead(t, work, beads.Bead{ID: "ga-parent", Title: "attach parent", Type: "task",
+		Metadata: beads.StringMap{beadmeta.AttachedWorkflowRootMetadataKey: "gcg-root"}})
+	mustCreateBead(t, infra, beads.Bead{ID: "gcg-root", Title: "workflow root", Type: "task"})
+	cs := &claimableStore{work: work, infra: infra}
+
+	// Root open -> parent is blocked (cross-store attach dep), excluded from Ready.
+	got, err := cs.Ready(beads.ReadyQuery{})
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if beadIDSet(got)["ga-parent"] {
+		t.Fatal("attach parent ga-parent is READY while its attached workflow root gcg-root is open in infra (cross-store attach fail-open, landmine #4)")
+	}
+
+	// Root closed (DAG done) -> parent unblocks.
+	if err := infra.Close("gcg-root"); err != nil {
+		t.Fatalf("close root: %v", err)
+	}
+	got, err = cs.Ready(beads.ReadyQuery{})
+	if err != nil {
+		t.Fatalf("Ready after root close: %v", err)
+	}
+	if !beadIDSet(got)["ga-parent"] {
+		t.Fatal("attach parent should be claimable once its workflow root is closed")
+	}
+}
+
+func TestClaimableReady_DanglingAttachRootFailsLoud(t *testing.T) {
+	work := beads.NewMemStoreHonoringIDs()
+	infra := beads.NewMemStoreHonoringIDs()
+	mustCreateBead(t, work, beads.Bead{ID: "ga-parent", Title: "p", Type: "task",
+		Metadata: beads.StringMap{beadmeta.AttachedWorkflowRootMetadataKey: "gcg-missing"}})
+	cs := &claimableStore{work: work, infra: infra}
+	if _, err := cs.Ready(beads.ReadyQuery{}); err == nil {
+		t.Fatal("a dangling gc.attached_workflow_root must fail loud, not fall open")
 	}
 }
