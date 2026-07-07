@@ -818,6 +818,16 @@ func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptio
 		if nextRef != "" {
 			effectiveRef = nextRef
 			if opts.ResolveStoreRef == nil {
+				// A cross-store source_store_ref that cannot be resolved means the
+				// domain parent lives in another store this finalize cannot reach.
+				// On the close (mutate) path that would silently STRAND the parent
+				// open forever, so fail LOUD instead of the traced no-op — the
+				// finalizer stays open and retries once the resolver is wired
+				// (production always sets it for workflow-finalize). The read-only
+				// preflight keeps the best-effort no-op.
+				if mutate {
+					return fmt.Errorf("close-source-chain root=%s: cannot close cross-store source bead %s (ref %s): no store-ref resolver provided; domain parent would be stranded open", rootID, nextID, sourceChainStoreLabel(effectiveRef))
+				}
 				opts.tracef("close-source-chain root=%s stop reason=missing_resolver source=%s ref=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef))
 				return nil
 			}

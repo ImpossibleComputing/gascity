@@ -9624,3 +9624,48 @@ func TestProcessWorkflowFinalize_PurgeOnMissingDir(t *testing.T) {
 		t.Fatalf("result = %+v, want processed", result)
 	}
 }
+
+// TestProcessWorkflowFinalizeFailsLoudWhenCrossStoreRefUnresolvable pins P1
+// landmine #3: a successful finalize whose workflow root carries a cross-store
+// gc.source_store_ref but is handed NO store-ref resolver must FAIL LOUD (keeping
+// the finalizer open for retry), not silently no-op and strand the domain parent
+// open forever.
+func TestProcessWorkflowFinalizeFailsLoudWhenCrossStoreRefUnresolvable(t *testing.T) {
+	t.Parallel()
+	rigStore := beads.NewMemStore()
+
+	workflow := mustCreateWorkflowBead(t, rigStore, beads.Bead{
+		Title: "mol-adopt-pr-v2", Type: "task",
+		Metadata: map[string]string{
+			"gc.kind": "workflow", "gc.formula_contract": "graph.v2",
+			"gc.source_bead_id":   "ga-city-parent",
+			"gc.source_store_ref": "city:test", // cross-store ref, but no resolver below
+		},
+	})
+	cleanup := mustCreateWorkflowBead(t, rigStore, beads.Bead{
+		Title: "Clean up", Type: "task", Status: "closed",
+		Metadata: map[string]string{"gc.outcome": "pass"},
+	})
+	finalizer := mustCreateWorkflowBead(t, rigStore, beads.Bead{
+		Title: "Finalize", Type: "task",
+		Metadata: map[string]string{"gc.kind": "workflow-finalize", "gc.root_bead_id": workflow.ID},
+	})
+	mustDepAdd(t, rigStore, finalizer.ID, cleanup.ID, "blocks")
+	mustDepAdd(t, rigStore, workflow.ID, finalizer.ID, "blocks")
+
+	_, err := ProcessControl(rigStore, finalizer, ProcessOptions{}) // ResolveStoreRef nil
+	if err == nil {
+		t.Fatal("want a loud error closing a cross-store source chain with no resolver; got nil (parent silently stranded)")
+	}
+	if !strings.Contains(err.Error(), "ga-city-parent") && !strings.Contains(err.Error(), "resolver") {
+		t.Fatalf("error should explain the unresolvable cross-store source close; got: %v", err)
+	}
+	// The finalizer must stay OPEN so it retries once the resolver is wired.
+	fin, gerr := rigStore.Get(finalizer.ID)
+	if gerr != nil {
+		t.Fatalf("get finalizer: %v", gerr)
+	}
+	if fin.Status == "closed" {
+		t.Fatalf("finalizer closed on a fail-loud source-close error; want open for retry")
+	}
+}
