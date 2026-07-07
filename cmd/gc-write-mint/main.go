@@ -39,7 +39,7 @@ import (
 // defaultAud is the audience the capstone hardened city expects. It matches the
 // verifier's configured Aud; a grant minted for a different audience is refused
 // by citywriteauth, so the minter refuses it up front.
-const defaultAud = "gc-city-write"
+const defaultAud = citywriteauth.AudienceCityWrite
 
 // maxTTL caps a grant's lifetime. A grant is single-use and request-bound, so a
 // short window bounds the replay exposure; the server enforces its own MaxTTL

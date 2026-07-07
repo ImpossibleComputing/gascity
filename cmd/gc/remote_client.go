@@ -5,15 +5,19 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/citywriteauth"
 	"github.com/gastownhall/gascity/internal/clientauth"
+	"github.com/gastownhall/gascity/internal/clientgrant"
 )
 
-// buildRemoteClient constructs a no-fallback API client for a resolved remote
-// target. TLS options come from the target's context; the transport bearer comes
-// from the context's credential_command (a cached clientauth.CredentialSource)
-// or, for an ad-hoc --city-url/GC_CITY_URL target, from GC_CITY_URL_TOKEN. The
-// resolver guarantees at most one credential technique per target.
-func buildRemoteClient(target *remoteTarget) (*api.Client, error) {
+// remoteClientOptions builds the transport options (TLS + bearer) shared by
+// every remote client for a resolved target. TLS options come from the target's
+// context; the transport bearer comes from the context's credential_command (a
+// clientauth.CredentialSource) or, for an ad-hoc --city-url/GC_CITY_URL target,
+// from GC_CITY_URL_TOKEN. The resolver guarantees at most one credential
+// technique per target. It does NOT wire the city-write grant — that is a
+// write-only concern (see buildRemoteWriteClient).
+func remoteClientOptions(target *remoteTarget) (api.RemoteOptions, error) {
 	opts := api.RemoteOptions{}
 	if ctx := target.Ctx; ctx != nil {
 		opts.CAFile = ctx.CAFile
@@ -22,14 +26,14 @@ func buildRemoteClient(target *remoteTarget) (*api.Client, error) {
 		if ctx.Timeout != "" {
 			d, err := time.ParseDuration(ctx.Timeout)
 			if err != nil {
-				return nil, fmt.Errorf("context %q: invalid timeout %q: %w", ctx.Name, ctx.Timeout, err)
+				return api.RemoteOptions{}, fmt.Errorf("context %q: invalid timeout %q: %w", ctx.Name, ctx.Timeout, err)
 			}
 			opts.RESTTimeout = d
 		}
 		if ctx.CredentialCommand != "" {
 			cs, err := clientauth.NewCredentialSource(ctx.CredentialCommand, target.BaseURL, target.CityName, false)
 			if err != nil {
-				return nil, err
+				return api.RemoteOptions{}, err
 			}
 			opts.Token = cs.Token
 		}
@@ -37,6 +41,49 @@ func buildRemoteClient(target *remoteTarget) (*api.Client, error) {
 	if target.Token != "" {
 		tok := target.Token
 		opts.Token = func() (string, error) { return tok, nil }
+	}
+	return opts, nil
+}
+
+// buildRemoteClient constructs a no-fallback API client for a resolved remote
+// target, for READ commands (no city-write grant is attached).
+func buildRemoteClient(target *remoteTarget) (*api.Client, error) {
+	opts, err := remoteClientOptions(target)
+	if err != nil {
+		return nil, err
+	}
+	return api.NewRemoteCityScopedClient(target.BaseURL, target.CityName, opts)
+}
+
+// buildRemoteWriteClient is buildRemoteClient plus the city-write grant: for a
+// context that configures a grant_command, it wires a clientgrant.GrantSource so
+// every mutating request carries a fresh, request-bound X-GC-City-Write grant
+// (gate G18). A context without a grant_command (or an ad-hoc --city-url target,
+// Ctx==nil) attaches no grant — correct for a non-hardened direct city, which
+// mutates on X-GC-Request alone; a hardened city then answers 401 and the
+// operator learns they must configure grant_command.
+func buildRemoteWriteClient(target *remoteTarget) (*api.Client, error) {
+	opts, err := remoteClientOptions(target)
+	if err != nil {
+		return nil, err
+	}
+	if ctx := target.Ctx; ctx != nil && ctx.GrantCommand != "" {
+		gs, err := clientgrant.NewGrantSource(ctx.GrantCommand)
+		if err != nil {
+			return nil, err
+		}
+		city := target.CityName
+		opts.Grant = func(b api.GrantBinding) (string, error) {
+			return gs.Mint(clientgrant.GrantInfo{
+				Aud:            citywriteauth.AudienceCityWrite,
+				City:           city,
+				Method:         b.Method,
+				Path:           b.Path,
+				CanonicalQuery: b.CanonicalQuery,
+				BodySHA256:     b.BodySHA256,
+				ReqDigest:      b.ReqDigest,
+			})
+		}
 	}
 	return api.NewRemoteCityScopedClient(target.BaseURL, target.CityName, opts)
 }
@@ -56,6 +103,29 @@ func resolveReadTarget() (remoteClient *api.Client, isRemote bool, cityPath stri
 	}
 	if ctx.Remote != nil {
 		c, berr := buildRemoteClient(ctx.Remote)
+		if berr != nil {
+			return nil, true, "", berr
+		}
+		return c, true, "", nil
+	}
+	return nil, false, ctx.CityPath, nil
+}
+
+// resolveWriteTarget resolves a MUTATING command's target. It is the write-side
+// sibling of resolveReadTarget: identical context resolution, but a remote
+// client is built with buildRemoteWriteClient so it carries the city-write grant
+// a hardened city requires (gate G18). Because a remote client is
+// non-fallbackable (gate G1), a remote mutation error surfaces rather than
+// silently falling back to a local store. For a LOCAL target it returns
+// isRemote=false and the resolved cityPath, and the caller uses its existing
+// local seam.
+func resolveWriteTarget() (remoteClient *api.Client, isRemote bool, cityPath string, err error) {
+	ctx, err := resolveContextAllowRemote()
+	if err != nil {
+		return nil, false, "", err
+	}
+	if ctx.Remote != nil {
+		c, berr := buildRemoteWriteClient(ctx.Remote)
 		if berr != nil {
 			return nil, true, "", berr
 		}

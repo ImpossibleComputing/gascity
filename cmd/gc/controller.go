@@ -1357,8 +1357,13 @@ func runController(
 		apiMux := api.NewSupervisorMux(&singleCityStateResolver{state: cs}, nil, readOnly, "controller", commit, time.Now())
 		apiMux.WithAnyHostAllowed()
 		// Gate city-config mutations on a signed write grant when configured.
-		// Fail closed at boot if write-auth is required but no key is set.
-		if err := api.InstallWriteAuth(apiMux, cfg.API.WriteAuthVerifyKey, cfg.API.WriteAuthRequired); err != nil {
+		// Fail closed at boot if write-auth is required but no key is set, or if a
+		// non-loopback + allow_mutations bind has no key and no ack knob (G10).
+		if err := api.InstallWriteAuth(apiMux, cfg.API.WriteAuthVerifyKey, cfg.API.WriteAuthRequired, api.WriteAuthBindContext{
+			NonLocal:        nonLocal,
+			AllowMutations:  cfg.API.AllowMutations,
+			AllowUnverified: cfg.API.WriteAuthAllowUnverified,
+		}); err != nil {
 			fmt.Fprintf(stderr, "api: write-auth: %v\n", err) //nolint:errcheck
 			return 1
 		}

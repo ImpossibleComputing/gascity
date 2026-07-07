@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+// AudienceCityWrite is the well-known audience for X-GC-City-Write grants. A
+// Verifier is still configured with its own Options.Aud (an operator may choose
+// a different value), but this is the canonical audience the reference minter
+// stamps and the direct-hardened capstone client expects, so both sides can
+// single-source it rather than repeating the literal.
+const AudienceCityWrite = "gc-city-write"
+
 // Grant is the claim set carried by an X-GC-City-Write token: a single-use,
 // request-bound authorization for exactly one city mutation, minted by a
 // configured trusted authority and verified here.

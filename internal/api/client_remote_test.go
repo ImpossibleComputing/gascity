@@ -1,15 +1,21 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/citywriteauth"
 )
 
 // writeServerCA writes an httptest TLS server's certificate to a PEM file and
@@ -81,6 +87,101 @@ func TestRemoteCheckRedirect(t *testing.T) {
 		}
 		if err := remoteCheckRedirect(mkReq("https://box.internal:9443/x"), via); err == nil {
 			t.Fatal("must stop after too many redirects")
+		}
+	})
+	t.Run("grant-bearing request refuses ALL redirects", func(t *testing.T) {
+		grantOrig := mkReq("https://box.internal:9443/v0/city/mc/sling")
+		grantOrig.Header.Set("X-GC-City-Write", "payload.sig")
+		// Even a same-host, same-scheme redirect must be refused: the grant is
+		// single-use and bound to the exact original request, so following any
+		// hop either breaks the binding or wastes the one-shot grant.
+		if err := remoteCheckRedirect(mkReq("https://box.internal:9443/other"), []*http.Request{grantOrig}); err == nil {
+			t.Fatal("a grant-bearing request must refuse even a same-host redirect")
+		}
+	})
+}
+
+func TestRemoteGrantEditor(t *testing.T) {
+	t.Run("mutating request gets a grant bound to the request", func(t *testing.T) {
+		body := []byte(`{"source":"pr-1"}`)
+		var got GrantBinding
+		c := &Client{grantSource: func(b GrantBinding) (string, error) { got = b; return "payload.sig", nil }}
+		req, _ := http.NewRequest(http.MethodPost, "https://box/v0/city/mc/sling?x=1", bytes.NewReader(body))
+		if err := remoteGrantEditor(c)(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Header.Get("X-GC-City-Write") != "payload.sig" {
+			t.Errorf("grant header = %q", req.Header.Get("X-GC-City-Write"))
+		}
+		sum := sha256.Sum256(body)
+		if got.Method != "POST" || got.Path != "/v0/city/mc/sling" || got.CanonicalQuery != "x=1" {
+			t.Errorf("binding parts wrong: %+v", got)
+		}
+		if got.BodySHA256 != hex.EncodeToString(sum[:]) {
+			t.Errorf("body hash = %q", got.BodySHA256)
+		}
+		if got.ReqDigest != citywriteauth.ReqDigest("POST", "/v0/city/mc/sling", "x=1", body) {
+			t.Errorf("req digest = %q", got.ReqDigest)
+		}
+		// The actual send body must be intact (the editor reads a copy via GetBody).
+		sent, _ := io.ReadAll(req.Body)
+		if string(sent) != string(body) {
+			t.Errorf("send body disturbed: %q", sent)
+		}
+	})
+	t.Run("reads get no grant", func(t *testing.T) {
+		called := false
+		c := &Client{grantSource: func(GrantBinding) (string, error) { called = true; return "x.y", nil }}
+		for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+			req, _ := http.NewRequest(m, "https://box/v0/city/mc/beads", nil)
+			if err := remoteGrantEditor(c)(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			if req.Header.Get("X-GC-City-Write") != "" {
+				t.Errorf("%s must carry no grant", m)
+			}
+		}
+		if called {
+			t.Error("grant source must not be invoked for reads")
+		}
+	})
+	t.Run("nil grant source attaches nothing", func(t *testing.T) {
+		c := &Client{}
+		req, _ := http.NewRequest(http.MethodPost, "https://box/x", bytes.NewReader([]byte(`{}`)))
+		if err := remoteGrantEditor(c)(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Header.Get("X-GC-City-Write") != "" {
+			t.Error("no grant without a grant source")
+		}
+	})
+	t.Run("grant source error propagates", func(t *testing.T) {
+		c := &Client{grantSource: func(GrantBinding) (string, error) { return "", errors.New("mint failed") }}
+		req, _ := http.NewRequest(http.MethodPost, "https://box/x", bytes.NewReader([]byte(`{}`)))
+		if err := remoteGrantEditor(c)(context.Background(), req); err == nil {
+			t.Fatal("mint error must propagate")
+		}
+	})
+	t.Run("empty token is an error", func(t *testing.T) {
+		c := &Client{grantSource: func(GrantBinding) (string, error) { return "  ", nil }}
+		req, _ := http.NewRequest(http.MethodPost, "https://box/x", bytes.NewReader([]byte(`{}`)))
+		if err := remoteGrantEditor(c)(context.Background(), req); err == nil {
+			t.Fatal("empty grant token must error")
+		}
+	})
+	t.Run("body-less mutation binds the empty-body hash", func(t *testing.T) {
+		var got GrantBinding
+		c := &Client{grantSource: func(b GrantBinding) (string, error) { got = b; return "x.y", nil }}
+		req, _ := http.NewRequest(http.MethodDelete, "https://box/v0/city/mc/workflow/w1", nil)
+		if err := remoteGrantEditor(c)(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		empty := sha256.Sum256(nil)
+		if got.BodySHA256 != hex.EncodeToString(empty[:]) {
+			t.Errorf("empty-body hash = %q", got.BodySHA256)
+		}
+		if got.ReqDigest != citywriteauth.ReqDigest("DELETE", "/v0/city/mc/workflow/w1", "", nil) {
+			t.Errorf("req digest = %q", got.ReqDigest)
 		}
 	})
 }

@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api/genclient"
+	"github.com/gastownhall/gascity/internal/citywriteauth"
 )
 
 // Remote-client transport budgets. A remote city is reached over a WAN, so the
@@ -35,11 +39,34 @@ const (
 // a grant rather than a bearer).
 type TokenSource func() (string, error)
 
+// GrantBinding is the request binding a city-write grant is bound to. The
+// transport computes it from the FINAL outgoing request and hands it to a
+// GrantSource, which mints a grant covering exactly this method/path/query/body.
+// CanonicalQuery is the request's raw URL query (r.URL.RawQuery); BodySHA256 is
+// the lowercase hex sha256 of the body; ReqDigest is citywriteauth.ReqDigest
+// over the four — the same value the server independently recomputes.
+type GrantBinding struct {
+	Method         string
+	Path           string
+	CanonicalQuery string
+	BodySHA256     string
+	ReqDigest      string
+}
+
+// GrantSource mints a single-use X-GC-City-Write grant for one mutating request.
+// It is invoked live per mutating request (never captured), receives the binding
+// the transport computed, and returns the grant token. A nil GrantSource
+// attaches no grant. It mirrors TokenSource.
+type GrantSource func(GrantBinding) (string, error)
+
 // RemoteOptions configures the transport of a remote-city client.
 type RemoteOptions struct {
 	// Token, when non-nil, supplies the Authorization: Bearer <token> credential
 	// (consumed by an edge/proxy; the controller ignores Authorization).
 	Token TokenSource
+	// Grant, when non-nil, mints an X-GC-City-Write grant for each mutating
+	// request (a direct hardened self-host). Reads never carry a grant.
+	Grant GrantSource
 	// CAFile is a PEM bundle used to verify the server certificate. Empty uses
 	// the system roots.
 	CAFile string
@@ -69,6 +96,7 @@ func NewRemoteCityScopedClient(baseURL, cityName string, opts RemoteOptions) (*C
 		isRemote:     true,
 		streamClient: stream,
 		tokenSource:  opts.Token,
+		grantSource:  opts.Grant,
 	}
 	cw, err := genclient.NewClientWithResponses(
 		baseURL,
@@ -78,6 +106,9 @@ func NewRemoteCityScopedClient(baseURL, cityName string, opts RemoteOptions) (*C
 			return nil
 		}),
 		genclient.WithRequestEditorFn(remoteAuthEditor(c)),
+		// The grant editor is attached LAST so any body/query editor has already
+		// run: the grant digest must bind the exact bytes that go on the wire.
+		genclient.WithRequestEditorFn(remoteGrantEditor(c)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("building remote client for %q: %w", baseURL, err)
@@ -100,6 +131,72 @@ func remoteAuthEditor(c *Client) genclient.RequestEditorFn {
 		}
 		return nil
 	}
+}
+
+// remoteGrantEditor returns a genclient request editor that, for a MUTATING
+// request, computes the request binding over the final request body and query,
+// mints a single-use grant via the client's grant source, and attaches it as
+// X-GC-City-Write. A read (GET/HEAD/OPTIONS) or a nil grant source attaches
+// nothing. It is attached last (after the body/query are settled) so the digest
+// binds exactly what goes on the wire, and it closes over the client so the
+// grant is minted live per request.
+func remoteGrantEditor(c *Client) genclient.RequestEditorFn {
+	return func(_ context.Context, req *http.Request) error {
+		if c.grantSource == nil || !isMutatingMethod(req.Method) {
+			return nil
+		}
+		body, err := bufferRequestBody(req)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(body)
+		token, err := c.grantSource(GrantBinding{
+			Method:         req.Method,
+			Path:           req.URL.Path,
+			CanonicalQuery: req.URL.RawQuery,
+			BodySHA256:     hex.EncodeToString(sum[:]),
+			ReqDigest:      citywriteauth.ReqDigest(req.Method, req.URL.Path, req.URL.RawQuery, body),
+		})
+		if err != nil {
+			return fmt.Errorf("minting city-write grant: %w", err)
+		}
+		if strings.TrimSpace(token) == "" {
+			return fmt.Errorf("grant source returned an empty token")
+		}
+		req.Header.Set("X-GC-City-Write", token)
+		return nil
+	}
+}
+
+// isMutatingMethod reports whether an HTTP method mutates server state and thus
+// needs a city-write grant. GET/HEAD/OPTIONS are reads and carry none.
+func isMutatingMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+// bufferRequestBody reads a copy of req's body via GetBody, leaving the actual
+// send body intact (GetBody returns a fresh reader, so no reset is needed). A
+// body-less request yields nil. A body without GetBody (a non-replayable stream)
+// is a hard error: a grant must bind the exact bytes on the wire, which cannot
+// be guaranteed without a replayable body.
+func bufferRequestBody(req *http.Request) ([]byte, error) {
+	if req.Body == nil || req.Body == http.NoBody {
+		return nil, nil
+	}
+	if req.GetBody == nil {
+		return nil, fmt.Errorf("cannot compute city-write grant digest: request body is not replayable")
+	}
+	rc, err := req.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("reading request body for grant digest: %w", err)
+	}
+	defer rc.Close() //nolint:errcheck // read-only copy
+	return io.ReadAll(rc)
 }
 
 // newRemoteHTTPClients builds the two client shapes from a single TLS/redirect
@@ -177,11 +274,19 @@ func remoteCheckRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
 	}
-	orig := via[0].URL
-	if !strings.EqualFold(req.URL.Host, orig.Host) {
-		return fmt.Errorf("refusing cross-host redirect from %s to %s (credentials are per-host)", orig.Host, req.URL.Host)
+	orig := via[0]
+	// A city-write grant is single-use and bound to the EXACT original
+	// method/path/query/body, so following any redirect would either break that
+	// binding or waste the one-shot grant on a request the server never
+	// authorized. Refuse every redirect on a grant-bearing request outright
+	// (gate G18), even a same-host one that the reads path would allow.
+	if orig.Header.Get("X-GC-City-Write") != "" {
+		return fmt.Errorf("refusing redirect on a grant-bearing request (the grant is single-use and request-bound)")
 	}
-	if orig.Scheme == "https" && req.URL.Scheme != "https" {
+	if !strings.EqualFold(req.URL.Host, orig.URL.Host) {
+		return fmt.Errorf("refusing cross-host redirect from %s to %s (credentials are per-host)", orig.URL.Host, req.URL.Host)
+	}
+	if orig.URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return fmt.Errorf("refusing https->%s downgrade redirect to %s", req.URL.Scheme, req.URL.Host)
 	}
 	if len(via) >= 10 {

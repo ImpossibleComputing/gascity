@@ -294,6 +294,11 @@ type Client struct {
 	streamClient *http.Client
 	tokenSource  TokenSource
 	tokenMu      sync.Mutex
+	// grantSource, when set, mints a single-use X-GC-City-Write grant for each
+	// MUTATING request (gate G18). Like tokenSource it is invoked live per
+	// request, never captured. nil means no grant is attached (a city that
+	// authenticates on X-GC-Request alone, or one fronted by a bearer edge).
+	grantSource GrantSource
 }
 
 // IsRemote reports whether this client targets a remote city over the control
@@ -1272,6 +1277,99 @@ func (c *Client) SubmitSession(id, message string, intent session.SubmitIntent) 
 		Queued: p.Queued,
 		Intent: session.SubmitIntent(p.Intent),
 	}, nil
+}
+
+// SlingRequest carries the parameters of a sling mutation for Client.Sling.
+// It mirrors the SlingInput body: Target is required; exactly one of Bead or
+// Formula selects the work.
+type SlingRequest struct {
+	Rig            string
+	Target         string
+	Bead           string
+	Formula        string
+	AttachedBeadID string
+	Title          string
+	Vars           map[string]string
+	ScopeKind      string
+	ScopeRef       string
+	Force          bool
+}
+
+// SlingResult is the outcome of a sling mutation.
+type SlingResult struct {
+	Status         string
+	Target         string
+	Formula        string
+	Bead           string
+	WorkflowID     string
+	RootBeadID     string
+	AttachedBeadID string
+	Mode           string
+	Warnings       []string
+}
+
+// Sling routes work to a target agent or pool over the control plane
+// (POST /v0/city/{city}/sling). It is synchronous: the server materializes the
+// work, hooks it, creates any auto-convoy, and returns the result. A remote
+// client attaches the X-GC-City-Write grant automatically for this mutating
+// request (gate G18); a remote error is non-fallbackable (gate G1).
+func (c *Client) Sling(req SlingRequest) (SlingResult, error) {
+	if err := c.requireCityScope(); err != nil {
+		return SlingResult{}, err
+	}
+	body := genclient.PostV0CityByCityNameSlingJSONRequestBody{Target: req.Target}
+	setStrPtr(&body.Rig, req.Rig)
+	setStrPtr(&body.Bead, req.Bead)
+	setStrPtr(&body.Formula, req.Formula)
+	setStrPtr(&body.AttachedBeadId, req.AttachedBeadID)
+	setStrPtr(&body.Title, req.Title)
+	setStrPtr(&body.ScopeKind, req.ScopeKind)
+	setStrPtr(&body.ScopeRef, req.ScopeRef)
+	if req.Force {
+		f := true
+		body.Force = &f
+	}
+	if len(req.Vars) > 0 {
+		v := req.Vars
+		body.Vars = &v
+	}
+	params := &genclient.PostV0CityByCityNameSlingParams{XGCRequest: "true"}
+	resp, err := c.cw.PostV0CityByCityNameSlingWithResponse(context.Background(), c.cityName, params, body)
+	if err != nil {
+		return SlingResult{}, &connError{err: fmt.Errorf("request failed: %w", err)}
+	}
+	if resp == nil {
+		return SlingResult{}, &connError{err: fmt.Errorf("nil response")}
+	}
+	if err := apiErrorFromResponse(resp.StatusCode(), resp.ApplicationproblemJSONDefault); err != nil {
+		return SlingResult{}, err
+	}
+	if resp.JSON200 == nil {
+		return SlingResult{}, fmt.Errorf("API returned %d with no body", resp.StatusCode())
+	}
+	r := resp.JSON200
+	out := SlingResult{
+		Status:         r.Status,
+		Target:         r.Target,
+		Formula:        derefStr(r.Formula),
+		Bead:           derefStr(r.Bead),
+		WorkflowID:     derefStr(r.WorkflowId),
+		RootBeadID:     derefStr(r.RootBeadId),
+		AttachedBeadID: derefStr(r.AttachedBeadId),
+		Mode:           derefStr(r.Mode),
+	}
+	if r.Warnings != nil {
+		out.Warnings = *r.Warnings
+	}
+	return out, nil
+}
+
+// setStrPtr points *dst at a copy of v when v is non-empty, leaving it nil
+// otherwise, so an omitempty pointer field is only set for a present value.
+func setStrPtr(dst **string, v string) {
+	if v != "" {
+		*dst = &v
+	}
 }
 
 var errClientUninitialized = errors.New("api client not initialized")
