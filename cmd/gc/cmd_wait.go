@@ -346,26 +346,23 @@ var waitListAPIClient = func(cityPath string) (*api.Client, string) {
 // The label constant is the shared invariant between CLI and server, so
 // callers reference it rather than inlining the string.
 func routeWaitList(cityPath string, c *api.Client, nilReason, stateFilter, sessionFilter string, jsonOutput bool, stdout, stderr io.Writer) int {
-	const cmdName = "wait list"
-	if c != nil {
-		cr, err := c.ListBeads(api.ListBeadsOpts{
-			Label: sessionpkg.WaitBeadLabel,
-			Limit: 1000,
-		})
-		if err == nil {
-			logRoute(stderr, cmdName, "api", "")
+	var cr api.CachedRead[[]beads.Bead]
+	return routeRead(c, "wait list", nilReason, stderr,
+		func() error {
+			var err error
+			cr, err = c.ListBeads(api.ListBeadsOpts{
+				Label: sessionpkg.WaitBeadLabel,
+				Limit: 1000,
+			})
+			return err
+		},
+		func() int {
 			return renderWaitListFromAPI(cityPath, cr, stateFilter, sessionFilter, jsonOutput, stdout, stderr)
-		}
-		if !api.ShouldFallbackForRead(c, err) {
-			logRoute(stderr, cmdName, "api", "error")
-			fmt.Fprintf(stderr, "gc wait list: %v\n", err) //nolint:errcheck
-			return 1
-		}
-		logRoute(stderr, cmdName, "fallback", api.FallbackReason(c, err))
-	} else {
-		logRoute(stderr, cmdName, "fallback", nilReason)
-	}
-	return doWaitListFallback(cityPath, stateFilter, sessionFilter, jsonOutput, stdout, stderr)
+		},
+		func() int {
+			return doWaitListFallback(cityPath, stateFilter, sessionFilter, jsonOutput, stdout, stderr)
+		},
+	)
 }
 
 // renderWaitListFromAPI applies the same IsWaitBead + closed-excluded filter
