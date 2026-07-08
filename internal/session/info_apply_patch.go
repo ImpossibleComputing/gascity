@@ -89,6 +89,10 @@ func (info Info) ApplyPatch(patch MetadataPatch) Info {
 			info.CommonName = v
 		case "pool_slot":
 			info.PoolSlot = v
+		case CanonicalInstanceNameMetadata:
+			info.CanonicalInstanceNameMetadata = v
+		case CanonicalPoolSlotMetadata:
+			info.CanonicalPoolSlotMetadata = v
 		case "pool_managed":
 			info.PoolManaged = strings.TrimSpace(v) == "true"
 		case "session_origin":

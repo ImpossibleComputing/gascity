@@ -68,8 +68,14 @@ func InfoFromPersistedBead(b beads.Bead) Info {
 		ManualSession:           strings.TrimSpace(b.Metadata["manual_session"]) == "true",
 		ManualSessionMetadata:   b.Metadata["manual_session"],
 		Labels:                  b.Labels,
-		MCPIdentity:             b.Metadata[MCPIdentityMetadataKey],
-		MCPServersSnapshot:      b.Metadata[MCPServersSnapshotMetadataKey],
+
+		// Canonical-identity record mirrors (verbatim). The typed record is
+		// derived on demand via Info.CanonicalIdentity(); these keep the raw
+		// values so ApplyPatch folds them per-key. S19 Stage 2 (write-only).
+		CanonicalInstanceNameMetadata: b.Metadata[CanonicalInstanceNameMetadata],
+		CanonicalPoolSlotMetadata:     b.Metadata[CanonicalPoolSlotMetadata],
+		MCPIdentity:                   b.Metadata[MCPIdentityMetadataKey],
+		MCPServersSnapshot:            b.Metadata[MCPServersSnapshotMetadataKey],
 
 		// health / provider-terminal-error cluster. The key literals mirror the
 		// cmd/gc session_reconcile constants (session_health, session_drainable,
