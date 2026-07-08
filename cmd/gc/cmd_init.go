@@ -1533,17 +1533,7 @@ func shouldBootstrapScopedFileStore(cfg *config.City) bool {
 }
 
 func bootstrapScopedFileProviderCityFS(fs fsys.FS, cityPath string) error {
-	if err := fs.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
-		return err
-	}
-	if err := fs.WriteFile(fileStoreLayoutMarkerPath(cityPath), []byte(fileStoreLayoutScopedV1+"\n"), 0o644); err != nil {
-		return err
-	}
-	beadsPath := filepath.Join(cityPath, ".gc", "beads.json")
-	if _, err := fs.Stat(beadsPath); err == nil {
-		return nil
-	}
-	return fs.WriteFile(beadsPath, []byte("{\"seq\":0,\"beads\":[]}\n"), 0o644)
+	return cityinit.BootstrapScopedFileProviderCityFS(fs, cityPath)
 }
 
 // writeInitAgentPrompts creates the agents/ directory and writes only the

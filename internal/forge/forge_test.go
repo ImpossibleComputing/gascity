@@ -34,6 +34,14 @@ func TestManufactureBindsFolderAndLoads(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(city.Root, ".gc", "events.jsonl")); err != nil {
 		t.Errorf("missing scaffold events.jsonl: %v", err)
 	}
+	// The file bead provider's scope-local layout must be bootstrapped so the
+	// store opens with the scoped layout when Phase 2 runs the formula.
+	if got, err := os.ReadFile(filepath.Join(city.Root, ".gc", "file-beads-layout")); err != nil || string(got) != "scope-local-v1\n" {
+		t.Errorf("scoped file-store marker: err=%v content=%q", err, got)
+	}
+	if _, err := os.Stat(filepath.Join(city.Root, ".gc", "beads.json")); err != nil {
+		t.Errorf("seeded beads.json missing: %v", err)
+	}
 	if city.FormulaPath == "" {
 		t.Error("City.FormulaPath not set")
 	} else if _, err := os.Stat(city.FormulaPath); err != nil {

@@ -76,6 +76,36 @@ func EnsureCityScaffoldFS(fs fsys.FS, cityPath string) error {
 	return nil
 }
 
+// FileBeadsLayoutScopedV1 is the marker content identifying a scope-local file
+// bead store. It must stay in sync with the reader in cmd/gc/main.go
+// (fileStoreLayoutScopedV1); a cityinit test pins the exact bytes.
+const FileBeadsLayoutScopedV1 = "scope-local-v1"
+
+// FileBeadsLayoutMarkerPath returns the scope-local file-store marker path. It
+// must stay in sync with the reader in cmd/gc/main.go (fileStoreLayoutMarkerPath).
+func FileBeadsLayoutMarkerPath(cityPath string) string {
+	return filepath.Join(cityPath, citylayout.RuntimeRoot, "file-beads-layout")
+}
+
+// BootstrapScopedFileProviderCityFS writes the scope-local file bead store
+// layout: the marker that selects the scoped layout plus a seeded empty
+// beads.json. It is idempotent — an existing beads.json is left untouched.
+// Callers that set Beads.Provider="file" must run this before any store is
+// opened, or the store opens with the legacy (non-scoped) layout.
+func BootstrapScopedFileProviderCityFS(fs fsys.FS, cityPath string) error {
+	if err := fs.MkdirAll(filepath.Join(cityPath, citylayout.RuntimeRoot), 0o755); err != nil {
+		return err
+	}
+	if err := fs.WriteFile(FileBeadsLayoutMarkerPath(cityPath), []byte(FileBeadsLayoutScopedV1+"\n"), 0o644); err != nil {
+		return err
+	}
+	beadsPath := filepath.Join(cityPath, citylayout.RuntimeRoot, "beads.json")
+	if _, err := fs.Stat(beadsPath); err == nil {
+		return nil
+	}
+	return fs.WriteFile(beadsPath, []byte("{\"seq\":0,\"beads\":[]}\n"), 0o644)
+}
+
 // CityAlreadyInitializedFS reports whether cityPath already has init output.
 func CityAlreadyInitializedFS(fs fsys.FS, cityPath string) bool {
 	if fi, err := fs.Stat(filepath.Join(cityPath, citylayout.CityConfigFile)); err == nil && !fi.IsDir() {

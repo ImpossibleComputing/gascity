@@ -192,13 +192,15 @@ func writeCity(fs fsys.FS, root, name string, rigs []config.Rig, spec Spec) (str
 	// init; avoids the deprecated [workspace] name surface).
 	cfg.Workspace.Name = ""
 	cfg.Beads = config.BeadsConfig{Provider: "file"}
-	// NOTE(phase2): provider "file" needs the scoped-layout bootstrap
-	// (.gc/file-beads-layout marker + seeded .gc/beads.json, per gc init /
-	// DESIGN.md Decision E) before any store is opened. Slice 1 only manufactures
-	// and dry-runs, so the store is never opened here; the execution slice adds
-	// the bootstrap where it is exercised and verifiable.
 	cfg.Agents = spec.Agents
 	cfg.Rigs = rigs
+
+	// The file bead provider needs the scope-local layout (marker + seeded
+	// beads.json) before any store is opened — the same bootstrap gc init runs
+	// for a file-backed city (DESIGN.md Decision E).
+	if err := cityinit.BootstrapScopedFileProviderCityFS(fs, root); err != nil {
+		return "", err
+	}
 
 	cityTOML, err := cfg.MarshalForWrite()
 	if err != nil {
