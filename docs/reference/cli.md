@@ -63,6 +63,7 @@ gc [flags]
 | [gc restart](#gc-restart) | Restart all agent sessions in the city |
 | [gc resume](#gc-resume) | Resume a suspended city |
 | [gc rig](#gc-rig) | Manage rigs (projects) |
+| [gc run](#gc-run) | Run a formula as a one-shot in a manufactured transient city |
 | [gc runtime](#gc-runtime) | Process-intrinsic runtime operations |
 | [gc service](#gc-service) | Inspect workspace services |
 | [gc session](#gc-session) | Manage interactive chat sessions |
@@ -3231,6 +3232,31 @@ gc rig suspend [name] [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--json` | bool |  | Output in JSONL format |
+
+## gc run
+
+Manufacture a throwaway city-as-directory for a single formula run, bind the
+given folders to it as rigs (referenced, never copied), run the formula, and
+tear the city down.
+
+Only .toml formulas are supported in this build. Use --dry-run to print the
+synthesized city (city.toml + .gc/site.toml + resolved rig bindings) without
+running.
+
+Security: each --folder grants the run full read-write access to that path as
+the invoking user. gc run is local single-user only; do not expose it to
+untrusted callers without an authorization gate.
+
+```
+gc run <path> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--dry-run` | bool |  | manufacture and print the synthesized city, then reap it without running |
+| `--folder` | stringArray |  | bind a repo as name=/path (repeatable); each becomes a rig with read-write access to that path |
+| `--keep` | bool |  | retain the manufactured city directory instead of removing it |
+| `--var` | stringArray |  | formula variable as key=value (repeatable; validated but not yet applied in this build) |
 
 ## gc runtime
 

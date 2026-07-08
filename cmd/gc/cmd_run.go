@@ -1,0 +1,203 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/forge"
+	"github.com/spf13/cobra"
+)
+
+// newRunCmd builds `gc run <path>` — the one-shot front door. It manufactures a
+// throwaway city-as-directory for a single formula run, binds --folder repos to
+// it as rigs (referenced, never copied), and (with --dry-run) prints the
+// synthesized city and reaps it.
+//
+// Only .toml formulas are accepted in this build; the .lumen arm plugs in behind
+// the same forge at branch convergence.
+func newRunCmd(stdout, stderr io.Writer) *cobra.Command {
+	var (
+		folderFlags []string
+		varFlags    []string
+		keep        bool
+		dryRun      bool
+	)
+	cmd := &cobra.Command{
+		Use:   "run <path>",
+		Short: "Run a formula as a one-shot in a manufactured transient city",
+		Long: strings.TrimSpace(`
+Manufacture a throwaway city-as-directory for a single formula run, bind the
+given folders to it as rigs (referenced, never copied), run the formula, and
+tear the city down.
+
+Only .toml formulas are supported in this build. Use --dry-run to print the
+synthesized city (city.toml + .gc/site.toml + resolved rig bindings) without
+running.
+
+Security: each --folder grants the run full read-write access to that path as
+the invoking user. gc run is local single-user only; do not expose it to
+untrusted callers without an authorization gate.`),
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := runOneShot(stdout, stderr, args[0], folderFlags, varFlags, keep, dryRun, ""); err != nil {
+				fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck // best-effort stderr
+				return errExit
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVar(&folderFlags, "folder", nil, "bind a repo as name=/path (repeatable); each becomes a rig with read-write access to that path")
+	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "formula variable as key=value (repeatable; validated but not yet applied in this build)")
+	cmd.Flags().BoolVar(&keep, "keep", false, "retain the manufactured city directory instead of removing it")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "manufacture and print the synthesized city, then reap it without running")
+	return cmd
+}
+
+// runOneShot manufactures a transient city for path and, unless dryRun, reports
+// that execution is not yet wired. foundryRoot is "" outside tests (defaults to
+// os.TempDir via the forge); tests pass a hermetic dir.
+func runOneShot(stdout, stderr io.Writer, path string, folderFlags, varFlags []string, keep, dryRun bool, foundryRoot string) error {
+	if ext := strings.ToLower(filepath.Ext(path)); ext != ".toml" {
+		return fmt.Errorf("gc run: unsupported file type %q; only .toml formulas are supported in this build", ext)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("gc run: reading formula %q: %w", path, err)
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return fmt.Errorf("gc run: formula %q is empty", path)
+	}
+	var probe any
+	if _, err := toml.Decode(string(body), &probe); err != nil {
+		return fmt.Errorf("gc run: formula %q is not valid TOML: %w", path, err)
+	}
+	folders, err := parseFolderFlags(folderFlags)
+	if err != nil {
+		return err
+	}
+	// --var is validated for forward compatibility; the prototype does not yet
+	// thread vars into the run (see the flag help).
+	if _, err := parseKeyValueFlags(varFlags); err != nil {
+		return err
+	}
+
+	base := filepath.Base(path)
+	city, err := forge.Manufacture(forge.Spec{
+		Name:            strings.TrimSuffix(base, filepath.Ext(base)),
+		FormulaFileName: base,
+		FormulaBody:     body,
+		Folders:         folders,
+		FoundryRoot:     foundryRoot,
+		// Non-dry-run keeps the dir for inspection until execution is wired.
+		Keep: keep || !dryRun,
+	})
+	if err != nil {
+		return fmt.Errorf("gc run: manufacturing city: %w", err)
+	}
+
+	if dryRun {
+		defer func() {
+			if err := city.Teardown(); err != nil {
+				fmt.Fprintf(stderr, "gc run: teardown: %v\n", err) //nolint:errcheck // best-effort stderr
+			}
+		}()
+		printManufacturedCity(stdout, city)
+		return nil
+	}
+
+	// Execution wiring (forge -> in-process runController -> DoSling -> watch the
+	// workflow finalize -> teardown) is the next slice. Manufacture succeeded and
+	// the city is kept for inspection, but the formula did NOT run — return a
+	// non-zero exit so scripts never mistake this for a completed run.
+	fmt.Fprintf(stdout, "manufactured transient city at %s\n", city.Root) //nolint:errcheck // best-effort stdout
+	return fmt.Errorf("gc run: formula execution is not wired in this prototype yet; "+
+		"city kept at %s (remove with: rm -rf %q); use --dry-run to inspect and reap", city.Root, city.Root)
+}
+
+// parseFolderFlags parses repeatable name=/path bindings into forge.Folders,
+// canonicalizing each path (resolving symlinks, which also verifies existence).
+// The bead prefix is left to the forge (the single derivation owner).
+func parseFolderFlags(flags []string) ([]forge.Folder, error) {
+	var folders []forge.Folder
+	seen := make(map[string]struct{}, len(flags))
+	for _, raw := range flags {
+		name, path, ok := strings.Cut(raw, "=")
+		name = strings.TrimSpace(name)
+		path = strings.TrimSpace(path)
+		if !ok || name == "" || path == "" {
+			return nil, fmt.Errorf("gc run: --folder %q must be name=/path", raw)
+		}
+		if _, dup := seen[name]; dup {
+			return nil, fmt.Errorf("gc run: --folder name %q used more than once", name)
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("gc run: resolving --folder %q: %w", raw, err)
+		}
+		// Symlinked targets are intentionally allowed and resolved to their real
+		// path here; EvalSymlinks also fails if the path does not exist.
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("gc run: --folder %q: %w", path, err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("gc run: stat --folder %q: %w", path, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("gc run: --folder %q is not a directory", path)
+		}
+		seen[name] = struct{}{}
+		folders = append(folders, forge.Folder{Name: name, Path: resolved})
+	}
+	return folders, nil
+}
+
+// parseKeyValueFlags parses repeatable key=value flags into a map.
+func parseKeyValueFlags(flags []string) (map[string]string, error) {
+	out := make(map[string]string, len(flags))
+	for _, raw := range flags {
+		key, value, ok := strings.Cut(raw, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("gc run: --var %q must be key=value", raw)
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
+// printManufacturedCity prints the synthesized city.toml, .gc/site.toml, and the
+// site-bound rig paths (from the config the forge already loaded back).
+func printManufacturedCity(stdout io.Writer, city *forge.City) {
+	fmt.Fprintf(stdout, "# manufactured transient city: %s\n\n", city.Root) //nolint:errcheck // best-effort stdout
+	printFileSection(stdout, "city.toml", filepath.Join(city.Root, citylayout.CityConfigFile))
+	printFileSection(stdout, ".gc/site.toml", config.SiteBindingPath(city.Root))
+	fmt.Fprintln(stdout, "--- resolved rig bindings ---") //nolint:errcheck // best-effort stdout
+	if len(city.Config.Rigs) == 0 {
+		fmt.Fprintln(stdout, "(none)") //nolint:errcheck // best-effort stdout
+	}
+	for _, r := range city.Config.Rigs {
+		fmt.Fprintf(stdout, "rig %q -> %s (prefix %q)\n", r.Name, r.Path, r.Prefix) //nolint:errcheck // best-effort stdout
+	}
+}
+
+// printFileSection prints a labeled file, surfacing (not swallowing) a read
+// failure — the file was written moments earlier, so unreadability is a signal.
+func printFileSection(stdout io.Writer, label, path string) {
+	fmt.Fprintf(stdout, "--- %s ---\n", label) //nolint:errcheck // best-effort stdout
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(stdout, "(unreadable: %v)\n\n", err) //nolint:errcheck // best-effort stdout
+		return
+	}
+	fmt.Fprintf(stdout, "%s\n", string(data)) //nolint:errcheck // best-effort stdout
+}
