@@ -1388,6 +1388,7 @@ type SlingRequest struct {
 	ScopeKind      string
 	ScopeRef       string
 	Force          bool
+	Reassign       bool
 }
 
 // SlingResult is the outcome of a sling mutation.
@@ -1423,6 +1424,10 @@ func (c *Client) Sling(req SlingRequest) (SlingResult, error) {
 	if req.Force {
 		f := true
 		body.Force = &f
+	}
+	if req.Reassign {
+		r := true
+		body.Reassign = &r
 	}
 	if len(req.Vars) > 0 {
 		v := req.Vars
