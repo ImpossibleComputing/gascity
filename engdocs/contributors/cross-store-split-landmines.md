@@ -109,6 +109,26 @@ Status: `broken-on-split` (open) · `fixed-on-deployed-branch` (proven port) ·
     would misroute wisps). Tests: `TestRecipeMaterializesInfraClass`,
     `TestInstantiateSlingFormulaRoutesMoleculeByClass` (internal/sling).
 
+### P1.6 — deferred session-create waited on the wrong store (found by RC gate / acceptance)
+18. **`WaitForSessionCommandable` read the work store, not the infra store** —
+    `cmd/gc/api_state.go` `(*controllerState).WaitForSessionCommandable`. A
+    deferred session create (`POST /session` → `handle.Create(CreateModeDeferred)`
+    → `WaitForSessionCommandable`) built its commandability catalog over
+    `cs.CityBeadStore()` (the work store), but session beads are the sessions
+    coordination class and live in the infra store on a split city. So the wait
+    Get-missed its own session id and the create failed with
+    `create_failed: getting session: getting bead "gcg-…": bead not found`
+    (`internal/session/chat.go` `loadSessionBead`). Not in the #1–#16 audit;
+    surfaced only once new cities defaulted to the split (`5b4a7dff5`). Found by
+    the RC-gate/acceptance run of `TestGCLiveContract_BeadsAndEvents` (fails
+    split-default, passes with `GC_INFRA_STORE_SPLIT=0` — confirmed split fallout,
+    not a flake or a P2/P3 regression). **FIXED (this branch):** read
+    `cs.SessionsBeadStore().Store` (the infra-routed sessions store; identity to
+    `CityBeadStore` on a single-store city). Test:
+    `TestWaitForSessionCommandable_ReadsInfraStoreSessionOnSplitCity` (fast-unit,
+    reproduces the exact production error on the old code) + integration
+    `TestGCLiveContract_BeadsAndEvents` green.
+
 ### P2 — medium — #8, #10, #11, #13 FIXED (this branch); #9, #12 handled-verify
 8. **FIXED (`34a9faf43`).** CLI sling singleton/replacement scan excluded infra
    → duplicate workflows. The inline `SourceWorkflowStores` closure at

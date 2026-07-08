@@ -1936,9 +1936,15 @@ func (cs *controllerState) Poke() {
 // WaitForSessionCommandable waits until the controller has reconciled an async
 // session create into a lifecycle state that can accept normal commands.
 func (cs *controllerState) WaitForSessionCommandable(ctx context.Context, sessionID string) (session.Info, error) {
-	store := cs.CityBeadStore()
+	// Session beads are the sessions coordination class: on a split city they
+	// live in the infra store (SessionsBeadStore routes there), so the
+	// commandability catalog must read from it. Reading CityBeadStore (the work
+	// store) made a deferred create wait miss its own gcg- session id
+	// ("getting session: getting bead ...: bead not found"). Identity to
+	// CityBeadStore on a single-store city.
+	store := cs.SessionsBeadStore().Store
 	if store == nil {
-		return session.Info{}, errors.New("city bead store is unavailable")
+		return session.Info{}, errors.New("session bead store is unavailable")
 	}
 	catalog, err := workerSessionCatalogWithConfig(cs.CityPath(), store, cs.SessionProvider(), cs.Config())
 	if err != nil {
