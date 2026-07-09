@@ -1677,6 +1677,30 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			}
 			beadRequested := session.Metadata["restart_requested"] == "true"
 			if tmuxRequested || beadRequested {
+				// A pinned configured named session is an operator-declared
+				// critical conversation (for example, the mayor). Do not let
+				// collateral reconciler restart flags (progress-stall, stale
+				// runtime metadata, or other non-explicit requests) abruptly
+				// kill it. Explicit controller resets set
+				// continuation_reset_pending through SessionHandle.Reset and
+				// still proceed so planned graceful recycle remains possible.
+				explicitControllerReset := strings.TrimSpace(session.Metadata["continuation_reset_pending"]) == "true"
+				if runtimeRunning && pinnedConfiguredNamedSessionKillProtected(*session) && !explicitControllerReset {
+					if tmuxRequested && dops != nil {
+						if err := dops.clearRestartRequested(name); err != nil && !runtime.IsSessionGone(err) {
+							fmt.Fprintf(stderr, "session reconciler: clearing deferred restart-requested marker for pinned named session %s (bead %s): %v\n", name, session.ID, err) //nolint:errcheck
+						}
+					}
+					if beadRequested {
+						if err := store.SetMetadata(session.ID, "restart_requested", ""); err != nil {
+							fmt.Fprintf(stderr, "session reconciler: clearing deferred bead restart request for pinned named session %s (bead %s): %v\n", name, session.ID, err) //nolint:errcheck
+							continue
+						}
+						session.Metadata["restart_requested"] = ""
+					}
+					fmt.Fprintf(stderr, "session reconciler: skipping abrupt restart-requested kill for pinned named session %s (bead %s)\n", name, session.ID) //nolint:errcheck
+					continue
+				}
 				if runtimeRunning {
 					if err := workerKillSessionTargetWithConfig("", store, sp, cfg, name); err != nil {
 						fmt.Fprintf(stderr, "session reconciler: stopping restart-requested %s: %v\n", name, err) //nolint:errcheck
@@ -3209,7 +3233,19 @@ func namedSessionActivelyInUse(session beads.Bead, sp runtime.Provider, name str
 	return active
 }
 
+func pinnedConfiguredNamedSessionKillProtected(session beads.Bead) bool {
+	return isNamedSessionBead(session) && strings.TrimSpace(session.Metadata["pin_awake"]) == "true"
+}
+
 func shouldDeferNamedSessionConfigDrift(session beads.Bead, store beads.Store, sp runtime.Provider, name string, clk clock.Clock, driftKey string) (string, bool, error) {
+	if pinnedConfiguredNamedSessionKillProtected(session) {
+		if clk != nil && (session.Metadata[namedSessionConfigDriftDeferredKeyMetadata] != driftKey || session.Metadata[namedSessionConfigDriftDeferredAtMetadata] == "") {
+			if err := recordNamedSessionConfigDriftDeferredAt(session, store, clk.Now().UTC(), driftKey); err != nil {
+				return "", false, err
+			}
+		}
+		return "pinned", true, nil
+	}
 	reason, active := namedSessionActiveUseReason(session, sp, name, clk)
 	if !active {
 		return "", false, nil
