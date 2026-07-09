@@ -494,6 +494,7 @@ func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 		"live_hash":                  "live-hash",
 		"started_live_hash":          "live-hash",
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 		"core_hash_breakdown":        `{"command":"core-hash"}`,
 		"state":                      string(StateActive),
 		"state_reason":               "creation_complete",
@@ -504,6 +505,27 @@ func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 	}
 	if !reflect.DeepEqual(patch, want) {
 		t.Fatalf("patch = %#v, want %#v", patch, want)
+	}
+}
+
+func TestCommitStartedPatchClearsResetCommittedAt(t *testing.T) {
+	committedAt := "2026-07-08T20:09:10Z"
+	patch := CommitStartedPatch(CommitStartedPatchInput{
+		CoreHash:     "core-hash",
+		ConfirmState: true,
+		Now:          time.Date(2026, 7, 8, 20, 10, 30, 0, time.UTC),
+	})
+
+	if got, ok := patch[ResetCommittedAtKey]; !ok || got != "" {
+		t.Fatalf("successful start must clear %s after prior reset %s; got present=%v value=%q", ResetCommittedAtKey, committedAt, ok, got)
+	}
+
+	merged := patch.Apply(MetadataPatch{ResetCommittedAtKey: committedAt, "continuation_reset_pending": "true"})
+	if merged[ResetCommittedAtKey] != "" {
+		t.Fatalf("merged metadata kept stale %s = %q", ResetCommittedAtKey, merged[ResetCommittedAtKey])
+	}
+	if merged["continuation_reset_pending"] != "" {
+		t.Fatalf("merged metadata kept continuation_reset_pending = %q", merged["continuation_reset_pending"])
 	}
 }
 
@@ -562,6 +584,7 @@ func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) 
 		"live_hash":                  "live-hash",
 		"started_live_hash":          "live-hash",
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 		"sleep_reason":               "",
 	}
 	if !reflect.DeepEqual(patch, want) {

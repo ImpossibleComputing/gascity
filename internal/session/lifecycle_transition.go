@@ -230,6 +230,7 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 		"live_hash":                  input.LiveHash,
 		"started_live_hash":          input.LiveHash,
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 	}
 	if input.CoreBreakdown != "" {
 		patch["core_hash_breakdown"] = input.CoreBreakdown
