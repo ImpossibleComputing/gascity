@@ -20,7 +20,7 @@ func writeFormula(t *testing.T, body string) string {
 
 func TestRunOneShotRejectsNonToml(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := runOneShot(context.Background(), &out, &errOut, "graph.lumen", nil, nil, "", false, false, t.TempDir())
+	err := runOneShot(context.Background(), &out, &errOut, "graph.lumen", nil, nil, "", 0, false, false, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "unsupported file type") {
 		t.Fatalf("expected unsupported-file-type error, got %v", err)
 	}
@@ -29,7 +29,7 @@ func TestRunOneShotRejectsNonToml(t *testing.T) {
 func TestRunOneShotRejectsEmptyFormula(t *testing.T) {
 	formula := writeFormula(t, "   \n")
 	var out, errOut bytes.Buffer
-	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "is empty") {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", 0, false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "is empty") {
 		t.Fatalf("expected empty-formula error, got %v", err)
 	}
 }
@@ -37,7 +37,7 @@ func TestRunOneShotRejectsEmptyFormula(t *testing.T) {
 func TestRunOneShotRejectsInvalidTOML(t *testing.T) {
 	formula := writeFormula(t, "[[[not valid")
 	var out, errOut bytes.Buffer
-	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not valid TOML") {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", 0, false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not valid TOML") {
 		t.Fatalf("expected invalid-TOML error, got %v", err)
 	}
 }
@@ -47,7 +47,7 @@ func TestRunOneShotDryRunPrintsBoundCityAndReaps(t *testing.T) {
 	formula := writeFormula(t, "# hello\n")
 
 	var out, errOut bytes.Buffer
-	if err := runOneShot(context.Background(), &out, &errOut, formula, []string{"w=" + repo}, nil, "", false, true, t.TempDir()); err != nil {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, []string{"w=" + repo}, nil, "", 0, false, true, t.TempDir()); err != nil {
 		t.Fatalf("dry-run: %v\nstderr: %s", err, errOut.String())
 	}
 	got := out.String()
@@ -68,7 +68,7 @@ func TestRunOneShotDryRunPrintsBoundCityAndReaps(t *testing.T) {
 func TestRunOneShotRequiresAgentCmd(t *testing.T) {
 	formula := writeFormula(t, "# hello\n")
 	var out, errOut bytes.Buffer
-	err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, false, t.TempDir())
+	err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", 0, false, false, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "--agent-cmd") {
 		t.Fatalf("non-dry-run without --agent-cmd should require it, got %v", err)
 	}

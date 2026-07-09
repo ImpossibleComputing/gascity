@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/internal/citylayout"
@@ -27,6 +30,7 @@ func newRunCmd(stdout, stderr io.Writer) *cobra.Command {
 		folderFlags []string
 		varFlags    []string
 		agentCmd    string
+		timeout     time.Duration
 		keep        bool
 		dryRun      bool
 	)
@@ -38,31 +42,41 @@ Manufacture a throwaway city-as-directory for a single formula run, bind the
 given folders to it as rigs (referenced, never copied), run the formula, and
 tear the city down.
 
-Only .toml formulas are supported in this build. Use --dry-run to print the
-synthesized city (city.toml + .gc/site.toml + resolved rig bindings) without
-running; otherwise --agent-cmd is required and the formula is run to completion
-in an isolated Dolt-backed city (standalone controller, never the shared
-supervisor), then the city is reaped and the exit code reflects gc.outcome.
+Only .toml formulas are supported in this build. Use --dry-run to print a
+lightweight preview city without running; otherwise --agent-cmd is required and
+the formula is run to completion in an isolated Dolt-backed city (standalone
+controller, never the shared supervisor), then the city is reaped and the exit
+code reflects gc.outcome. A run that times out or fails keeps the city for
+inspection.
 
-Security: each --folder grants the run full read-write access to that path as
-the invoking user. gc run is local single-user only; do not expose it to
-untrusted callers without an authorization gate.`),
+Security: each --folder grants the run full read-write access to that path, and
+--agent-cmd runs an arbitrary command AS YOU with your environment; its command
+line is visible in the process table, so never pass secrets inline. gc run is
+local single-user only; do not expose it to untrusted callers without an
+authorization gate.`),
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := runOneShot(cmd.Context(), stdout, stderr, args[0], folderFlags, varFlags, agentCmd, keep, dryRun, ""); err != nil {
+			// Wire signals into the context so Ctrl-C/SIGTERM cancels in-flight
+			// child processes and the deferred teardown reaps the transient city
+			// (Go defers do not run on signal death). stop() restores default
+			// handling so a second signal hard-exits.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			if err := runOneShot(ctx, stdout, stderr, args[0], folderFlags, varFlags, agentCmd, timeout, keep, dryRun, ""); err != nil {
 				fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck // best-effort stderr
 				return errExit
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringArrayVar(&folderFlags, "folder", nil, "bind a repo as name=/path (repeatable); each becomes a rig with read-write access to that path")
-	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "formula variable as key=value (repeatable; validated but not yet applied in this build)")
+	cmd.Flags().StringArrayVar(&folderFlags, "folder", nil, "bind a repo as name=/path; the worker runs in it (at most one for now)")
+	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "formula variable as key=value (repeatable); passed through to the run")
 	cmd.Flags().StringVar(&agentCmd, "agent-cmd", "", "worker command that performs and closes the work (required to run; e.g. an LLM wrapper or a script)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "max time to wait for completion before keeping the city for inspection")
 	cmd.Flags().BoolVar(&keep, "keep", false, "retain the manufactured city directory instead of removing it")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "manufacture and print the synthesized city, then reap it without running")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "manufacture and print a preview city, then reap it without running")
 	return cmd
 }
 
@@ -71,7 +85,7 @@ untrusted callers without an authorization gate.`),
 // a real run manufactures an isolated Dolt city, drives the formula to its
 // workflow-finalize close with a real (subprocess) provider, and reaps it.
 // foundryRoot is "" outside tests (dry-run defaults to os.TempDir via the forge).
-func runOneShot(ctx context.Context, stdout, stderr io.Writer, path string, folderFlags, varFlags []string, agentCmd string, keep, dryRun bool, foundryRoot string) error {
+func runOneShot(ctx context.Context, stdout, stderr io.Writer, path string, folderFlags, varFlags []string, agentCmd string, timeout time.Duration, keep, dryRun bool, foundryRoot string) error {
 	if ext := strings.ToLower(filepath.Ext(path)); ext != ".toml" {
 		return fmt.Errorf("gc run: unsupported file type %q; only .toml formulas are supported in this build", ext)
 	}
@@ -90,8 +104,8 @@ func runOneShot(ctx context.Context, stdout, stderr io.Writer, path string, fold
 	if err != nil {
 		return err
 	}
-	// --var is validated for forward compatibility; the prototype does not yet
-	// thread vars into the run (see the flag help).
+	// Validate --var syntax early; the raw key=value strings are threaded into
+	// the run (gc sling --var) by executeOneShot.
 	if _, err := parseKeyValueFlags(varFlags); err != nil {
 		return err
 	}
@@ -121,12 +135,12 @@ func runOneShot(ctx context.Context, stdout, stderr io.Writer, path string, fold
 	}
 
 	// Real run: manufacture an isolated Dolt city, drive to completion, reap.
-	outcome, err := executeOneShot(ctx, name, base, body, folders, agentCmd, keep, stdout)
+	outcome, err := executeOneShot(ctx, name, base, body, folders, agentCmd, varFlags, keep, timeout, stdout, stderr)
 	if err != nil {
 		return err
 	}
 	if !outcome.Terminal {
-		return fmt.Errorf("gc run: %s did not reach a terminal outcome within the deadline (kept for inspection)", name)
+		return fmt.Errorf("gc run: %s did not complete within %s (city kept for inspection)", name, timeout)
 	}
 	fmt.Fprintf(stdout, "gc run: %s completed with gc.outcome=%s\n", name, outcome.Outcome) //nolint:errcheck // best-effort stdout
 	if !outcome.Passed() {

@@ -258,6 +258,18 @@ func (c *City) Teardown() error {
 	return nil
 }
 
+// SanitizeCityName reduces s to a filesystem-safe, length-capped city name,
+// shared with callers (e.g. cmd/gc's execution path) so every manufacture route
+// enforces identical name rules — keeping temp-dir path components within
+// NAME_MAX and controller socket paths under the hashed-fallback threshold.
+func SanitizeCityName(s string) string {
+	n := sanitizeName(s)
+	if len(n) > maxCityNameLen {
+		n = n[:maxCityNameLen]
+	}
+	return n
+}
+
 // sanitizeName reduces s to a filesystem- and prefix-safe token.
 func sanitizeName(s string) string {
 	s = strings.TrimSpace(s)

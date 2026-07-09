@@ -23,6 +23,14 @@ $ bash engdocs/plans/formula-as-unit/demo/oneshot-e2e-demo.sh
 
 Key lessons banked from the demo: (a) `gc init` touches the **shared** supervisor — the transient path MUST use `--no-start` + the standalone controller; (b) the file bead provider cannot back a self-closing agent worker (`bd`/`gc bd` are Dolt-only), so a real run needs the Dolt provider; (c) a worker must discover routed work via `bd ready --json` filtered on `gc.routed_to` (the `--assignee=<name>` fast-path errors for named sessions).
 
+### 0.1 Implementation notes & known limitations (`gc run` execution)
+
+**Architecture (settled): subprocess lifecycle, not in-process `runController`.** `gc run`'s execution (`cmd/gc/run_execute.go`) orchestrates the transient city via isolated child `gc` processes (`init --no-start` → `start --controller` → `sling` → `stop`), watching the workflow root close in-process (`watchWorkflowRoot`). This is preferred over an in-process `newCityRuntime`/`runController` launch: child processes give crash isolation and sidestep the ambiguous runController-return classification (`UNIFIED-GC-RUN.md` §host-seam). Child processes run with a **scrubbed environment** (no ambient `GC_*`/`BEADS_*`), so `gc run` invoked inside a host city can never resolve the transient city's Dolt layout into the host's runtime.
+
+**Safety invariants (enforced, not just documented):** the run asserts the transient city is absent from the supervisor registry after init (fails loudly + unregisters if not); the controller runs in its own process group and teardown reaps the group + the managed Dolt server + retries `RemoveAll`; `SIGINT`/`SIGTERM` cancel the context so teardown runs (never orphaning a Dolt server — the ga-`gz19s4` orphan class); a timed-out or failed run **keeps** the city for inspection (the `--timeout` deadline is non-destructive); `--agent-cmd` runs an arbitrary command as the invoker (documented, local-single-user only).
+
+**Known limitations (tracked):** (1) `--dry-run` still previews the lightweight *file* city from the forge, which does not match the *Dolt* execution city — preview-what-you-execute is a follow-up (unify on a single `config.City` synthesis). (2) Only **one** `--folder` is supported for execution (multi-folder step→rig routing is unimplemented; >1 is rejected). (3) The city config is string-built (`oneShotCityTOML`) rather than shared with the forge's `config.City` marshal — a de-dup follow-up.
+
 ---
 
 ## 1. Executive summary

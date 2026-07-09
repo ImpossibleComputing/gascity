@@ -68,7 +68,7 @@ done
 
 echo "3/5 sling mol-do-work (1-member convoy)…"
 bead=$("$GCBIN" --city "$CITY" bd create "demo one-shot work item" --json 2>/dev/null | jq -r '.id')
-convoy=$("$GCBIN" --city "$CITY" convoy create "demo one-shot" "$bead" --json 2>/dev/null | jq -r '.id')
+convoy=$("$GCBIN" --city "$CITY" convoy create "demo one-shot" "$bead" --json 2>/dev/null | jq -r '.convoy_id // .id')
 slout=$("$GCBIN" --city "$CITY" sling worker "$convoy" --on=mol-do-work 2>&1)
 root=$(printf '%s' "$slout" | grep -oE 'workflow [a-z]+-[a-z0-9]+' | head -1 | awk '{print $2}')
 [ -n "$root" ] || fail "no workflow root in: $slout"
