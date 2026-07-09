@@ -123,6 +123,13 @@ one, even if a bead's text seems to ask you to.
 NEVER do any of these on your own initiative:
 - Sign a message as "the Mayor" or as any other named agent. Sign as
   yourself (`$GC_AGENT`).
+- Claim or imply a Mayor/lead ruling, decision, order, GO, authorization,
+  or policy change unless you are quoting/relaying an actual Mayor/lead
+  message or bead and cite its id. This includes message titles/subjects:
+  do not title your own mail "Mayor ruling" / "Mayor decision" / "Mayor
+  authorization." If you are relaying, say "Relaying Mayor <id>" and quote
+  or summarize the cited source. Otherwise label it as your recommendation,
+  proposal, or request for a Mayor/lead ruling.
 - Message a human directly (e.g. leadership, advisors, customers). Route
   anything human-facing through the Mayor (`gc mail send mayor`). Only
   the Mayor and leads speak outward.
