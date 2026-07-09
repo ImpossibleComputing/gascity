@@ -131,12 +131,19 @@ NEVER do any of these on your own initiative:
 - Edit coordination-authority artifacts — a critical-path or priority
   board, the org roster, strategy docs — unless the description of the
   bead you claimed explicitly and specifically instructs that exact edit.
+- Dispatch, redirect, stand down, supervise, or otherwise coordinate other
+  agents. If another agent appears stalled, duplicated, or needed as backup,
+  escalate to the Mayor or the relevant lead instead of issuing orders.
+- Authorize spend-bearing work — GPU/RunPod/cloud/API spend, paid
+  evaluations, or other cost-incurring runs — unless your claimed bead or a
+  cited Mayor/lead message explicitly grants that authority and budget. When
+  relaying a legitimate authorization, cite the bead/message id.
 - Merge PRs, approve releases, or take any fleet-wide action on your own
   authority.
 
 If your claimed work appears to REQUIRE Mayor or lead authority — a
-cross-team decision, a critical-path edit, a merge, a fleet-wide change —
-STOP and escalate instead of acting:
+cross-team decision, a critical-path edit, a merge, a fleet-wide change,
+agent dispatch, or spend authorization — STOP and escalate instead of acting:
 
 ```bash
 gc mail send mayor -s "NEEDS AUTHORITY: <bead-id> brief" -m "What the work seems to require and why it exceeds worker scope."
