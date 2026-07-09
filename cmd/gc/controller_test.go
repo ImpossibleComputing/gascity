@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -1094,6 +1095,102 @@ func TestWatchConfigDirs_Regression780_DetectsEditInPreExistingNestedSubdir(t *t
 	if !dirty.Load() {
 		t.Fatalf("dirty flag not set after edit to %s; stderr=%q", overlayPath, stderr.String())
 	}
+}
+
+type fakeConfigWatchBackend struct {
+	adds    []string
+	removes []string
+	addErr  map[string]error
+}
+
+func (f *fakeConfigWatchBackend) Add(path string) error {
+	f.adds = append(f.adds, path)
+	if f.addErr != nil {
+		if err := f.addErr[path]; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeConfigWatchBackend) Remove(path string) error {
+	f.removes = append(f.removes, path)
+	return nil
+}
+
+func TestConfigWatchRegistrarDeduplicatesRegisteredPaths(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "agents")
+	grandchild := filepath.Join(child, "sample")
+	if err := os.MkdirAll(grandchild, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	backend := &fakeConfigWatchBackend{}
+	registrar := newConfigWatchRegistrar(backend, io.Discard)
+	done := make(chan struct{})
+
+	if !registrar.addPath(child, true, done) {
+		t.Fatal("first addPath failed")
+	}
+	if !registrar.addPath(child, true, done) {
+		t.Fatal("second addPath failed")
+	}
+	if !registrar.addOne(grandchild, done) {
+		t.Fatal("duplicate nested addOne failed")
+	}
+
+	got := pathCounts(backend.adds)
+	for _, path := range []string{child, grandchild} {
+		key := normalizeConfigWatchPath(path)
+		if got[key] != 1 {
+			t.Fatalf("watch Add(%q) count = %d, want 1; all adds=%v", path, got[key], backend.adds)
+		}
+	}
+	if len(backend.adds) != 2 {
+		t.Fatalf("watch Add calls = %v, want only [%s %s]", backend.adds, child, grandchild)
+	}
+}
+
+func TestConfigWatchRegistrarUnwatchSubtreeAllowsRecreatedDirectoryReadd(t *testing.T) {
+	dir := t.TempDir()
+	child := filepath.Join(dir, "agents")
+	grandchild := filepath.Join(child, "sample")
+	if err := os.MkdirAll(grandchild, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	backend := &fakeConfigWatchBackend{}
+	registrar := newConfigWatchRegistrar(backend, io.Discard)
+	done := make(chan struct{})
+
+	if !registrar.addPath(child, true, done) {
+		t.Fatal("addPath failed")
+	}
+	registrar.unwatchSubtree(child)
+	if !registrar.addPath(child, true, done) {
+		t.Fatal("re-add after unwatchSubtree failed")
+	}
+
+	addCounts := pathCounts(backend.adds)
+	removeCounts := pathCounts(backend.removes)
+	for _, path := range []string{child, grandchild} {
+		key := normalizeConfigWatchPath(path)
+		if addCounts[key] != 2 {
+			t.Fatalf("watch Add(%q) count = %d, want 2 after re-add; adds=%v", path, addCounts[key], backend.adds)
+		}
+		if removeCounts[key] != 1 {
+			t.Fatalf("watch Remove(%q) count = %d, want 1 during unwatch; removes=%v", path, removeCounts[key], backend.removes)
+		}
+	}
+}
+
+func pathCounts(paths []string) map[string]int {
+	counts := make(map[string]int)
+	for _, path := range paths {
+		counts[normalizeConfigWatchPath(path)]++
+	}
+	return counts
 }
 
 func TestControllerReloadsNamedSessionModeAndAppliesIdleTimeout(t *testing.T) {
