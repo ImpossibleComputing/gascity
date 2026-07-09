@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ func newRunCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		folderFlags []string
 		varFlags    []string
+		agentCmd    string
 		keep        bool
 		dryRun      bool
 	)
@@ -38,7 +40,9 @@ tear the city down.
 
 Only .toml formulas are supported in this build. Use --dry-run to print the
 synthesized city (city.toml + .gc/site.toml + resolved rig bindings) without
-running.
+running; otherwise --agent-cmd is required and the formula is run to completion
+in an isolated Dolt-backed city (standalone controller, never the shared
+supervisor), then the city is reaped and the exit code reflects gc.outcome.
 
 Security: each --folder grants the run full read-write access to that path as
 the invoking user. gc run is local single-user only; do not expose it to
@@ -46,8 +50,8 @@ untrusted callers without an authorization gate.`),
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(_ *cobra.Command, args []string) error {
-			if err := runOneShot(stdout, stderr, args[0], folderFlags, varFlags, keep, dryRun, ""); err != nil {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := runOneShot(cmd.Context(), stdout, stderr, args[0], folderFlags, varFlags, agentCmd, keep, dryRun, ""); err != nil {
 				fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck // best-effort stderr
 				return errExit
 			}
@@ -56,15 +60,18 @@ untrusted callers without an authorization gate.`),
 	}
 	cmd.Flags().StringArrayVar(&folderFlags, "folder", nil, "bind a repo as name=/path (repeatable); each becomes a rig with read-write access to that path")
 	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "formula variable as key=value (repeatable; validated but not yet applied in this build)")
+	cmd.Flags().StringVar(&agentCmd, "agent-cmd", "", "worker command that performs and closes the work (required to run; e.g. an LLM wrapper or a script)")
 	cmd.Flags().BoolVar(&keep, "keep", false, "retain the manufactured city directory instead of removing it")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "manufacture and print the synthesized city, then reap it without running")
 	return cmd
 }
 
-// runOneShot manufactures a transient city for path and, unless dryRun, reports
-// that execution is not yet wired. foundryRoot is "" outside tests (defaults to
-// os.TempDir via the forge); tests pass a hermetic dir.
-func runOneShot(stdout, stderr io.Writer, path string, folderFlags, varFlags []string, keep, dryRun bool, foundryRoot string) error {
+// runOneShot runs (or, with dryRun, previews) a formula as a one-shot in a
+// transient city. --dry-run manufactures a lightweight file city and prints it;
+// a real run manufactures an isolated Dolt city, drives the formula to its
+// workflow-finalize close with a real (subprocess) provider, and reaps it.
+// foundryRoot is "" outside tests (dry-run defaults to os.TempDir via the forge).
+func runOneShot(ctx context.Context, stdout, stderr io.Writer, path string, folderFlags, varFlags []string, agentCmd string, keep, dryRun bool, foundryRoot string) error {
 	if ext := strings.ToLower(filepath.Ext(path)); ext != ".toml" {
 		return fmt.Errorf("gc run: unsupported file type %q; only .toml formulas are supported in this build", ext)
 	}
@@ -90,20 +97,20 @@ func runOneShot(stdout, stderr io.Writer, path string, folderFlags, varFlags []s
 	}
 
 	base := filepath.Base(path)
-	city, err := forge.Manufacture(forge.Spec{
-		Name:            strings.TrimSuffix(base, filepath.Ext(base)),
-		FormulaFileName: base,
-		FormulaBody:     body,
-		Folders:         folders,
-		FoundryRoot:     foundryRoot,
-		// Non-dry-run keeps the dir for inspection until execution is wired.
-		Keep: keep || !dryRun,
-	})
-	if err != nil {
-		return fmt.Errorf("gc run: manufacturing city: %w", err)
-	}
+	name := strings.TrimSuffix(base, filepath.Ext(base))
 
 	if dryRun {
+		city, err := forge.Manufacture(forge.Spec{
+			Name:            name,
+			FormulaFileName: base,
+			FormulaBody:     body,
+			Folders:         folders,
+			FoundryRoot:     foundryRoot,
+			Keep:            keep,
+		})
+		if err != nil {
+			return fmt.Errorf("gc run: manufacturing city: %w", err)
+		}
 		defer func() {
 			if err := city.Teardown(); err != nil {
 				fmt.Fprintf(stderr, "gc run: teardown: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -113,13 +120,19 @@ func runOneShot(stdout, stderr io.Writer, path string, folderFlags, varFlags []s
 		return nil
 	}
 
-	// Execution wiring (forge -> in-process runController -> DoSling -> watch the
-	// workflow finalize -> teardown) is the next slice. Manufacture succeeded and
-	// the city is kept for inspection, but the formula did NOT run — return a
-	// non-zero exit so scripts never mistake this for a completed run.
-	fmt.Fprintf(stdout, "manufactured transient city at %s\n", city.Root) //nolint:errcheck // best-effort stdout
-	return fmt.Errorf("gc run: formula execution is not wired in this prototype yet; "+
-		"city kept at %s (remove with: rm -rf %q); use --dry-run to inspect and reap", city.Root, city.Root)
+	// Real run: manufacture an isolated Dolt city, drive to completion, reap.
+	outcome, err := executeOneShot(ctx, name, base, body, folders, agentCmd, keep, stdout)
+	if err != nil {
+		return err
+	}
+	if !outcome.Terminal {
+		return fmt.Errorf("gc run: %s did not reach a terminal outcome within the deadline (kept for inspection)", name)
+	}
+	fmt.Fprintf(stdout, "gc run: %s completed with gc.outcome=%s\n", name, outcome.Outcome) //nolint:errcheck // best-effort stdout
+	if !outcome.Passed() {
+		return fmt.Errorf("gc run: %s finished with gc.outcome=%s", name, outcome.Outcome)
+	}
+	return nil
 }
 
 // parseFolderFlags parses repeatable name=/path bindings into forge.Folders,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ func writeFormula(t *testing.T, body string) string {
 
 func TestRunOneShotRejectsNonToml(t *testing.T) {
 	var out, errOut bytes.Buffer
-	err := runOneShot(&out, &errOut, "graph.lumen", nil, nil, false, false, t.TempDir())
+	err := runOneShot(context.Background(), &out, &errOut, "graph.lumen", nil, nil, "", false, false, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "unsupported file type") {
 		t.Fatalf("expected unsupported-file-type error, got %v", err)
 	}
@@ -28,7 +29,7 @@ func TestRunOneShotRejectsNonToml(t *testing.T) {
 func TestRunOneShotRejectsEmptyFormula(t *testing.T) {
 	formula := writeFormula(t, "   \n")
 	var out, errOut bytes.Buffer
-	if err := runOneShot(&out, &errOut, formula, nil, nil, false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "is empty") {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "is empty") {
 		t.Fatalf("expected empty-formula error, got %v", err)
 	}
 }
@@ -36,7 +37,7 @@ func TestRunOneShotRejectsEmptyFormula(t *testing.T) {
 func TestRunOneShotRejectsInvalidTOML(t *testing.T) {
 	formula := writeFormula(t, "[[[not valid")
 	var out, errOut bytes.Buffer
-	if err := runOneShot(&out, &errOut, formula, nil, nil, false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not valid TOML") {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, true, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not valid TOML") {
 		t.Fatalf("expected invalid-TOML error, got %v", err)
 	}
 }
@@ -46,7 +47,7 @@ func TestRunOneShotDryRunPrintsBoundCityAndReaps(t *testing.T) {
 	formula := writeFormula(t, "# hello\n")
 
 	var out, errOut bytes.Buffer
-	if err := runOneShot(&out, &errOut, formula, []string{"w=" + repo}, nil, false, true, t.TempDir()); err != nil {
+	if err := runOneShot(context.Background(), &out, &errOut, formula, []string{"w=" + repo}, nil, "", false, true, t.TempDir()); err != nil {
 		t.Fatalf("dry-run: %v\nstderr: %s", err, errOut.String())
 	}
 	got := out.String()
@@ -62,18 +63,15 @@ func TestRunOneShotDryRunPrintsBoundCityAndReaps(t *testing.T) {
 	}
 }
 
-func TestRunOneShotDefaultKeepsDirAndReportsNotWired(t *testing.T) {
+// A real run requires --agent-cmd; without it, gc run must fail fast (before any
+// city is manufactured) rather than spin up a controller with no worker.
+func TestRunOneShotRequiresAgentCmd(t *testing.T) {
 	formula := writeFormula(t, "# hello\n")
 	var out, errOut bytes.Buffer
-	err := runOneShot(&out, &errOut, formula, nil, nil, false, false, t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "not wired") {
-		t.Fatalf("non-dry-run should return a not-wired error, got %v", err)
+	err := runOneShot(context.Background(), &out, &errOut, formula, nil, nil, "", false, false, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "--agent-cmd") {
+		t.Fatalf("non-dry-run without --agent-cmd should require it, got %v", err)
 	}
-	root := cityRootFromOutput(t, out.String())
-	if _, statErr := os.Stat(root); statErr != nil {
-		t.Errorf("non-dry-run should keep the city dir %q: %v", root, statErr)
-	}
-	_ = os.RemoveAll(root)
 }
 
 func cityRootFromOutput(t *testing.T, out string) string {

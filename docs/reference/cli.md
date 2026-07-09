@@ -3241,7 +3241,9 @@ tear the city down.
 
 Only .toml formulas are supported in this build. Use --dry-run to print the
 synthesized city (city.toml + .gc/site.toml + resolved rig bindings) without
-running.
+running; otherwise --agent-cmd is required and the formula is run to completion
+in an isolated Dolt-backed city (standalone controller, never the shared
+supervisor), then the city is reaped and the exit code reflects gc.outcome.
 
 Security: each --folder grants the run full read-write access to that path as
 the invoking user. gc run is local single-user only; do not expose it to
@@ -3253,6 +3255,7 @@ gc run <path> [flags]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--agent-cmd` | string |  | worker command that performs and closes the work (required to run; e.g. an LLM wrapper or a script) |
 | `--dry-run` | bool |  | manufacture and print the synthesized city, then reap it without running |
 | `--folder` | stringArray |  | bind a repo as name=/path (repeatable); each becomes a rig with read-write access to that path |
 | `--keep` | bool |  | retain the manufactured city directory instead of removing it |
