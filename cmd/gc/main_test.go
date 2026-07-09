@@ -6926,6 +6926,12 @@ max = -1
 	if !strings.Contains(out, "GUPP") {
 		t.Error("pool-worker prompt missing GUPP")
 	}
+	if !strings.Contains(out, "do not use `gws`, Gmail, browser mail") {
+		t.Error("pool-worker prompt missing explicit external human-send prohibition")
+	}
+	if !strings.Contains(out, "Authorize spend-bearing work") {
+		t.Error("pool-worker prompt missing spend-authorization boundary")
+	}
 }
 
 func TestDoPrimeFormulaV2GraphWorkerPromptClaimsRoutedWork(t *testing.T) {
@@ -6982,6 +6988,12 @@ max = -1
 	}
 	if strings.Contains(out, "bd update <id> --claim") || strings.Contains(out, `ROOT_ID=$(bd show <id> --json`) {
 		t.Fatalf("graph-worker prompt still contains duplicated shell claim protocol:\n%s", out)
+	}
+	if !strings.Contains(out, "do not use `gws`, Gmail, browser mail") {
+		t.Error("graph-worker prompt missing explicit external human-send prohibition")
+	}
+	if !strings.Contains(out, "Claim or imply a Mayor/lead ruling") {
+		t.Error("graph-worker prompt missing content-attribution boundary")
 	}
 }
 
