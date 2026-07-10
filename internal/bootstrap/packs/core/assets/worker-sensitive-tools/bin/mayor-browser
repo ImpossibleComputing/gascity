@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+asset_root=$(CDPATH= cd -- "$shim_dir/../.." && pwd)
+exec "$asset_root/scripts/worker-sensitive-tool-guard.sh" \
+  --kind browser \
+  --profile "${GC_BROWSER_PROFILE_CLASS:-mayor-payment}" \
+  --real "${GC_REAL_MAYOR_BROWSER:-mayor-browser.real}" \
+  -- "$@"
