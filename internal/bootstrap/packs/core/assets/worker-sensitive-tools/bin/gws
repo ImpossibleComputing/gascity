@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+asset_root=$(CDPATH= cd -- "$shim_dir/../.." && pwd)
+exec "$asset_root/scripts/worker-sensitive-tool-guard.sh" \
+  --kind gws \
+  --real "${GC_REAL_GWS:-/opt/homebrew/bin/gws}" \
+  -- "$@"
