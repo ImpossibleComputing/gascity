@@ -1185,6 +1185,55 @@ func TestConfigWatchRegistrarUnwatchSubtreeAllowsRecreatedDirectoryReadd(t *test
 	}
 }
 
+func TestConfigWatchRegistrarUnwatchAllRemovesEveryRegisteredPath(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, "agents")
+	agentDir := filepath.Join(agentsDir, "heimdall")
+	packsDir := filepath.Join(dir, "packs")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll agentDir: %v", err)
+	}
+	if err := os.MkdirAll(packsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll packsDir: %v", err)
+	}
+
+	backend := &fakeConfigWatchBackend{}
+	registrar := newConfigWatchRegistrar(backend, io.Discard)
+	done := make(chan struct{})
+
+	if !registrar.addPath(agentsDir, true, done) {
+		t.Fatal("addPath agentsDir failed")
+	}
+	if !registrar.addPath(packsDir, true, done) {
+		t.Fatal("addPath packsDir failed")
+	}
+	registrar.markRecursiveRoot(agentsDir)
+	registrar.markDiscoveryRoot(dir)
+
+	registrar.unwatchAll()
+	if len(registrar.watchedPaths) != 0 {
+		t.Fatalf("watchedPaths not cleared: %v", registrar.watchedPaths)
+	}
+	if len(registrar.recursiveRoots) != 0 {
+		t.Fatalf("recursiveRoots not cleared: %v", registrar.recursiveRoots)
+	}
+	if len(registrar.discoveryRoots) != 0 {
+		t.Fatalf("discoveryRoots not cleared: %v", registrar.discoveryRoots)
+	}
+
+	addCounts := pathCounts(backend.adds)
+	removeCounts := pathCounts(backend.removes)
+	for _, path := range []string{agentsDir, agentDir, packsDir} {
+		key := normalizeConfigWatchPath(path)
+		if addCounts[key] != 1 {
+			t.Fatalf("watch Add(%q) count = %d, want 1; adds=%v", path, addCounts[key], backend.adds)
+		}
+		if removeCounts[key] != 1 {
+			t.Fatalf("watch Remove(%q) count = %d, want 1 during unwatchAll; removes=%v", path, removeCounts[key], backend.removes)
+		}
+	}
+}
+
 func pathCounts(paths []string) map[string]int {
 	counts := make(map[string]int)
 	for _, path := range paths {

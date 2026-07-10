@@ -704,6 +704,21 @@ func (r *configWatchRegistrar) unwatchSubtree(root string) {
 	}
 }
 
+func (r *configWatchRegistrar) unwatchAll() {
+	var paths []string
+	r.mu.Lock()
+	for key, path := range r.watchedPaths {
+		paths = append(paths, path)
+		delete(r.watchedPaths, key)
+	}
+	r.recursiveRoots = make(map[string]struct{})
+	r.discoveryRoots = make(map[string]struct{})
+	r.mu.Unlock()
+	for _, path := range paths {
+		_ = r.watcher.Remove(path)
+	}
+}
+
 func (r *configWatchRegistrar) markRecursiveRoot(root string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -873,6 +888,7 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 			close(done)
 			enqueueMu.Unlock()
 			registrationWG.Wait()
+			registrar.unwatchAll()
 			watcher.Close() //nolint:errcheck // best-effort cleanup
 			<-eventLoopDone
 		})
