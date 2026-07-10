@@ -168,9 +168,67 @@ Rollback immediately if any of these occur:
 - A privileged flow needs a broader allowlist than reviewed.
 - The activation operator cannot tell which launcher/PATH state is live.
 
+## Phase 2 hard-wall design sketch (not live)
+
+Phase 2 is the security boundary. Phase 1 wrappers are only a tripwire. The
+Phase 2 design goal is: a standard worker process can forge `GC_AGENT`, bypass
+PATH wrappers with absolute tool paths, and read its own home directory, and
+still cannot use founder-comms, payment, z.ai, Mistral, or watcher credentials
+because those credentials are no longer in a worker-readable OS/vault/account
+domain.
+
+### Proposed enforcement model
+
+Use all three layers below; do not count any single layer as sufficient:
+
+1. **Separate credential authority.** Move founder-comms and payment browser
+   profiles, API keys, OAuth refresh tokens, and watcher tokens out of the
+   default worker user/profile. Prefer a mayor/ops-owned account, service
+   account, macOS keychain access group, or vault policy that worker sessions
+   cannot read.
+2. **Narrow brokered access.** If workers need a permitted operation, route it
+   through an audited broker that checks the bead/session authorization and
+   grants only that operation. Do not expose raw Gmail, browser-profile, or
+   secret material back to the worker.
+3. **Observed tripwire remains.** Keep Phase 1 guarded wrappers in front of
+   common accidental paths, but treat wrapper denies as telemetry and UX, not as
+   the boundary.
+
+### Surface-by-surface Phase 2 targets
+
+| Surface class | Phase 2 target state | Acceptance probe |
+| --- | --- | --- |
+| Gmail / founder comms | Mayor/ops-owned OAuth material is not readable or usable by worker sessions; any worker-allowed mail action is brokered and logged. | Worker tries guarded `gws`, absolute `/opt/homebrew/bin/gws`, and forged `GC_AGENT=mayor`; all fail to access real founder-comms credentials. |
+| Payment / card-bearing browsers | Payment browser profile is owned by a payment-admin identity or separate browser profile outside worker-readable storage. | Worker tries guarded browser shim, direct browser profile path, and forged role; profile launch or credential use fails. |
+| z.ai / Mistral API keys | Keys live in vault/service-account policy with spend caps and no default worker read. | Worker tries sanctioned secret helper, direct known secret-file paths, and env forging; no key bytes or usable token returned. |
+| Mayor/ops watcher tokens | Watchers run as an ops/mayor identity or through a broker; workers cannot read watcher tokens. | Worker reads known watcher state/token paths and invokes watcher tooling directly; no credential access. |
+
+### Activation sequencing
+
+1. Name the Phase 2 owner and reviewer before any Phase 1 live activation is
+   treated as sufficient.
+2. Move one surface first: Gmail/founder-comms. This is the highest-risk surface
+   and the easiest to verify with non-destructive fake-send/read probes.
+3. Run the acceptance probes above in a canary worker session before moving to
+   payment/card, z.ai, and Mistral.
+4. Only after each surface passes the direct-path and forged-identity probes may
+   the runbook claim that standard workers cannot access that surface.
+
+### Non-goals / claims forbidden until probes pass
+
+- Do not claim Phase 1 means workers cannot access sensitive accounts. It only
+  means common guarded wrapper paths deny non-privileged GC identities.
+- Do not treat `GC_CREDENTIAL_GUARD_ALLOW=1` or forged `GC_AGENT=mayor` as an
+  acceptable long-term control plane.
+- Do not move secret values through chat, PR bodies, shell transcripts, or test
+  fixtures while implementing Phase 2. Names/classes and pass/fail probe results
+  are enough.
+
 ## Remaining hard-wall requirements
 
 Phase 2 must remove the underlying credentials/profiles from worker-readable
 space. Acceptance for the actual hard wall requires direct absolute-path bypass
 attempts and forged `GC_AGENT=mayor` attempts to fail because the worker process
-has no OS/vault authority and no usable credential material.
+has no OS/vault authority and no usable credential material. The first live
+Phase 2 claim must cite the exact surface, target host, probe commands, and
+pass/fail log artifact; until then the status remains tripwire-only.
