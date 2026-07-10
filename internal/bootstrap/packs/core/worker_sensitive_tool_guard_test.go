@@ -145,6 +145,39 @@ func TestWorkerSensitiveToolGuardDeniesWorkerSensitiveSecretsAndProfiles(t *test
 	}
 }
 
+func TestWorkerSensitiveToolGuardDeniesWorkerUnclassifiedSecretsAndProfiles(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-sensitive-tool-guard.sh")
+	workerEnv := []string{
+		"GC_AGENT=worker-pool-7",
+		"GC_SESSION_NAME=pool-worker-test",
+		"GC_AGENT_ROLE=worker",
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "unclassified sanctioned secret", args: []string{"--kind", "secret", "--secret-class", "project-alpha", "--", "get", "build-token"}},
+		{name: "unclassified shared browser profile", args: []string{"--kind", "browser", "--profile", "research-profile", "--", "open", "dashboard"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "called")
+			fake := writeFakeTool(t, marker)
+			args := append([]string{}, tt.args...)
+			insert := len(args)
+			for i, arg := range args {
+				if arg == "--" {
+					insert = i
+					break
+				}
+			}
+			args = append(args[:insert], append([]string{"--real", fake}, args[insert:]...)...)
+			got := runGuard(t, guard, workerEnv, args...)
+			assertDeniedBeforeFakeTool(t, got, marker)
+		})
+	}
+}
+
 func TestWorkerSensitiveToolGuardAllowsMayorToFakeTool(t *testing.T) {
 	guard := writeCoreAsset(t, "assets/scripts/worker-sensitive-tool-guard.sh")
 	marker := filepath.Join(t.TempDir(), "called")

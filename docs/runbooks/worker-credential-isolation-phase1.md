@@ -36,9 +36,14 @@ The PR adds these core-pack assets:
 - `assets/scripts/worker-sensitive-tool-path.sh` — PATH prepend helper.
 
 The guard treats non-privileged GC sessions as denied for sensitive surfaces.
-Privileged identities are intentionally narrow (`GC_AGENT_ROLE=mayor`, `ops`,
-`credential-admin`, `payment-admin`, or `GC_AGENT=mayor|paul`). Any broader
-allowlist must be reviewed before live activation.
+For Phase 1, the `gws`, `secret`, and `browser` wrapper kinds are all
+fail-closed for non-privileged identities. The `secret` and `browser` wrappers do
+not rely on keyword matching to decide whether a class/profile is sensitive; an
+unkeyworded sanctioned secret class or shared browser profile is still denied
+until Phase 2 moves underlying credential authority behind an OS/vault/account
+boundary. Privileged identities are intentionally narrow (`GC_AGENT_ROLE=mayor`,
+`ops`, `credential-admin`, `payment-admin`, or `GC_AGENT=mayor|paul`). Any
+broader allowlist must be reviewed before live activation.
 
 ## Authored PATH routing (not live)
 
@@ -65,9 +70,13 @@ Gmail, browser profiles, or real secrets:
 4. Worker/pool identity cannot run guarded Gmail read/triage paths.
 5. Worker/pool identity cannot access founder/payment/z.ai/Mistral secret IDs
    through the sanctioned helper.
-6. Worker/pool identity cannot launch mayor/payment browser profiles through the
+6. Worker/pool identity cannot bypass the helper with unkeyworded sanctioned
+   secret classes.
+7. Worker/pool identity cannot launch mayor/payment browser profiles through the
    guarded browser shim.
-7. Mayor/ops identity can pass through to a fake tool in tests.
+8. Worker/pool identity cannot bypass the browser shim with unkeyworded shared
+   profile names.
+9. Mayor/ops identity can pass through to a fake tool in tests.
 
 ## Remaining hard-wall requirements
 
