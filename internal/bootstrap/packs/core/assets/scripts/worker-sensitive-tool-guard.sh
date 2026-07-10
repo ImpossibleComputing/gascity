@@ -76,13 +76,17 @@ is_sensitive_request() {
       # non-privileged gws calls rather than trying to infer safety from verbs.
       return 0 ;;
     secret)
-      if contains_sensitive_word "$secret_class"; then return 0; fi
-      contains_sensitive_word "$*" && return 0
-      return 1 ;;
+      # Before Phase-2 OS/vault isolation, sanctioned secret-helper access is
+      # credential-classed by the wrapper, not by user-provided keywords. Deny
+      # all non-privileged calls so an unkeyworded secret class/profile cannot
+      # bypass the guard.
+      return 0 ;;
     browser)
-      if contains_sensitive_word "$profile"; then return 0; fi
-      contains_sensitive_word "$*" && return 0
-      return 1 ;;
+      # Shared browser/profile access can carry founder-comms or payment
+      # authority even when the requested profile name is unkeyworded. Deny all
+      # non-privileged calls through this wrapper until Phase-2 account/profile
+      # isolation exists.
+      return 0 ;;
     *)
       echo "credential guard: unsupported kind: $kind" >&2
       exit 64 ;;
