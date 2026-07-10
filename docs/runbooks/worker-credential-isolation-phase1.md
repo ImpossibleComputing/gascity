@@ -90,7 +90,10 @@ All of these must be true before any GC-managed session PATH changes:
 
 1. Paul completes ops review of launchd/watchers and signs off on which flows
    legitimately need `gws`, sanctioned secret-helper, or mayor/payment browser
-   access.
+   access. This review must enumerate, from the names-only inventory, each
+   launchd job or watcher that shells out to a guarded tool, its run-as identity,
+   and whether it should pass through or remain denied. The activation risk to
+   check is both worker false-allow and privileged watcher false-deny.
 2. Mayor completes activation review and confirms the privileged allowlist is
    least-privilege for the current fleet.
 3. The activation operator records the exact core-pack revision, wrapper asset
