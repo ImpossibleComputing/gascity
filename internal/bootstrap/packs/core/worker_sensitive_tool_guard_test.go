@@ -208,6 +208,7 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 		"assets/scripts/worker-sensitive-tool-guard.sh",
 		"assets/scripts/worker-sensitive-tool-path.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
+		"assets/scripts/worker-secret-env-preflight.sh",
 		"assets/worker-sensitive-tools/bin/gws",
 		"assets/worker-sensitive-tools/bin/secret-peek",
 		"assets/worker-sensitive-tools/bin/mayor-browser",
@@ -224,7 +225,10 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 			}
 			continue
 		}
-		if path != "assets/scripts/worker-sensitive-tool-path.sh" && path != "assets/scripts/worker-process-listing-guard.sh" && !strings.Contains(string(data), "worker-sensitive-tool-guard.sh") {
+		if path != "assets/scripts/worker-sensitive-tool-path.sh" &&
+			path != "assets/scripts/worker-process-listing-guard.sh" &&
+			path != "assets/scripts/worker-secret-env-preflight.sh" &&
+			!strings.Contains(string(data), "worker-sensitive-tool-guard.sh") {
 			t.Fatalf("%s does not route through worker-sensitive-tool-guard.sh", path)
 		}
 	}
@@ -289,6 +293,7 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 		"assets/scripts/worker-credential-sandbox-preflight.sh",
 		"assets/scripts/supervisor-env-surface-audit.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
+		"assets/scripts/worker-secret-env-preflight.sh",
 		"assets/worker-sensitive-tools/bin/ps",
 	} {
 		if _, err := fs.Stat(PackFS, path); err != nil {
@@ -353,6 +358,57 @@ func TestWorkerCredentialSandboxProfileDeniesCredentialFileOps(t *testing.T) {
 		if strings.Contains(profile, forbidden) {
 			t.Fatalf("sandbox profile must not deny HTTPS publication config %q in:\n%s", forbidden, profile)
 		}
+	}
+}
+
+func TestWorkerSecretEnvPreflightDeniesForbiddenNamesWithoutLeakingValues(t *testing.T) {
+	preflight := writeCoreAsset(t, "assets/scripts/worker-secret-env-preflight.sh")
+	secretOpenAI := "sk-proj-fake-secret-value-must-not-appear"
+	secretGemini := "AIza-fake-secret-value-must-not-appear"
+	got := runGuard(t, preflight, []string{
+		"OPENAI_API_KEY=" + secretOpenAI,
+		"GEMINI_API_KEY=" + secretGemini,
+		"GC_INSTANCE_TOKEN=not-in-default-forbid-list",
+	})
+	if got.code != 1 {
+		t.Fatalf("preflight exit = %d, want 1; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	for _, want := range []string{
+		"FAIL forbidden_env_name=OPENAI_API_KEY value=REDACTED",
+		"FAIL forbidden_env_name=GEMINI_API_KEY value=REDACTED",
+		"PASS absent_env_name=GITHUB_TOKEN",
+		"forbidden_present_count=2",
+		"values_not_printed_hashed_or_persisted",
+	} {
+		if !strings.Contains(got.stdout, want) {
+			t.Fatalf("preflight stdout missing %q: %q", want, got.stdout)
+		}
+	}
+	for _, leak := range []string{secretOpenAI, secretGemini, "sk-proj", "AIza-fake"} {
+		if strings.Contains(got.stdout, leak) || strings.Contains(got.stderr, leak) {
+			t.Fatalf("preflight leaked secret fragment %q; stdout=%q stderr=%q", leak, got.stdout, got.stderr)
+		}
+	}
+	if strings.Contains(got.stdout, "GC_INSTANCE_TOKEN") {
+		t.Fatalf("preflight should not flag GC_INSTANCE_TOKEN by default: %q", got.stdout)
+	}
+}
+
+func TestWorkerSecretEnvPreflightAllowsExplicitBrokerTokenName(t *testing.T) {
+	preflight := writeCoreAsset(t, "assets/scripts/worker-secret-env-preflight.sh")
+	got := runGuard(t, preflight,
+		[]string{"WORKER_LLM_BROKER_TOKEN=fake-worker-scoped-token"},
+		"--forbid", "WORKER_LLM_BROKER_TOKEN",
+		"--allow", "WORKER_LLM_BROKER_TOKEN",
+	)
+	if got.code != 0 {
+		t.Fatalf("preflight exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "SKIP allowed_env_name=WORKER_LLM_BROKER_TOKEN value=REDACTED") {
+		t.Fatalf("preflight stdout missing allowed broker token line: %q", got.stdout)
+	}
+	if strings.Contains(got.stdout, "fake-worker-scoped-token") || strings.Contains(got.stderr, "fake-worker-scoped-token") {
+		t.Fatalf("preflight leaked allowed token value; stdout=%q stderr=%q", got.stdout, got.stderr)
 	}
 }
 

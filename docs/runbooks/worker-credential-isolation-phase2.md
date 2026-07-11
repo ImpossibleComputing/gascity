@@ -124,6 +124,18 @@ The tmux launch path converts empty configured values into `env -u <KEY>` for
 the agent command. This is not enough for Codex/LLM workers that actually need
 model access; those need the Phase-3 broker/per-worker credential path below.
 
+To verify a worker's current environment without exposing values, run:
+
+```sh
+internal/bootstrap/packs/core/assets/scripts/worker-secret-env-preflight.sh
+```
+
+The preflight prints forbidden env names only, with `value=REDACTED`, and fails
+if default supervisor-level LLM/GitHub credential names are present. For a
+future brokered worker, allow only the scoped broker token name explicitly, e.g.
+`--forbid WORKER_LLM_BROKER_TOKEN --allow WORKER_LLM_BROKER_TOKEN`; do not allow
+the shared supervisor keys.
+
 
 ### Process-listing transcript leak guard
 
@@ -158,9 +170,11 @@ rate-limit by agent/session.
 Acceptance probes for that follow-on:
 
 1. A generic non-LLM worker launched by the supervisor has no `OPENAI_API_KEY`,
-   `GEMINI_API_KEY`, or other secret-bearing environment names.
+   `GEMINI_API_KEY`, or other shared credential environment names. The redacted
+   `worker-secret-env-preflight.sh` should pass inside that worker.
 2. A Codex/LLM worker that needs model access receives only its scoped worker key
-   or broker token, not the shared supervisor key.
+   or broker token, not the shared supervisor key. The same preflight may allow
+   only that scoped token name and must still fail on shared supervisor keys.
 3. Revoking one worker credential does not require rotating every fleet key.
 4. A full launchd plist audit contains no plaintext long-lived API keys.
 5. File sandbox probes from this runbook still pass after env scrubbing/broker
