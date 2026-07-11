@@ -70,6 +70,7 @@ func TestStartupHintsToRuntimeConfigCopiesValues(t *testing.T) {
 		EmitsPermissionWarning: true,
 		AcceptStartupDialogs:   &accept,
 		MouseOn:                true,
+		SandboxProfile:         "/city/worker.sb",
 		Nudge:                  "go",
 		PreStart:               []string{"mkdir -p x"},
 		SessionSetup:           []string{"echo setup"},
@@ -105,6 +106,9 @@ func TestStartupHintsToRuntimeConfigCopiesValues(t *testing.T) {
 	}
 	if !cfg.MouseOn {
 		t.Error("MouseOn = false, want true")
+	}
+	if cfg.SandboxProfile != "/city/worker.sb" {
+		t.Errorf("SandboxProfile = %q", cfg.SandboxProfile)
 	}
 	if cfg.Nudge != "go" {
 		t.Errorf("Nudge = %q", cfg.Nudge)

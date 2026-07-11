@@ -227,3 +227,14 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 		t.Fatal("path helper must prepend the guarded wrapper bin directory")
 	}
 }
+
+func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
+	for _, path := range []string{
+		"assets/security/worker-credential-deny.sb",
+		"assets/scripts/worker-credential-sandbox-preflight.sh",
+	} {
+		if _, err := fs.Stat(PackFS, path); err != nil {
+			t.Fatalf("core pack missing Phase-2 worker credential sandbox asset %s: %v", path, err)
+		}
+	}
+}

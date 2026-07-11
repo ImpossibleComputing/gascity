@@ -641,6 +641,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		EmitsPermissionWarning: resolved.EmitsPermissionWarning,
 		AcceptStartupDialogs:   acceptStartupDialogs,
 		MouseOn:                cfgAgent.MouseModeOn(),
+		SandboxProfile:         resolveSandboxProfilePath(p.cityPath, cfgAgent),
 		Nudge:                  nudge,
 		PreStart:               expandedPreStart,
 		SessionSetup:           expandedSetup,
@@ -825,6 +826,13 @@ func templateParamsToConfig(tp TemplateParams) runtime.Config {
 	cfg.MouseOn = tp.Hints.MouseOn || templateParamsSessionOrigin(tp) == "manual"
 	applyT3BridgeRuntimeConfig(tp, env)
 	return cfg
+}
+
+func resolveSandboxProfilePath(cityPath string, cfgAgent *config.Agent) string {
+	if cfgAgent == nil || strings.TrimSpace(cfgAgent.SandboxProfile) == "" {
+		return ""
+	}
+	return config.ResolveSessionSetupScriptPath(cityPath, cfgAgent.SourceDir, strings.TrimSpace(cfgAgent.SandboxProfile))
 }
 
 func prependStartupPromptToNudge(prompt, nudge string) string {

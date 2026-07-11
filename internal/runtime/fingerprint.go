@@ -205,6 +205,7 @@ func hashCoreFields(h hash.Hash, cfg Config) {
 	h.Write([]byte{0})             //nolint:errcheck // hash.Write never errors
 
 	hashSortedMapIncluded(h, cfg.Env, envFingerprintInclude)
+	hashOptionalString(h, "sandbox_profile", cfg.SandboxProfile)
 	hashMCPServers(h, cfg.MCPServers)
 
 	// FingerprintExtra carries additional identity fields (pool config, etc.)

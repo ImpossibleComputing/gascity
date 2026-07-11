@@ -927,3 +927,11 @@ func TestCoreFingerprintDriftFields(t *testing.T) {
 		t.Fatalf("CoreFingerprintDriftFields with missing breakdown = %v, want empty", got)
 	}
 }
+
+func TestConfigFingerprintIncludesSandboxProfile(t *testing.T) {
+	a := Config{Command: "agent", SandboxProfile: "/city/a.sb"}
+	b := Config{Command: "agent", SandboxProfile: "/city/b.sb"}
+	if ConfigFingerprint(a) == ConfigFingerprint(b) {
+		t.Fatal("SandboxProfile should affect the config fingerprint so sessions restart under the new credential boundary")
+	}
+}

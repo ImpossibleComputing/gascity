@@ -29,8 +29,8 @@ import (
 //	PROVISION (box):  Env (allow-listed), FingerprintExtra, PreStart,
 //	                  OverlayDir, OverlayProviders, CopyFiles.
 //	LAUNCH (agent):   Command, Lifecycle, Upstream, MCPServers,
-//	                  AcceptStartupDialogs, MouseOn, SessionSetup,
-//	                  SessionSetupScript.
+//	                  SandboxProfile, AcceptStartupDialogs, MouseOn,
+//	                  SessionSetup, SessionSetupScript.
 //
 // SessionSetup/SessionSetupScript are LAUNCH-half as of B2: the carriers now
 // replay them idempotently on relaunch (tmux launchOrchestration; ssh/k8s
@@ -108,6 +108,7 @@ func hashLaunchFields(h hash.Hash, cfg Config) {
 	h.Write([]byte{0})             //nolint:errcheck // hash.Write never errors
 
 	hashMCPServers(h, cfg.MCPServers)
+	hashOptionalString(h, "sandbox_profile", cfg.SandboxProfile)
 	hashOptionalBool(h, "accept_startup_dialogs", cfg.AcceptStartupDialogs)
 	hashBool(h, "mouse_on", cfg.MouseOn)
 
