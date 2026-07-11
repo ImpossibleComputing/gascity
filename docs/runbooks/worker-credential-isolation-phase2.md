@@ -64,11 +64,14 @@ Apply the profile to:
   `claude-sonnet` pool.
 - `bd.dog`: this is a maintenance worker, but its Dolt/bead work is under the
   city store; the credential-deny profile blocks only credential roots,
-  browser-profile reads, and `.gc/security` writes.
+  browser-profile reads, and `.gc/security` writes. It should also explicitly
+  unset inherited LLM/GitHub secret env vars because it is not an LLM/code
+  publication worker.
 - `core.control-dispatcher` and rig-scoped `*/control-dispatcher`: these are
   deterministic system agents with `prompt_mode = "none"`; the same profile
   still allows `.gc/runtime` trace writes and `gc convoy control --serve`, while
-  blocking credential roots.
+  blocking credential roots. They should explicitly unset inherited LLM/GitHub
+  secret env vars for the same reason.
 
 Only exempt a system agent with a concrete functional reason and document that
 reason in the runbook/bead. Do not leave a pack-defined prompt worker silently
@@ -102,6 +105,24 @@ incident hole was worker access to mayor@ file credentials plus authority
 impersonation. Environment variables instead expose the LLM/API credentials
 placed there, which is still a real abuse/cost surface and must be handled as a
 follow-on.
+
+For non-LLM maintenance/system agents, use the existing empty-env convention to
+remove inherited secrets at pane launch:
+
+```toml
+[env]
+OPENAI_API_KEY = ""
+GEMINI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+MISTRAL_API_KEY = ""
+ZAI_API_KEY = ""
+GH_TOKEN = ""
+GITHUB_TOKEN = ""
+```
+
+The tmux launch path converts empty configured values into `env -u <KEY>` for
+the agent command. This is not enough for Codex/LLM workers that actually need
+model access; those need the Phase-3 broker/per-worker credential path below.
 
 
 ### Process-listing transcript leak guard

@@ -39,13 +39,14 @@ func TestCoreMaintenanceExecAssets(t *testing.T) {
 
 func TestCoreControlDispatcherAgent(t *testing.T) {
 	type agentFile struct {
-		Description       string   `toml:"description"`
-		StartCommand      string   `toml:"start_command"`
-		PromptMode        string   `toml:"prompt_mode"`
-		ProcessNames      []string `toml:"process_names"`
-		MaxActiveSessions *int     `toml:"max_active_sessions"`
-		Scope             string   `toml:"scope"`
-		SandboxProfile    string   `toml:"sandbox_profile"`
+		Description       string            `toml:"description"`
+		StartCommand      string            `toml:"start_command"`
+		PromptMode        string            `toml:"prompt_mode"`
+		ProcessNames      []string          `toml:"process_names"`
+		MaxActiveSessions *int              `toml:"max_active_sessions"`
+		Scope             string            `toml:"scope"`
+		SandboxProfile    string            `toml:"sandbox_profile"`
+		Env               map[string]string `toml:"env"`
 	}
 
 	data, err := fs.ReadFile(PackFS, "agents/control-dispatcher/agent.toml")
@@ -65,6 +66,7 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	if agent.SandboxProfile != "//.gc/security/worker-credential-deny.sb" {
 		t.Fatalf("control-dispatcher sandbox_profile = %q, want worker credential deny profile", agent.SandboxProfile)
 	}
+	assertNonLLMMaintenanceSecretEnvScrubbed(t, agent.Env)
 	wantStartCommand := `sh -c 'export GC_WORKFLOW_TRACE="${GC_WORKFLOW_TRACE:-${GC_CONTROL_DISPATCHER_TRACE_DEFAULT:-${GC_CITY}/.gc/runtime/control-dispatcher-trace.log}}"; trace_dir="${GC_WORKFLOW_TRACE%/*}"; if [ "$trace_dir" = "$GC_WORKFLOW_TRACE" ]; then trace_dir="."; elif [ -z "$trace_dir" ]; then trace_dir="/"; fi; mkdir -p "$trace_dir"; exec "${GC_BIN:-gc}" convoy control --serve --follow {{.Agent}}'`
 	if agent.StartCommand != wantStartCommand {
 		t.Fatalf("control-dispatcher start_command = %q, want templated dispatcher command", agent.StartCommand)
@@ -77,6 +79,27 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	}
 	if agent.MaxActiveSessions == nil || *agent.MaxActiveSessions != 1 {
 		t.Fatalf("control-dispatcher max_active_sessions = %v, want 1", agent.MaxActiveSessions)
+	}
+}
+
+func assertNonLLMMaintenanceSecretEnvScrubbed(t *testing.T, env map[string]string) {
+	t.Helper()
+	for _, key := range []string{
+		"OPENAI_API_KEY",
+		"GEMINI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"MISTRAL_API_KEY",
+		"ZAI_API_KEY",
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+	} {
+		value, ok := env[key]
+		if !ok {
+			t.Fatalf("non-LLM maintenance agent must explicitly unset inherited %s", key)
+		}
+		if value != "" {
+			t.Fatalf("non-LLM maintenance agent env[%s] = %q, want empty string so tmux starts with env -u", key, value)
+		}
 	}
 }
 

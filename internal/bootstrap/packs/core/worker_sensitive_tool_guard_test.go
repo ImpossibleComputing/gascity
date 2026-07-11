@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 type guardResult struct {
@@ -311,6 +313,13 @@ func TestWorkerCredentialIsolationCoversMaintenanceAgents(t *testing.T) {
 			if !strings.Contains(string(data), `sandbox_profile = "//.gc/security/worker-credential-deny.sb"`) {
 				t.Fatalf("%s must not be silently unsandboxed; content:\n%s", tt.name, data)
 			}
+			var parsed struct {
+				Env map[string]string `toml:"env"`
+			}
+			if _, err := toml.Decode(string(data), &parsed); err != nil {
+				t.Fatalf("Decode(%s): %v", tt.path, err)
+			}
+			assertNonLLMMaintenanceSecretEnvScrubbed(t, parsed.Env)
 		})
 	}
 }

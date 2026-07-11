@@ -4,3 +4,12 @@ start_command = "sh -c 'export GC_WORKFLOW_TRACE=\"${GC_WORKFLOW_TRACE:-${GC_CON
 prompt_mode = "none"
 process_names = ["gc"]
 max_active_sessions = 1
+
+[env]
+OPENAI_API_KEY = ""
+GEMINI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+MISTRAL_API_KEY = ""
+ZAI_API_KEY = ""
+GH_TOKEN = ""
+GITHUB_TOKEN = ""
