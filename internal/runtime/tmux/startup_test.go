@@ -2678,3 +2678,24 @@ func TestRecordStartCrashDisabledWhenNoRuntimeDir(t *testing.T) {
 		t.Fatalf("path = %q, want empty when runtimeDir unset", path)
 	}
 }
+
+func TestDoStartSession_SandboxProfileWrapsLaunchCommand(t *testing.T) {
+	ops := &fakeStartOps{}
+
+	err := doStartSession(context.Background(), ops, "sandboxed", runtime.Config{
+		WorkDir:        "/w",
+		Command:        "agent --serve",
+		SandboxProfile: "/city/.gc/security/worker-credential-deny.sb",
+	}, DefaultConfig().SetupTimeout)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	create := callsByMethod(t, ops, "createSession", 1)[0]
+	if !strings.Contains(create.command, "sandbox-exec") || !strings.Contains(create.command, "/city/.gc/security/worker-credential-deny.sb") {
+		t.Fatalf("createSession command = %q, want sandbox-exec wrapper with profile", create.command)
+	}
+	if !strings.Contains(create.command, "agent --serve") {
+		t.Fatalf("createSession command = %q, want wrapped agent command", create.command)
+	}
+}

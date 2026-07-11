@@ -16,6 +16,9 @@ type StartupHints struct {
 	AcceptStartupDialogs   *bool
 	// MouseOn reports whether tmux mouse mode should be preserved for this session.
 	MouseOn bool
+	// SandboxProfile is an optional sandbox-exec profile path for host-enforced
+	// worker credential isolation.
+	SandboxProfile string
 	// Nudge is text typed into the session after the agent is ready.
 	// Used for CLI agents that don't accept command-line prompts.
 	Nudge string
@@ -70,6 +73,7 @@ func (h StartupHints) ToRuntimeConfig() runtime.Config {
 		EmitsPermissionWarning: h.EmitsPermissionWarning,
 		AcceptStartupDialogs:   h.AcceptStartupDialogs,
 		MouseOn:                h.MouseOn,
+		SandboxProfile:         h.SandboxProfile,
 		Nudge:                  h.Nudge,
 		PreStart:               h.PreStart,
 		SessionSetup:           h.SessionSetup,

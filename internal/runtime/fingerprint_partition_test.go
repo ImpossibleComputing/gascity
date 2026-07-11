@@ -22,6 +22,7 @@ var partitionHalfCases = []struct {
 	{"MCPServers", "launch", func(c *Config) {
 		c.MCPServers = []MCPServerConfig{{Name: "mail", Transport: MCPTransport("stdio"), Command: "different-mcp"}}
 	}},
+	{"SandboxProfile", "launch", func(c *Config) { c.SandboxProfile = "/different-worker.sb" }},
 	{"AcceptStartupDialogs", "launch", func(c *Config) { b := false; c.AcceptStartupDialogs = &b }},
 	{"MouseOn", "launch", func(c *Config) { c.MouseOn = !c.MouseOn }},
 	// SessionSetup/SessionSetupScript are LAUNCH-half (B2): the carriers replay
@@ -96,6 +97,7 @@ var coreFieldHalf = map[string]string{
 	"Lifecycle":            "launch",
 	"Upstream":             "launch",
 	"MCPServers":           "launch",
+	"SandboxProfile":       "launch",
 	"AcceptStartupDialogs": "launch",
 	"MouseOn":              "launch",
 	"SessionSetup":         "launch",

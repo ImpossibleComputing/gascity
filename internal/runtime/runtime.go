@@ -548,6 +548,11 @@ type Config struct {
 	// Env is additional environment variables set in the session.
 	Env map[string]string
 
+	// SandboxProfile is an optional sandbox-exec profile path used to wrap the
+	// launched agent command. Children inherit the sandbox, so denied credential
+	// paths stay inaccessible to worker-spawned subprocesses. Empty disables it.
+	SandboxProfile string
+
 	// MCPServers is the effective ACP session/new MCP server list for this
 	// session. Non-ACP providers ignore it.
 	MCPServers []MCPServerConfig

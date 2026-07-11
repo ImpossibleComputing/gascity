@@ -1378,9 +1378,17 @@ const maxInlinePromptLen = 1024
 // any error. Shared by ensureFreshSession (box creation) and doRelaunchSession
 // (relaunch into a warm box) so both produce an identical agent command.
 func buildLaunchCommand(name string, cfg runtime.Config) (fullCommand, promptFile string, err error) {
+	finish := func(command string) (string, string, error) {
+		wrapped, err := sandboxExecCommand(command, cfg)
+		if err != nil {
+			return "", promptFile, err
+		}
+		return wrapped, promptFile, nil
+	}
+
 	fullCommand = cfg.Command
 	if cfg.PromptSuffix == "" {
-		return fullCommand, "", nil
+		return finish(fullCommand)
 	}
 	if len(cfg.PromptSuffix) > maxInlinePromptLen {
 		// Large prompt — write to temp file and use $(cat ...) expansion inside
@@ -1396,12 +1404,48 @@ func buildLaunchCommand(name string, cfg runtime.Config) (fullCommand, promptFil
 			// can diagnose the cause.
 			return "", "", fmt.Errorf("writing prompt temp file for session %q: %w", name, err)
 		}
-		return longPromptCommand(cfg.Command, cfg.PromptFlag, promptFile), promptFile, nil
+		return finish(longPromptCommand(cfg.Command, cfg.PromptFlag, promptFile))
 	}
 	if cfg.PromptFlag != "" {
-		return fullCommand + " " + cfg.PromptFlag + " " + cfg.PromptSuffix, "", nil
+		return finish(fullCommand + " " + cfg.PromptFlag + " " + cfg.PromptSuffix)
 	}
-	return fullCommand + " " + cfg.PromptSuffix, "", nil
+	return finish(fullCommand + " " + cfg.PromptSuffix)
+}
+
+func sandboxExecCommand(command string, cfg runtime.Config) (string, error) {
+	profile := strings.TrimSpace(cfg.SandboxProfile)
+	if profile == "" {
+		return command, nil
+	}
+	if strings.Contains(profile, "\x00") {
+		return "", fmt.Errorf("sandbox_profile contains NUL byte")
+	}
+	if strings.Contains(command, "\x00") {
+		return "", fmt.Errorf("agent command contains NUL byte")
+	}
+
+	home, _ := os.UserHomeDir()
+	city := strings.TrimSpace(cfg.Env["GC_CITY_ROOT"])
+	if city == "" {
+		city = strings.TrimSpace(cfg.Env["GC_CITY"])
+	}
+	if city == "" {
+		city = cfg.WorkDir
+	}
+	args := []string{"sandbox-exec"}
+	for _, def := range []string{
+		"GWS_CONFIG=" + filepath.Join(home, ".config", "gws"),
+		"GCLOUD_CONFIG=" + filepath.Join(home, ".config", "gcloud"),
+		"AWS_CONFIG=" + filepath.Join(home, ".aws"),
+		"CITY_SECRETS=" + filepath.Join(city, ".secrets"),
+		"HOME_SECRETS=" + filepath.Join(home, ".secrets"),
+		"HOME_SSH=" + filepath.Join(home, ".ssh"),
+		"BROWSER_PROFILES=" + filepath.Join(home, "Library", "Application Support"),
+	} {
+		args = append(args, "-D", def)
+	}
+	args = append(args, "-f", profile, "--", "sh", "-lc", "exec "+command)
+	return shellquote.Join(args), nil
 }
 
 func ensureFreshSession(ops startOps, name string, cfg runtime.Config) error {

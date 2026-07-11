@@ -681,6 +681,10 @@ type AgentOverride struct {
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
 	Provider *string `toml:"provider,omitempty"`
+	// SandboxProfile wraps the launched agent command in sandbox-exec -f <profile>.
+	// Use for Phase-2 credential isolation profiles that deny worker access to
+	// founder-comms/payment credential paths even under the same Unix user.
+	SandboxProfile *string `toml:"sandbox_profile,omitempty"`
 	// Upstream overrides the model-serving endpoint selection (Phase C).
 	Upstream *string `toml:"upstream,omitempty"`
 	// Args overrides the provider's default arguments. Leave unset to keep
@@ -2924,6 +2928,11 @@ type Agent struct {
 	Session string `toml:"session,omitempty" jsonschema:"enum=acp"`
 	// Provider names the provider preset to use for this agent.
 	Provider string `toml:"provider,omitempty"`
+	// SandboxProfile wraps this agent's command in sandbox-exec -f <profile>.
+	// This is a host-enforced Phase-2 credential boundary for local workers:
+	// children inherit the sandbox and cannot read denied mayor/founder credential
+	// paths even when they share the controller's Unix uid. Empty disables it.
+	SandboxProfile string `toml:"sandbox_profile,omitempty"`
 	// Upstream selects the model-serving endpoint (a key in [upstreams]) for
 	// this agent — WHO serves the model. "" (default) falls back to
 	// agent_defaults.upstream; if still empty, no upstream env is injected

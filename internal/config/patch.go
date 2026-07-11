@@ -51,6 +51,8 @@ type AgentPatch struct {
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
 	Provider *string `toml:"provider,omitempty"`
+	// SandboxProfile wraps the launched agent command in sandbox-exec -f <profile>.
+	SandboxProfile *string `toml:"sandbox_profile,omitempty"`
 	// Upstream overrides the model-serving endpoint selection (Phase C).
 	Upstream *string `toml:"upstream,omitempty"`
 	// Args overrides the provider's default arguments. Leave unset to keep
@@ -469,6 +471,9 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 	}
 	if p.Provider != nil {
 		a.Provider = *p.Provider
+	}
+	if p.SandboxProfile != nil {
+		a.SandboxProfile = *p.SandboxProfile
 	}
 	if p.Upstream != nil {
 		a.Upstream = *p.Upstream
