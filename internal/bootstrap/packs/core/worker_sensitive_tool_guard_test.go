@@ -228,10 +228,56 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 	}
 }
 
+func TestSupervisorEnvSurfaceAuditRedactsValues(t *testing.T) {
+	audit := writeCoreAsset(t, "assets/scripts/supervisor-env-surface-audit.sh")
+	plist := filepath.Join(t.TempDir(), "com.gascity.supervisor.plist")
+	secretOpenAI := "sk-proj-fake-secret-value-must-not-appear"
+	secretGemini := "AIza-fake-secret-value-must-not-appear"
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.gascity.supervisor</string>
+  <key>ProgramArguments</key><array><string>/opt/homebrew/bin/gc</string><string>supervisor</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OPENAI_API_KEY</key><string>%s</string>
+    <key>GEMINI_API_KEY</key><string>%s</string>
+    <key>PATH</key><string>/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
+`, secretOpenAI, secretGemini)
+	if err := os.WriteFile(plist, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing plist: %v", err)
+	}
+
+	cmd := exec.Command(audit, "--plist", plist)
+	cmd.Env = os.Environ()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("audit failed: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"OPENAI_API_KEY", "GEMINI_API_KEY", "PATH", "value=REDACTED", "values_not_printed_hashed_or_persisted"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("audit output missing %q: %q", want, out)
+		}
+	}
+	for _, leak := range []string{secretOpenAI, secretGemini, "sk-proj", "AIza-fake"} {
+		if strings.Contains(out, leak) || strings.Contains(stderr.String(), leak) {
+			t.Fatalf("audit leaked secret fragment %q; stdout=%q stderr=%q", leak, out, stderr.String())
+		}
+	}
+}
+
 func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 	for _, path := range []string{
 		"assets/security/worker-credential-deny.sb",
 		"assets/scripts/worker-credential-sandbox-preflight.sh",
+		"assets/scripts/supervisor-env-surface-audit.sh",
 	} {
 		if _, err := fs.Stat(PackFS, path); err != nil {
 			t.Fatalf("core pack missing Phase-2 worker credential sandbox asset %s: %v", path, err)

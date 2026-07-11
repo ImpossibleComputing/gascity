@@ -50,6 +50,54 @@ internal/bootstrap/packs/core/assets/scripts/worker-credential-sandbox-preflight
    Do not send external mail as a test.
 7. Only after the sandbox, HTTPS publication, and prompt/credential guards hold: rotate mayor@ password/token and enable 2FA.
 
+## Environment-variable credential surface
+
+The file-read sandbox does **not** protect credentials that are already present in
+the worker process environment. A worker launched by the supervisor inherits the
+supervisor environment unless the launcher scrubs or replaces it before spawning
+the worker. That means a launchd plist such as
+`~/Library/LaunchAgents/com.gascity.supervisor.plist` can be a plaintext
+credential surface if it stores API keys under `EnvironmentVariables`, and those
+variables can bypass file-deny sandboxing entirely.
+
+Use the redacted audit helper instead of dumping a full plist:
+
+```sh
+internal/bootstrap/packs/core/assets/scripts/supervisor-env-surface-audit.sh \
+  --plist ~/Library/LaunchAgents/com.gascity.supervisor.plist
+```
+
+The helper prints variable names and plist metadata only; it does not print,
+hash, prefix, or persist values. Treat any secret-bearing name such as
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `*_TOKEN`, or `*_SECRET` in supervisor
+`EnvironmentVariables` as part of the assume-breach inventory if the plist or a
+full plist dump entered a transcript.
+
+This finding does not by itself block the PR#11/PR#12 pool-resume gate: the
+incident hole was worker access to mayor@ file credentials plus authority
+impersonation. Environment variables instead expose the LLM/API credentials
+placed there, which is still a real abuse/cost surface and must be handled as a
+follow-on.
+
+## Phase-3 broker / per-worker LLM credential scope
+
+Target end-state: workers do not inherit shared supervisor API keys. The launcher
+should start workers with a scrubbed environment and provide only the credentials
+that worker is authorized to use, ideally through a broker that can mint or
+select per-worker scoped credentials, log issuance, revoke a single worker, and
+rate-limit by agent/session.
+
+Acceptance probes for that follow-on:
+
+1. A generic non-LLM worker launched by the supervisor has no `OPENAI_API_KEY`,
+   `GEMINI_API_KEY`, or other secret-bearing environment names.
+2. A Codex/LLM worker that needs model access receives only its scoped worker key
+   or broker token, not the shared supervisor key.
+3. Revoking one worker credential does not require rotating every fleet key.
+4. A full launchd plist audit contains no plaintext long-lived API keys.
+5. File sandbox probes from this runbook still pass after env scrubbing/broker
+   integration.
+
 ## Limits
 
-This is stronger than a PATH wrapper: absolute path bypasses and spawned children inherit the sandbox. It is still not a substitute for a future separate Unix-user/container split where feasible, and it does not authorize workers to receive mayor@ credentials through environment variables or broker APIs.
+This is stronger than a PATH wrapper: absolute path bypasses and spawned children inherit the sandbox. It is still not a substitute for a future separate Unix-user/container split where feasible, and it does not authorize workers to receive mayor@ credentials, shared API keys, or other secrets through environment variables or broker APIs.
