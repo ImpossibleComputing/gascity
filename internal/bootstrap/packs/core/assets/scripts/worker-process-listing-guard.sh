@@ -64,6 +64,12 @@ is_sensitive_ps_form() {
     case "$lower" in
       aux|ax|axu|axww|auxww|-ef|-eaf|-ely|-a|-a*) return 0 ;;
     esac
+    case "$lower" in
+      -f|-f*|f) return 0 ;;
+    esac
+    case "$compact" in
+      *ww*|*full*) return 0 ;;
+    esac
     case "$compact" in
       *aux*|*axww*|*eww*|*env*) return 0 ;;
     esac

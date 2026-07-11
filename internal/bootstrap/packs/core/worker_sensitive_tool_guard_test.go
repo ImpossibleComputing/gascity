@@ -408,6 +408,8 @@ func TestWorkerProcessListingGuardDeniesBroadAndFullCommandForms(t *testing.T) {
 		{name: "env wide", args: []string{"axeww"}},
 		{name: "args output", args: []string{"-Ao", "pid,args"}},
 		{name: "command output", args: []string{"-p", "123", "-o", "pid,command"}},
+		{name: "process specific full format", args: []string{"-p", "123", "-f"}},
+		{name: "wide process specific", args: []string{"-ww", "-p", "123"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "called")

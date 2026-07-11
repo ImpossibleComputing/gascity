@@ -120,7 +120,9 @@ The core pack includes a PATH-level tripwire for this class:
 `assets/worker-sensitive-tools/bin/ps` routes through
 `assets/scripts/worker-process-listing-guard.sh`, denying broad/full-command ps
 forms for non-privileged worker identities while allowing narrow `-p ... -o
-pid,comm=` diagnostics. This guard is intentionally weaker than the macOS file
+pid,comm=` diagnostics. The deny list includes full-format and wide-output
+variants (`-f`, `-ww`) even when paired with a specific pid because those can
+still surface secret-bearing command lines. This guard is intentionally weaker than the macOS file
 sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
 scrub inherited environments and remove long-lived secrets from process envs.
 
