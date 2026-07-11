@@ -205,16 +205,24 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 	required := []string{
 		"assets/scripts/worker-sensitive-tool-guard.sh",
 		"assets/scripts/worker-sensitive-tool-path.sh",
+		"assets/scripts/worker-process-listing-guard.sh",
 		"assets/worker-sensitive-tools/bin/gws",
 		"assets/worker-sensitive-tools/bin/secret-peek",
 		"assets/worker-sensitive-tools/bin/mayor-browser",
+		"assets/worker-sensitive-tools/bin/ps",
 	}
 	for _, path := range required {
 		data, err := fs.ReadFile(PackFS, path)
 		if err != nil {
 			t.Fatalf("core pack missing Phase-1 credential guard asset %s: %v", path, err)
 		}
-		if path != "assets/scripts/worker-sensitive-tool-path.sh" && !strings.Contains(string(data), "worker-sensitive-tool-guard.sh") {
+		if path == "assets/worker-sensitive-tools/bin/ps" {
+			if !strings.Contains(string(data), "worker-process-listing-guard.sh") {
+				t.Fatalf("%s does not route through worker-process-listing-guard.sh", path)
+			}
+			continue
+		}
+		if path != "assets/scripts/worker-sensitive-tool-path.sh" && path != "assets/scripts/worker-process-listing-guard.sh" && !strings.Contains(string(data), "worker-sensitive-tool-guard.sh") {
 			t.Fatalf("%s does not route through worker-sensitive-tool-guard.sh", path)
 		}
 	}
@@ -278,6 +286,8 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 		"assets/security/worker-credential-deny.sb",
 		"assets/scripts/worker-credential-sandbox-preflight.sh",
 		"assets/scripts/supervisor-env-surface-audit.sh",
+		"assets/scripts/worker-process-listing-guard.sh",
+		"assets/worker-sensitive-tools/bin/ps",
 	} {
 		if _, err := fs.Stat(PackFS, path); err != nil {
 			t.Fatalf("core pack missing Phase-2 worker credential sandbox asset %s: %v", path, err)
@@ -358,5 +368,83 @@ func TestWorkerCredentialIsolationRunbookDocumentsHTTPSPublication(t *testing.T)
 		if !strings.Contains(runbook, want) {
 			t.Fatalf("runbook missing %q in:\n%s", want, runbook)
 		}
+	}
+}
+
+func TestWorkerProcessListingGuardDeniesBroadAndFullCommandForms(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-process-listing-guard.sh")
+	workerEnv := []string{
+		"GC_AGENT=claude-sonnet-1",
+		"GC_SESSION_NAME=gt-wisp-worker-test",
+		"GC_AGENT_ROLE=worker",
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "classic aux", args: []string{"aux"}},
+		{name: "full process table", args: []string{"-ef"}},
+		{name: "env wide", args: []string{"axeww"}},
+		{name: "args output", args: []string{"-Ao", "pid,args"}},
+		{name: "command output", args: []string{"-p", "123", "-o", "pid,command"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "called")
+			fake := writeFakeTool(t, marker)
+			args := append([]string{"--real", fake, "--"}, tt.args...)
+			got := runGuard(t, guard, workerEnv, args...)
+			if got.code != 78 {
+				t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+			}
+			if !strings.Contains(got.stderr, "process listing guard deny") {
+				t.Fatalf("deny stderr missing guard message: %q", got.stderr)
+			}
+			if strings.Contains(got.stderr, "OPENAI") || strings.Contains(got.stderr, "GEMINI") || strings.Contains(got.stderr, "fake-secret-value") {
+				t.Fatalf("deny stderr leaked secret-looking text: %q", got.stderr)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("fake ps marker exists after denied request; err=%v", err)
+			}
+		})
+	}
+}
+
+func TestWorkerProcessListingGuardAllowsNarrowPidCommForm(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-process-listing-guard.sh")
+	marker := filepath.Join(t.TempDir(), "called")
+	fake := writeFakeTool(t, marker)
+	got := runGuard(t, guard,
+		[]string{"GC_AGENT=claude-sonnet-1", "GC_AGENT_ROLE=worker", "GC_SESSION_NAME=gt-wisp-worker-test"},
+		"--real", fake, "--", "-p", "123", "-o", "pid,comm=",
+	)
+	if got.code != 0 {
+		t.Fatalf("guard exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "fake-ok:-p 123 -o pid,comm=") {
+		t.Fatalf("fake ps stdout missing pass-through args: %q", got.stdout)
+	}
+	markerData, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("reading fake marker: %v", err)
+	}
+	if !strings.Contains(string(markerData), "called:-p 123 -o pid,comm=") {
+		t.Fatalf("fake marker missing pass-through args: %q", markerData)
+	}
+}
+
+func TestWorkerProcessListingGuardAllowsPrivilegedBroadListing(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-process-listing-guard.sh")
+	marker := filepath.Join(t.TempDir(), "called")
+	fake := writeFakeTool(t, marker)
+	got := runGuard(t, guard,
+		[]string{"GC_AGENT=paul", "GC_AGENT_ROLE=ops", "GC_SESSION_NAME=paul-review-test"},
+		"--real", fake, "--", "aux",
+	)
+	if got.code != 0 {
+		t.Fatalf("guard exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "fake-ok:aux") {
+		t.Fatalf("fake ps stdout missing pass-through args: %q", got.stdout)
 	}
 }

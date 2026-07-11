@@ -79,6 +79,27 @@ impersonation. Environment variables instead expose the LLM/API credentials
 placed there, which is still a real abuse/cost surface and must be handled as a
 follow-on.
 
+
+### Process-listing transcript leak guard
+
+A second environment-variable leak vector is broad process inspection. Commands
+such as `ps aux`, `ps -ef`, or env/full-command variants can copy inherited
+API-key environment variables or secret-bearing command lines into durable agent
+transcripts. Non-privileged workers should not run broad or full-command process
+listings. Prefer process-specific narrow forms such as:
+
+```sh
+ps -p <pid> -o pid,comm=
+```
+
+The core pack includes a PATH-level tripwire for this class:
+`assets/worker-sensitive-tools/bin/ps` routes through
+`assets/scripts/worker-process-listing-guard.sh`, denying broad/full-command ps
+forms for non-privileged worker identities while allowing narrow `-p ... -o
+pid,comm=` diagnostics. This guard is intentionally weaker than the macOS file
+sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
+scrub inherited environments and remove long-lived secrets from process envs.
+
 ## Phase-3 broker / per-worker LLM credential scope
 
 Target end-state: workers do not inherit shared supervisor API keys. The launcher

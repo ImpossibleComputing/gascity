@@ -10,4 +10,5 @@ case ":${PATH:-}:" in
   *) export PATH="$wrapper_bin:${PATH:-}" ;;
 esac
 export GC_REAL_GWS="${GC_REAL_GWS:-/opt/homebrew/bin/gws}"
+export GC_REAL_PS="${GC_REAL_PS:-/bin/ps}"
 export GC_CREDENTIAL_GUARD_ACTIVE="${GC_CREDENTIAL_GUARD_ACTIVE:-phase1-authored-not-live}"
