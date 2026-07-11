@@ -1435,6 +1435,8 @@ func sandboxExecCommand(command string, cfg runtime.Config) (string, error) {
 	args := []string{"sandbox-exec"}
 	for _, def := range []string{
 		"GWS_CONFIG=" + filepath.Join(home, ".config", "gws"),
+		"GCLOUD_CONFIG=" + filepath.Join(home, ".config", "gcloud"),
+		"AWS_CONFIG=" + filepath.Join(home, ".aws"),
 		"CITY_SECRETS=" + filepath.Join(city, ".secrets"),
 		"HOME_SECRETS=" + filepath.Join(home, ".secrets"),
 		"HOME_SSH=" + filepath.Join(home, ".ssh"),

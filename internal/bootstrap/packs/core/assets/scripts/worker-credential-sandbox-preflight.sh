@@ -32,6 +32,8 @@ done
 run_sandbox() {
   sandbox-exec \
     -D "GWS_CONFIG=$home_dir/.config/gws" \
+    -D "GCLOUD_CONFIG=$home_dir/.config/gcloud" \
+    -D "AWS_CONFIG=$home_dir/.aws" \
     -D "CITY_SECRETS=$city/.secrets" \
     -D "HOME_SECRETS=$home_dir/.secrets" \
     -D "HOME_SSH=$home_dir/.ssh" \
@@ -63,6 +65,8 @@ must_deny() {
 
 must_allow "city board" "$city/teams/rd-board.md"
 must_deny "gws config" "$home_dir/.config/gws"
+must_deny "gcloud config" "$home_dir/.config/gcloud"
+must_deny "aws config" "$home_dir/.aws"
 must_deny "city secrets" "$city/.secrets"
 must_deny "home secrets" "$home_dir/.secrets"
 must_deny "ssh keys" "$home_dir/.ssh"

@@ -15,6 +15,8 @@ The sandbox is inherited by child processes, so direct file reads, `gws`, Python
 The profile denies reads from:
 
 - `~/.config/gws`
+- `~/.config/gcloud`
+- `~/.aws`
 - `<city>/.secrets`
 - `~/.secrets`
 - `~/.ssh`
