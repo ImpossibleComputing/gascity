@@ -50,6 +50,30 @@ internal/bootstrap/packs/core/assets/scripts/worker-credential-sandbox-preflight
    Do not send external mail as a test.
 7. Only after the sandbox, HTTPS publication, and prompt/credential guards hold: rotate mayor@ password/token and enable 2FA.
 
+
+## Pack-defined and maintenance-agent residual coverage
+
+The named-agent rollout is not the whole fleet. Pack-defined agents must carry
+the same profile when they are prompt/code workers or when the profile does not
+conflict with their infra role.
+
+Apply the profile to:
+
+- `jacq-worktree-pool` agents (`claude`, `claude-sonnet`, `codex`): these are
+  secondary coding/pool workers and share the same risk class as the primary
+  `claude-sonnet` pool.
+- `bd.dog`: this is a maintenance worker, but its Dolt/bead work is under the
+  city store; the credential-deny profile blocks only credential roots,
+  browser-profile reads, and `.gc/security` writes.
+- `core.control-dispatcher` and rig-scoped `*/control-dispatcher`: these are
+  deterministic system agents with `prompt_mode = "none"`; the same profile
+  still allows `.gc/runtime` trace writes and `gc convoy control --serve`, while
+  blocking credential roots.
+
+Only exempt a system agent with a concrete functional reason and document that
+reason in the runbook/bead. Do not leave a pack-defined prompt worker silently
+unsandboxed.
+
 ## Environment-variable credential surface
 
 The file-read sandbox does **not** protect credentials that are already present in

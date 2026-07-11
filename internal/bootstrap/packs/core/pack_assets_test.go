@@ -45,6 +45,7 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 		ProcessNames      []string `toml:"process_names"`
 		MaxActiveSessions *int     `toml:"max_active_sessions"`
 		Scope             string   `toml:"scope"`
+		SandboxProfile    string   `toml:"sandbox_profile"`
 	}
 
 	data, err := fs.ReadFile(PackFS, "agents/control-dispatcher/agent.toml")
@@ -60,6 +61,9 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	}
 	if agent.Scope != "" {
 		t.Fatalf("control-dispatcher scope = %q, want empty so it expands at city and rig scope", agent.Scope)
+	}
+	if agent.SandboxProfile != "//.gc/security/worker-credential-deny.sb" {
+		t.Fatalf("control-dispatcher sandbox_profile = %q, want worker credential deny profile", agent.SandboxProfile)
 	}
 	wantStartCommand := `sh -c 'export GC_WORKFLOW_TRACE="${GC_WORKFLOW_TRACE:-${GC_CONTROL_DISPATCHER_TRACE_DEFAULT:-${GC_CITY}/.gc/runtime/control-dispatcher-trace.log}}"; trace_dir="${GC_WORKFLOW_TRACE%/*}"; if [ "$trace_dir" = "$GC_WORKFLOW_TRACE" ]; then trace_dir="."; elif [ -z "$trace_dir" ]; then trace_dir="/"; fi; mkdir -p "$trace_dir"; exec "${GC_BIN:-gc}" convoy control --serve --follow {{.Agent}}'`
 	if agent.StartCommand != wantStartCommand {

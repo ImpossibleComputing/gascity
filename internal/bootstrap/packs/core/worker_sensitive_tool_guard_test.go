@@ -295,6 +295,26 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 	}
 }
 
+func TestWorkerCredentialIsolationCoversMaintenanceAgents(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "bd dog", path: filepath.Join("..", "..", "..", "..", "examples", "bd", "dolt", "agents", "dog", "agent.toml")},
+		{name: "control dispatcher", path: filepath.Join("agents", "control-dispatcher", "agent.toml")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := os.ReadFile(tt.path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", tt.path, err)
+			}
+			if !strings.Contains(string(data), `sandbox_profile = "//.gc/security/worker-credential-deny.sb"`) {
+				t.Fatalf("%s must not be silently unsandboxed; content:\n%s", tt.name, data)
+			}
+		})
+	}
+}
+
 func TestWorkerCredentialSandboxProfileDeniesCredentialFileOps(t *testing.T) {
 	data, err := fs.ReadFile(PackFS, "assets/security/worker-credential-deny.sb")
 	if err != nil {
