@@ -2698,4 +2698,7 @@ func TestDoStartSession_SandboxProfileWrapsLaunchCommand(t *testing.T) {
 	if !strings.Contains(create.command, "agent --serve") {
 		t.Fatalf("createSession command = %q, want wrapped agent command", create.command)
 	}
+	if !strings.Contains(create.command, "GC_SECURITY=/w/.gc/security") {
+		t.Fatalf("createSession command = %q, want GC_SECURITY sandbox parameter", create.command)
+	}
 }

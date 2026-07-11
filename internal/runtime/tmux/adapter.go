@@ -1441,6 +1441,7 @@ func sandboxExecCommand(command string, cfg runtime.Config) (string, error) {
 		"HOME_SECRETS=" + filepath.Join(home, ".secrets"),
 		"HOME_SSH=" + filepath.Join(home, ".ssh"),
 		"BROWSER_PROFILES=" + filepath.Join(home, "Library", "Application Support"),
+		"GC_SECURITY=" + filepath.Join(city, ".gc", "security"),
 	} {
 		args = append(args, "-D", def)
 	}

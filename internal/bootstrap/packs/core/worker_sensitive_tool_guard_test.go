@@ -238,3 +238,79 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerCredentialSandboxProfileDeniesCredentialFileOps(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "assets/security/worker-credential-deny.sb")
+	if err != nil {
+		t.Fatalf("reading worker credential sandbox profile: %v", err)
+	}
+	profile := string(data)
+	for _, param := range []string{
+		"GWS_CONFIG",
+		"GCLOUD_CONFIG",
+		"AWS_CONFIG",
+		"CITY_SECRETS",
+		"HOME_SECRETS",
+		"HOME_SSH",
+	} {
+		want := fmt.Sprintf(`(deny file* (subpath (param "%s")))`, param)
+		if !strings.Contains(profile, want) {
+			t.Fatalf("sandbox profile missing %q in:\n%s", want, profile)
+		}
+	}
+	if want := `(deny file-read* (subpath (param "BROWSER_PROFILES")))`; !strings.Contains(profile, want) {
+		t.Fatalf("sandbox profile missing browser read deny %q in:\n%s", want, profile)
+	}
+	if want := `(deny file-write* (subpath (param "GC_SECURITY")))`; !strings.Contains(profile, want) {
+		t.Fatalf("sandbox profile missing security-profile write deny %q in:\n%s", want, profile)
+	}
+	for _, forbidden := range []string{"GH_CONFIG", "GIT_CONFIG", ".config/gh", ".config/git", ".gitconfig"} {
+		if strings.Contains(profile, forbidden) {
+			t.Fatalf("sandbox profile must not deny HTTPS publication config %q in:\n%s", forbidden, profile)
+		}
+	}
+}
+
+func TestWorkerCredentialSandboxPreflightProbesMissingPathCreate(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "assets/scripts/worker-credential-sandbox-preflight.sh")
+	if err != nil {
+		t.Fatalf("reading worker credential sandbox preflight: %v", err)
+	}
+	script := string(data)
+	for _, want := range []string{
+		`if [ ! -e "$path" ]; then`,
+		`run_sandbox sh -c 'mkdir "$1"' _ "$path"`,
+		`FAIL deny $label: sandbox allowed create`,
+		`rmdir "$path"`,
+		`must_deny_write()`,
+		`must_deny_write "$label" "$path"`,
+		`must_deny_write "gc security" "$city/.gc/security"`,
+		`must_allow_https_push()`,
+		`git -C "$city" push --dry-run "$https_push_remote" "HEAD:$https_push_ref"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("preflight missing %q in:\n%s", want, script)
+		}
+	}
+}
+
+func TestWorkerCredentialIsolationRunbookDocumentsHTTPSPublication(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docs", "runbooks", "worker-credential-isolation-phase2.md"))
+	if err != nil {
+		t.Fatalf("reading worker credential isolation runbook: %v", err)
+	}
+	runbook := string(data)
+	for _, want := range []string{
+		"HTTPS plus the existing GitHub CLI token",
+		"SSH private keys stay fully denied",
+		"Git publication must work over HTTPS",
+		"~/.config/gh",
+		"~/.gitconfig",
+		"~/.config/git",
+		"credential path reads, writes, and creates must fail",
+	} {
+		if !strings.Contains(runbook, want) {
+			t.Fatalf("runbook missing %q in:\n%s", want, runbook)
+		}
+	}
+}
