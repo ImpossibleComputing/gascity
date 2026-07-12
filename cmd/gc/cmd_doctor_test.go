@@ -72,6 +72,64 @@ func TestDoctorJSONSuccessIsParseableJSONOnly(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONDoesNotMutateCodexHooks(t *testing.T) {
+	cityDir := t.TempDir()
+	writeMinimalCityToml(t, cityDir)
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cityDir, ".gc", "site.toml"), []byte("workspace_name = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBuiltinImportsFixture(t, cityDir, "core")
+	if err := os.MkdirAll(filepath.Join(cityDir, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initialHooks := []byte(`{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex"
+      }]
+    }]
+  }
+}`)
+	hookPath := filepath.Join(cityDir, ".codex", "hooks.json")
+	if err := os.WriteFile(hookPath, initialHooks, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_BEADS", "file")
+	prependDoctorJSONStubBinaries(t, "tmux", "git", "jq", "pgrep", "lsof", "dolt", "bd")
+
+	var stdout, stderr bytes.Buffer
+	_ = run([]string{"--city", cityDir, "doctor", "--json"}, &stdout, &stderr)
+
+	after, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("read hooks after doctor --json: %v", err)
+	}
+	if !bytes.Equal(after, initialHooks) {
+		t.Fatalf("gc doctor --json mutated .codex/hooks.json; before:\n%s\nafter:\n%s\nstderr:\n%s\nstdout:\n%s", initialHooks, after, stderr.String(), stdout.String())
+	}
+	var payload struct {
+		Results []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("doctor --json stdout is not JSON: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+	for _, result := range payload.Results {
+		if result.Name == "codex-hooks-drift" && result.Status == "warning" {
+			return
+		}
+	}
+	t.Fatalf("doctor --json did not report stale codex hooks warning; results=%+v", payload.Results)
+}
+
 func TestDoctorSkipsDoltChecksTreatsExecGcBeadsBdAsBdContract(t *testing.T) {
 	cityDir := t.TempDir()
 	t.Setenv("GC_BEADS", "exec:"+gcBeadsBdScriptPath(cityDir))

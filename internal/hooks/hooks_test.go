@@ -434,6 +434,77 @@ func TestInstallCodexDedupesManagedSessionStartDrift(t *testing.T) {
 	}
 }
 
+func TestInstallCodexRepairsMixedCurrentAndStaleManagedHooks(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Files["/work/.codex/hooks.json"] = []byte(`{
+  "hooks": {
+    "PreCompact": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc handoff --auto --hook-format codex \"context cycle\""
+      }]
+    }],
+    "SessionStart": [{
+      "matcher": "startup",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc --city '/city' prime --hook --hook-format codex"
+      }]
+    }, {
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex"
+      }]
+    }],
+    "UserPromptSubmit": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc hook run --timeout 15s --timeout-exit-code 0 -- nudge drain --inject --hook-format codex"
+      }, {
+        "type": "command",
+        "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc hook run --timeout 15s --timeout-exit-code 0 -- mail check --inject --hook-format codex"
+      }]
+    }]
+  }
+}`)
+
+	if err := Install(fs, "/city", "/work", []string{"codex"}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	got := string(fs.Files["/work/.codex/hooks.json"])
+	entries := claudeHookEntries(t, fs.Files["/work/.codex/hooks.json"], "SessionStart")
+	if len(entries) != 1 {
+		t.Fatalf("SessionStart entries = %d, want 1 after stale duplicate cleanup:\n%s", len(entries), got)
+	}
+	if entries[0].Matcher != "startup" {
+		t.Fatalf("SessionStart matcher = %q, want startup", entries[0].Matcher)
+	}
+	for _, want := range []string{
+		`gc --city '/city' prime --hook --hook-format codex`,
+		`gc --city '/city' handoff --auto --hook-format codex \"context cycle\"`,
+		`gc --city '/city' hook run --timeout 15s --timeout-exit-code 0 -- nudge drain --inject --hook-format codex`,
+		`gc --city '/city' hook run --timeout 15s --timeout-exit-code 0 -- mail check --inject --hook-format codex`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repaired hooks missing %q:\n%s", want, got)
+		}
+	}
+	for _, stale := range []string{
+		`GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc prime --hook --hook-format codex`,
+		`&& gc handoff --auto --hook-format codex \"context cycle\"`,
+		`&& gc hook run --timeout 15s --timeout-exit-code 0 -- nudge drain --inject --hook-format codex`,
+		`&& gc hook run --timeout 15s --timeout-exit-code 0 -- mail check --inject --hook-format codex`,
+	} {
+		if strings.Contains(got, stale) {
+			t.Fatalf("unscoped managed hook %q survived repair:\n%s", stale, got)
+		}
+	}
+}
+
 func TestInstallCodexUpgradesManagedFileMissingPreCompact(t *testing.T) {
 	fs := fsys.NewFake()
 	fs.Files["/work/.codex/hooks.json"] = []byte(`{
@@ -542,7 +613,7 @@ func TestCodexHooksNeedManagedUpgrade(t *testing.T) {
 		t.Fatal("managed Codex hooks with stale city binding were not reported stale")
 	}
 
-	currentCity := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc --city '/old/city' prime --hook --hook-format codex"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc --city '/old/city' handoff --auto --hook-format codex \"context cycle\""}]}]}}`)
+	currentCity := []byte(`{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc --city '/old/city' prime --hook --hook-format codex"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc --city '/old/city' handoff --auto --hook-format codex \"context cycle\""}]}]}}`)
 	if CodexHooksNeedManagedUpgrade(currentCity, "/old/city") {
 		t.Fatal("managed Codex hooks already bound to requested city were reported stale")
 	}
@@ -550,6 +621,13 @@ func TestCodexHooksNeedManagedUpgrade(t *testing.T) {
 	custom := []byte(`{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"FOO=1 gc mail check --inject --hook-format codex"}]}]}}`)
 	if CodexHooksNeedManagedUpgrade(custom, "/city") {
 		t.Fatal("env-prefixed custom Codex hooks were reported stale")
+	}
+}
+
+func TestCodexHooksNeedManagedUpgradeDetectsMatcherOnlyDrift(t *testing.T) {
+	matcherDrift := []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc --city '/city' prime --hook --hook-format codex"}]}],"PreCompact":[{"hooks":[{"type":"command","command":"export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && gc --city '/city' handoff --auto --hook-format codex \"context cycle\""}]}]}}`)
+	if !CodexHooksNeedManagedUpgrade(matcherDrift, "/city") {
+		t.Fatal("managed Codex hooks with current commands but stale SessionStart matcher were not reported stale")
 	}
 }
 
