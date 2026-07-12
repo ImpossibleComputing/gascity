@@ -172,6 +172,36 @@ command lines or inherited environments. This guard is intentionally weaker than
 sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
 scrub inherited environments and remove long-lived secrets from process envs.
 
+### Launchd transcript leak guard
+
+Do not use `launchctl print` for Gas City supervisor status in agent
+transcripts. On macOS, `launchctl print gui/<uid>/com.gascity.supervisor` can
+include the job's `EnvironmentVariables` dictionary, so a status check can copy
+plaintext provider keys from the supervisor's launchd state into durable chat or
+mail logs. Treat this as the same leak class as broad `ps` output: it is a
+transcript-control guard, not a substitute for removing long-lived credentials
+from the supervisor environment.
+
+For value-blind supervisor liveness/status, use:
+
+```sh
+launchctl list | grep gascity
+```
+
+That listing reports pid/status/label only. If an ops investigation truly needs
+an env-bearing launchd diagnostic, run it out of band with explicit ops review
+and do not paste the raw output into agent transcripts.
+
+The core pack includes a PATH-level tripwire for this class:
+`assets/worker-sensitive-tools/bin/launchctl` routes through
+`assets/scripts/worker-launchctl-guard.sh`. It denies `launchctl print`,
+`launchctl getenv`, `launchctl export`, `launchctl procinfo`, and
+`launchctl dumpstate` before they reach the real tool, and passes value-blind
+forms such as `launchctl list`. Like the `ps` wrapper, this
+is intentionally weaker than the file sandbox: absolute `/bin/launchctl` can
+bypass a PATH wrapper, so the durable Phase-3 fix remains scoped credentials plus
+supervisor cutover with long-lived provider keys removed from launchd.
+
 ### Compute SSH without reopening `~/.ssh`
 
 The worker file sandbox intentionally denies `~/.ssh`: re-allowing that path

@@ -207,10 +207,12 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 	required := []string{
 		"assets/scripts/worker-sensitive-tool-guard.sh",
 		"assets/scripts/worker-sensitive-tool-path.sh",
+		"assets/scripts/worker-launchctl-guard.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
 		"assets/scripts/worker-secret-env-preflight.sh",
 		"assets/scripts/worker-compute-ssh.sh",
 		"assets/worker-sensitive-tools/bin/gws",
+		"assets/worker-sensitive-tools/bin/launchctl",
 		"assets/worker-sensitive-tools/bin/secret-peek",
 		"assets/worker-sensitive-tools/bin/mayor-browser",
 		"assets/worker-sensitive-tools/bin/ps",
@@ -226,7 +228,14 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 			}
 			continue
 		}
+		if path == "assets/worker-sensitive-tools/bin/launchctl" {
+			if !strings.Contains(string(data), "worker-launchctl-guard.sh") {
+				t.Fatalf("%s does not route through worker-launchctl-guard.sh", path)
+			}
+			continue
+		}
 		if path != "assets/scripts/worker-sensitive-tool-path.sh" &&
+			path != "assets/scripts/worker-launchctl-guard.sh" &&
 			path != "assets/scripts/worker-process-listing-guard.sh" &&
 			path != "assets/scripts/worker-secret-env-preflight.sh" &&
 			path != "assets/scripts/worker-compute-ssh.sh" &&
@@ -241,6 +250,9 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 	}
 	if !strings.Contains(string(pathHelper), "worker-sensitive-tools/bin") {
 		t.Fatal("path helper must prepend the guarded wrapper bin directory")
+	}
+	if !strings.Contains(string(pathHelper), "GC_REAL_LAUNCHCTL") {
+		t.Fatal("path helper must preserve the real launchctl path for the wrapper")
 	}
 }
 
@@ -294,9 +306,11 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 		"assets/security/worker-credential-deny.sb",
 		"assets/scripts/worker-credential-sandbox-preflight.sh",
 		"assets/scripts/supervisor-env-surface-audit.sh",
+		"assets/scripts/worker-launchctl-guard.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
 		"assets/scripts/worker-secret-env-preflight.sh",
 		"assets/scripts/worker-compute-ssh.sh",
+		"assets/worker-sensitive-tools/bin/launchctl",
 		"assets/worker-sensitive-tools/bin/ps",
 	} {
 		if _, err := fs.Stat(PackFS, path); err != nil {
@@ -558,6 +572,74 @@ func TestWorkerProcessListingGuardRejectsSelfDeclaredPrivilegeBypass(t *testing.
 				t.Fatalf("fake ps marker exists after denied request; err=%v", err)
 			}
 		})
+	}
+}
+
+func TestWorkerLaunchctlGuardDeniesEnvDumpingForms(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-launchctl-guard.sh")
+	workerEnv := []string{
+		"GC_AGENT=claude-sonnet-1",
+		"GC_SESSION_NAME=gt-wisp-worker-test",
+		"GC_AGENT_ROLE=worker",
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "supervisor print", args: []string{"print", "gui/501/com.gascity.supervisor"}},
+		{name: "domain print", args: []string{"print", "gui/501"}},
+		{name: "get secret env", args: []string{"getenv", "OPENAI_API_KEY"}},
+		{name: "export env", args: []string{"export"}},
+		{name: "procinfo env", args: []string{"procinfo", "12345"}},
+		{name: "dumpstate env", args: []string{"dumpstate"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "called")
+			fake := writeFakeTool(t, marker)
+			args := append([]string{"--real", fake, "--"}, tt.args...)
+			got := runGuard(t, guard, workerEnv, args...)
+			if got.code != 78 {
+				t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+			}
+			if !strings.Contains(got.stderr, "launchctl guard deny") {
+				t.Fatalf("deny stderr missing guard message: %q", got.stderr)
+			}
+			if !strings.Contains(got.stderr, "launchctl list | grep gascity") {
+				t.Fatalf("deny stderr missing value-blind supervisor status alternative: %q", got.stderr)
+			}
+			for _, leak := range []string{"OPENAI_API_KEY", "sk-proj", "fake-secret-value"} {
+				if strings.Contains(got.stderr, leak) || strings.Contains(got.stdout, leak) {
+					t.Fatalf("guard leaked request detail/secret-looking text %q; stdout=%q stderr=%q", leak, got.stdout, got.stderr)
+				}
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("fake launchctl marker exists after denied request; err=%v", err)
+			}
+		})
+	}
+}
+
+func TestWorkerLaunchctlGuardAllowsListStatusForm(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-launchctl-guard.sh")
+	marker := filepath.Join(t.TempDir(), "called")
+	fake := writeFakeTool(t, marker)
+	got := runGuard(t, guard,
+		[]string{"GC_AGENT=claude-sonnet-1", "GC_AGENT_ROLE=worker", "GC_SESSION_NAME=gt-wisp-worker-test"},
+		"--real", fake, "--", "list",
+	)
+	if got.code != 0 {
+		t.Fatalf("guard exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "fake-ok:list") {
+		t.Fatalf("fake launchctl stdout missing pass-through args: %q", got.stdout)
+	}
+	markerData, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("reading fake marker: %v", err)
+	}
+	if !strings.Contains(string(markerData), "called:list") {
+		t.Fatalf("fake marker missing pass-through args: %q", markerData)
 	}
 }
 
