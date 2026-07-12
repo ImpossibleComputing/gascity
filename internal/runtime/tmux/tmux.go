@@ -443,6 +443,11 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 // but -e provides defense-in-depth for the initial shell environment.
 // Requires tmux >= 3.2.
 func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env map[string]string) error {
+	var err error
+	env, err = secretscrub.ApplyScopedCredentialEnvFile(env)
+	if err != nil {
+		return err
+	}
 	env = secretscrub.ApplyDefaultUnsets(env)
 	if err := validateSessionName(name); err != nil {
 		return err
@@ -483,7 +488,7 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 	}
 	// Add the command as the last argument
 	args = append(args, t.wrapPaneCommand(command))
-	_, err := t.run(args...)
+	_, err = t.run(args...)
 	if err != nil {
 		return err
 	}
