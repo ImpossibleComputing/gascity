@@ -9,6 +9,7 @@
 package acceptance_test
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +53,54 @@ func TestMailLifecycle(t *testing.T) {
 		}
 		if !strings.Contains(out, "Test body content") {
 			t.Errorf("peek should show body, got:\n%s", out)
+		}
+	})
+
+	t.Run("PeekJSON_PreservesBody", func(t *testing.T) {
+		out, err := c.GC("mail", "peek", msgID, "--json")
+		if err != nil {
+			t.Fatalf("gc mail peek %s --json: %v\n%s", msgID, err, out)
+		}
+		got := decodeMailMessageJSON(t, out)
+		if got.Message.ID != msgID {
+			t.Fatalf("peek JSON message id = %q, want %q", got.Message.ID, msgID)
+		}
+		if got.Message.Body != "Test body content" {
+			t.Fatalf("peek JSON body = %q, want full body", got.Message.Body)
+		}
+		if got.Message.Read {
+			t.Fatalf("peek JSON marked message read")
+		}
+	})
+
+	t.Run("ReadJSON_PreservesBodyAndMarksRead", func(t *testing.T) {
+		out, err := c.GC("mail", "read", msgID, "--json")
+		if err != nil {
+			t.Fatalf("gc mail read %s --json: %v\n%s", msgID, err, out)
+		}
+		got := decodeMailMessageJSON(t, out)
+		if got.Message.ID != msgID {
+			t.Fatalf("read JSON message id = %q, want %q", got.Message.ID, msgID)
+		}
+		if got.Message.Body != "Test body content" {
+			t.Fatalf("read JSON body = %q, want full body", got.Message.Body)
+		}
+		if !got.Message.Read {
+			t.Fatalf("read JSON did not mark message read")
+		}
+	})
+
+	t.Run("ReadJSON_AlreadyReadStillPreservesBody", func(t *testing.T) {
+		out, err := c.GC("mail", "read", msgID, "--json")
+		if err != nil {
+			t.Fatalf("gc mail read already-read %s --json: %v\n%s", msgID, err, out)
+		}
+		got := decodeMailMessageJSON(t, out)
+		if got.Message.Body != "Test body content" {
+			t.Fatalf("already-read JSON body = %q, want full body", got.Message.Body)
+		}
+		if !got.Message.Read {
+			t.Fatalf("already-read JSON did not report read=true")
 		}
 	})
 
@@ -164,6 +213,35 @@ func TestMailLifecycle(t *testing.T) {
 			}
 		}
 	})
+}
+
+type mailMessageJSONPayload struct {
+	SchemaVersion string `json:"schema_version"`
+	OK            bool   `json:"ok"`
+	Message       struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+		Body    string `json:"body"`
+		Read    bool   `json:"read"`
+	} `json:"message"`
+}
+
+func decodeMailMessageJSON(t *testing.T, out string) mailMessageJSONPayload {
+	t.Helper()
+	var got mailMessageJSONPayload
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("mail JSON is not valid JSON: %v\n%s", err, out)
+	}
+	if got.SchemaVersion != "1" {
+		t.Fatalf("schema_version = %q, want 1; payload=%+v", got.SchemaVersion, got)
+	}
+	if !got.OK {
+		t.Fatalf("ok = false, want true; payload=%+v", got)
+	}
+	if got.Message.Subject != "Test subject" {
+		t.Fatalf("message subject = %q, want Test subject; payload=%+v", got.Message.Subject, got)
+	}
+	return got
 }
 
 func TestMailErrorPaths(t *testing.T) {
