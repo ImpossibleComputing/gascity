@@ -200,6 +200,12 @@ use.
 
 ## Phase-3 broker / per-worker LLM credential scope
 
+The launch/config/preflight/materialization pieces below are plumbing. The
+credential authority that decides issuance, revocation, audit, and cutover is
+drafted separately in [Phase-3 worker credential authority architecture](worker-credential-authority-phase3.md).
+Do not treat the plumbing as final isolation until that authority is approved and
+live workers use scoped/revocable credentials.
+
 ### Launch-time shared secret scrub switch
 
 The tmux runtime supports the launch-env control
