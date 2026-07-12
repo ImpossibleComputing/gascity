@@ -107,7 +107,13 @@ func readScopedCredentialSourceEnvFile(path string) (map[string]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("--source-env-file must be an absolute path")
 	}
-	info, err := os.Stat(path)
+	file, err := openScopedCredentialSourceFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close() //nolint:errcheck // read-only descriptor; close errors do not affect parsed data
+
+	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat source env file: %w", err)
 	}
@@ -117,7 +123,7 @@ func readScopedCredentialSourceEnvFile(path string) (map[string]string, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("source env file %q must not be group/world accessible", path)
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("read source env file: %w", err)
 	}

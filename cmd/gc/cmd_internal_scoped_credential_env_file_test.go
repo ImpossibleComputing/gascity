@@ -191,3 +191,40 @@ func TestInternalScopedCredentialEnvFileRejectsDuplicateOutputAcrossSources(t *t
 		}
 	}
 }
+
+func TestInternalScopedCredentialEnvFileRejectsSourceEnvFileSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink no-follow contract is Unix-only")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.env")
+	if err := os.WriteFile(target, []byte("SCOPED_OPENAI=sk-symlink-target\n"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "source.env")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "worker.env")
+	var stdout, stderr bytes.Buffer
+	cmd := newInternalScopedCredentialEnvFileCmd(&stdout, &stderr)
+	cmd.SetArgs([]string{
+		"--out", path,
+		"--source-env-file", link,
+		"--from-env-file", "OPENAI_API_KEY=SCOPED_OPENAI",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute succeeded, want symlink rejection")
+	}
+	if !strings.Contains(stderr.String(), "must not be a symlink") {
+		t.Fatalf("stderr = %q, want symlink rejection", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "sk-symlink-target") || strings.Contains(stderr.String(), "sk-symlink-target") {
+		t.Fatalf("command leaked symlink target secret: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("output path exists after failure: statErr=%v", statErr)
+	}
+}
