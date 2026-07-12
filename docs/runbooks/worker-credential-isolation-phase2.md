@@ -246,6 +246,12 @@ scoped credentials while unsetting shared supervisor keys. For GitHub, prefer a
 scoped `GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker;
 do not rely on the supervisor's broad ambient `GH_TOKEN`.
 
+`gc doctor` also runs the advisory `scoped-worker-credential-files` check for
+any configured `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE`. It validates the same
+contract before launch — absolute path, private mode, credential-key allowlist,
+non-empty values, and sanitized parse errors — without printing credential
+values.
+
 ### Supervisor launchd plaintext credential audit
 
 `gc doctor` includes the advisory `supervisor-provider-creds` check. It inspects

@@ -113,6 +113,13 @@ func ApplyScopedCredentialEnvFile(env map[string]string) (map[string]string, err
 	return out, nil
 }
 
+// ValidateScopedCredentialEnvFile checks that path satisfies the broker-issued
+// worker credential env-file contract without returning any credential values.
+func ValidateScopedCredentialEnvFile(path string) error {
+	_, err := loadScopedCredentialEnvFile(path)
+	return err
+}
+
 func loadScopedCredentialEnvFile(path string) (map[string]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%s must be an absolute path", ScopedCredentialEnvFileEnv)
@@ -133,7 +140,7 @@ func loadScopedCredentialEnvFile(path string) (map[string]string, error) {
 	}
 	parsed, err := processenv.ParseEnvFile(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("parse scoped credential env file: %w", err)
+		return nil, fmt.Errorf("parse scoped credential env file: invalid dotenv syntax")
 	}
 	for k, v := range parsed {
 		if !validEnvKey(k) {

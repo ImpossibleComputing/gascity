@@ -31,6 +31,7 @@ named-always-min-conflict
 instructions-file
 service-secrets-perms
 supervisor-provider-creds
+scoped-worker-credential-files
 skill-collision
 order-firing-current
 codex-hooks-drift
