@@ -102,6 +102,65 @@ func TestApplyScopedCredentialEnvFileRejectsRelativeInsecureUnknownAndConflict(t
 	}
 }
 
+func TestWriteScopedCredentialEnvFileAtomicallyWritesPrivateSortedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "worker.env")
+	err := WriteScopedCredentialEnvFile(path, map[string]string{
+		"GITHUB_TOKEN":                      "scoped-github",
+		"OPENAI_API_KEY":                    "scoped-openai",
+		ScopedGitCredentialCommandEnv:       "/broker/gitcred",
+		"ANTHROPIC_AUTH_TOKEN":              " scoped-anthropic ",
+		"GOOGLE_APPLICATION_CREDENTIALS":    "/runtime/google.json",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN": "aws-bearer",
+	})
+	if err != nil {
+		t.Fatalf("WriteScopedCredentialEnvFile: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat written file: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	text := string(data)
+	if strings.Index(text, "ANTHROPIC_AUTH_TOKEN=") > strings.Index(text, "OPENAI_API_KEY=") {
+		t.Fatalf("expected sorted output, got:\n%s", text)
+	}
+	env := map[string]string{ScopedCredentialEnvFileEnv: path}
+	got, err := ApplyScopedCredentialEnvFile(env)
+	if err != nil {
+		t.Fatalf("ApplyScopedCredentialEnvFile(written): %v\n%s", err, text)
+	}
+	if got["OPENAI_API_KEY"] != "scoped-openai" || got["ANTHROPIC_AUTH_TOKEN"] != " scoped-anthropic " {
+		t.Fatalf("written values did not round-trip through parser: %#v", got)
+	}
+}
+
+func TestWriteScopedCredentialEnvFileRejectsBadInputsWithoutLeakingValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.env")
+	for name, entries := range map[string]map[string]string{
+		"bad-key":     {"PATH": "/tmp/bin"},
+		"empty-value": {"OPENAI_API_KEY": ""},
+		"newline":     {"OPENAI_API_KEY": "sk-secret\nnext-line"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := WriteScopedCredentialEnvFile(path, entries)
+			if err == nil {
+				t.Fatal("WriteScopedCredentialEnvFile succeeded, want error")
+			}
+			for _, leak := range []string{"/tmp/bin", "sk-secret", "next-line"} {
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("error leaked %q: %v", leak, err)
+				}
+			}
+		})
+	}
+}
+
 func writeScopedEnvFile(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "scoped.env")

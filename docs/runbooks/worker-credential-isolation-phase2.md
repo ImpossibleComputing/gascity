@@ -252,6 +252,23 @@ credentials while unsetting shared supervisor keys. For GitHub, prefer a scoped
 `GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker; do not
 rely on the supervisor's broad ambient `GH_TOKEN`.
 
+Broker/controller code can use the hidden internal writer to materialize the
+file from already-resolved process environment variables without ever passing
+credential values on argv or printing them:
+
+```bash
+gc internal scoped-credential-env-file \
+  --out "$GC_CITY_RUNTIME_DIR/worker-creds/codex.env" \
+  --from-env OPENAI_API_KEY=SCOPED_CODEX_OPENAI_API_KEY \
+  --from-env GITHUB_TOKEN=SCOPED_CODEX_GITHUB_TOKEN
+```
+
+The writer creates parent directories as private directories, writes a sorted
+dotenv file atomically at mode `0600`, applies the same credential-key allowlist
+as launch-time loading, and reports only key names/paths on errors. It is a
+materialization primitive, not a token issuer: the credential source still needs
+to be scoped, revocable, and audited by the broker.
+
 `gc doctor` also runs the advisory `scoped-worker-credential-files` check for
 any configured `scoped_credential_env_file` or legacy
 `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE`. It validates the same contract before
