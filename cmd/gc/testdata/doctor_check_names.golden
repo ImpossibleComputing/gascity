@@ -30,6 +30,7 @@ formula-requirements
 named-always-min-conflict
 instructions-file
 service-secrets-perms
+supervisor-provider-creds
 skill-collision
 order-firing-current
 codex-hooks-drift

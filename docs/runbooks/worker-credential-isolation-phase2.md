@@ -246,6 +246,22 @@ scoped credentials while unsetting shared supervisor keys. For GitHub, prefer a
 scoped `GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker;
 do not rely on the supervisor's broad ambient `GH_TOKEN`.
 
+### Supervisor launchd plaintext credential audit
+
+`gc doctor` includes the advisory `supervisor-provider-creds` check. It inspects
+only the installed supervisor launchd plist's `EnvironmentVariables` keys and
+reports provider credential/config key names when they are persisted there; it
+never prints values, hashes, prefixes, or lengths. A warning means long-lived
+provider credentials are still in the service file and should be moved out of
+LaunchAgents as part of the Phase-3 cutover.
+
+The safe end-state is not just moving the same shared key to another ambient
+environment source. Once model/GitHub workers have scoped broker-issued
+credentials, reinstall the supervisor with `GC_SUPERVISOR_OMIT_PROVIDER_CREDS=1`
+so provider keys are omitted from the supervisor service env, and keep any
+machine-local broker inputs in a private, auditable 0600 location rather than in
+the launchd plist.
+
 Target end-state: workers do not inherit shared supervisor API keys. The launcher
 should start workers with a scrubbed environment and provide only the credentials
 that worker is authorized to use, ideally through a broker that can mint or
