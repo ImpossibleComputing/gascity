@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/contract"
@@ -100,6 +101,10 @@ func TestDoctorJSONDoesNotMutateCodexHooks(t *testing.T) {
 	if err := os.WriteFile(hookPath, initialHooks, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	oldTime := time.Unix(123, 0)
+	if err := os.Chtimes(hookPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes hooks: %v", err)
+	}
 	t.Setenv("GC_BEADS", "file")
 	prependDoctorJSONStubBinaries(t, "tmux", "git", "jq", "pgrep", "lsof", "dolt", "bd")
 
@@ -112,6 +117,11 @@ func TestDoctorJSONDoesNotMutateCodexHooks(t *testing.T) {
 	}
 	if !bytes.Equal(after, initialHooks) {
 		t.Fatalf("gc doctor --json mutated .codex/hooks.json; before:\n%s\nafter:\n%s\nstderr:\n%s\nstdout:\n%s", initialHooks, after, stderr.String(), stdout.String())
+	}
+	if info, err := os.Stat(hookPath); err != nil {
+		t.Fatalf("stat hooks after doctor --json: %v", err)
+	} else if !info.ModTime().Equal(oldTime) {
+		t.Fatalf("gc doctor --json rewrote .codex/hooks.json without changing bytes; mtime=%s want %s\nstderr:\n%s\nstdout:\n%s", info.ModTime(), oldTime, stderr.String(), stdout.String())
 	}
 	var payload struct {
 		Results []struct {

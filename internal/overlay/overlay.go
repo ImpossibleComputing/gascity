@@ -2,6 +2,7 @@
 package overlay
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -327,6 +328,9 @@ func copyOrMergeFile(src, dst string, merge, wrapBareHooks bool) error {
 	if err != nil {
 		// Merge failed — fall back to overwrite.
 		return copyFile(src, dst)
+	}
+	if bytes.Equal(merged, dstData) {
+		return nil
 	}
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

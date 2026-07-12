@@ -41,6 +41,7 @@ func TestCodexHooksDriftCheckPassesCurrentHooks(t *testing.T) {
 	writeCodexHooksForDoctorTest(t, dir, fmt.Sprintf(`{
   "hooks": {
     "SessionStart": [{
+      "matcher": "startup",
       "hooks": [{
         "type": "command",
         "command": "export PATH=\"$HOME/go/bin:$HOME/.local/bin:$PATH\" && GC_MANAGED_SESSION_HOOK=1 GC_HOOK_EVENT_NAME=SessionStart gc --city %s prime --hook --hook-format codex"
