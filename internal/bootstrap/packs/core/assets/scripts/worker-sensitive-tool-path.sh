@@ -11,4 +11,5 @@ case ":${PATH:-}:" in
 esac
 export GC_REAL_GWS="${GC_REAL_GWS:-/opt/homebrew/bin/gws}"
 export GC_REAL_PS="${GC_REAL_PS:-/bin/ps}"
+export GC_REAL_LAUNCHCTL="${GC_REAL_LAUNCHCTL:-/bin/launchctl}"
 export GC_CREDENTIAL_GUARD_ACTIVE="${GC_CREDENTIAL_GUARD_ACTIVE:-phase1-authored-not-live}"
