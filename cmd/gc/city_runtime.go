@@ -54,15 +54,16 @@ var orderRescanInterval = time.Minute
 // across runController and controllerLoop. A machine-wide supervisor can
 // instantiate multiple CityRuntimes — one per registered city.
 type CityRuntime struct {
-	cityPath     string
-	cityName     string
-	configName   string
-	tomlPath     string
-	watchTargets []config.WatchTarget
-	configRev    string
-	configDirty  *atomic.Bool
-	watchMu      sync.Mutex
-	watchCleanup func()
+	cityPath         string
+	cityName         string
+	configName       string
+	tomlPath         string
+	watchTargets     []config.WatchTarget
+	configRev        string
+	configDirty      *atomic.Bool
+	watchMu          sync.Mutex
+	watchLifecycleMu sync.Mutex
+	watchCleanup     func()
 
 	serviceStateMu          sync.RWMutex
 	cfg                     *config.City
@@ -2029,8 +2030,7 @@ func (cr *CityRuntime) reloadConfigTraced(
 		cr.providerHealthGate = newProviderHealthGate()
 	}
 	cr.configRev = result.Revision
-	cr.watchTargets = config.WatchTargets(result.Prov, nextCfg, cityRoot)
-	cr.restartConfigWatcher()
+	cr.updateConfigWatcherTargets(config.WatchTargets(result.Prov, nextCfg, cityRoot))
 	if trace != nil {
 		trace.configRevision = result.Revision
 		trace.syncArms(time.Now().UTC(), nextCfg)
@@ -2096,18 +2096,30 @@ func (cr *CityRuntime) configWatcherTargets() []config.WatchTarget {
 	return watchTargets
 }
 
+func (cr *CityRuntime) updateConfigWatcherTargets(next []config.WatchTarget) {
+	if watchTargetsEquivalent(cr.watchTargets, next) {
+		cr.watchTargets = cloneWatchTargets(next)
+		return
+	}
+	cr.watchTargets = cloneWatchTargets(next)
+	cr.restartConfigWatcher()
+}
+
 func (cr *CityRuntime) restartConfigWatcher() {
 	if cr.tomlPath == "" {
 		return
 	}
-	cr.stopConfigWatcher()
+	cr.watchLifecycleMu.Lock()
+	defer cr.watchLifecycleMu.Unlock()
+
+	cr.stopConfigWatcherLocked()
 
 	dirty := cr.configDirty
 	if dirty == nil {
 		dirty = &atomic.Bool{}
 		cr.configDirty = dirty
 	}
-	cleanup := watchConfigTargets(cr.configWatcherTargets(), dirty, cr.pokeCh, cr.stderr)
+	cleanup := watchConfigTargetsForRuntime(cr.configWatcherTargets(), dirty, cr.pokeCh, cr.stderr)
 
 	cr.watchMu.Lock()
 	cr.watchCleanup = cleanup
@@ -2115,6 +2127,12 @@ func (cr *CityRuntime) restartConfigWatcher() {
 }
 
 func (cr *CityRuntime) stopConfigWatcher() {
+	cr.watchLifecycleMu.Lock()
+	defer cr.watchLifecycleMu.Unlock()
+	cr.stopConfigWatcherLocked()
+}
+
+func (cr *CityRuntime) stopConfigWatcherLocked() {
 	cr.watchMu.Lock()
 	cleanup := cr.watchCleanup
 	cr.watchCleanup = nil
@@ -2122,6 +2140,38 @@ func (cr *CityRuntime) stopConfigWatcher() {
 	if cleanup != nil {
 		cleanup()
 	}
+}
+
+var watchConfigTargetsForRuntime = watchConfigTargets
+
+func cloneWatchTargets(targets []config.WatchTarget) []config.WatchTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	return append([]config.WatchTarget(nil), targets...)
+}
+
+func watchTargetsEquivalent(a, b []config.WatchTarget) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	keysA := watchTargetKeys(a)
+	keysB := watchTargetKeys(b)
+	for i := range keysA {
+		if keysA[i] != keysB[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func watchTargetKeys(targets []config.WatchTarget) []string {
+	keys := make([]string, 0, len(targets))
+	for _, target := range targets {
+		keys = append(keys, fmt.Sprintf("%s\x00%t\x00%t", normalizePathForCompare(target.Path), target.Recursive, target.DiscoverConventions))
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // beadReconcileTick runs one bead-driven reconciliation pass. bootReconcile is
