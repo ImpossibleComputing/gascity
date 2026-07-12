@@ -106,12 +106,13 @@ impersonation. Environment variables instead expose the LLM/API credentials
 placed there, which is still a real abuse/cost surface and must be handled as a
 follow-on.
 
-For non-LLM maintenance/system agents, use the existing empty-env convention to
-remove inherited secrets at pane launch. Keep this list aligned with
-`worker-secret-env-preflight.sh`; excerpt:
+For non-LLM maintenance/system agents, use the launch scrub switch plus the
+existing empty-env convention to remove inherited secrets at pane launch. Keep
+this list aligned with `worker-secret-env-preflight.sh`; excerpt:
 
 ```toml
 [env]
+GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS = "1"
 OPENAI_API_KEY = ""
 GEMINI_API_KEY = ""
 ANTHROPIC_API_KEY = ""
@@ -122,8 +123,12 @@ GITHUB_TOKEN = ""
 ```
 
 The tmux launch path converts empty configured values into `env -u <KEY>` for
-the agent command. This is not enough for Codex/LLM workers that actually need
-model access; those need the Phase-3 broker/per-worker credential path below.
+the agent command. `GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS=1` also asks the runtime
+to unset the default shared-secret names before launch, then drop that control
+variable itself; this gives the non-LLM maintenance agents (`bd.dog` and
+`core.control-dispatcher`) a drift-resistant first rollout target. This is not
+enough for Codex/LLM workers that actually need model access; those need the
+Phase-3 broker/per-worker credential path below before any broad/default flip.
 
 To verify a worker's current environment without exposing values, run:
 

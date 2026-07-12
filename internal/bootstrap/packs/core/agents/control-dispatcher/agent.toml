@@ -6,6 +6,7 @@ process_names = ["gc"]
 max_active_sessions = 1
 
 [env]
+GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS = "1"
 AMP_API_KEY = ""
 ANTHROPIC_API_KEY = ""
 ANTHROPIC_AUTH_TOKEN = ""
