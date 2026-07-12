@@ -3,6 +3,8 @@ package tmux
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -67,6 +69,51 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	}
 	if got := args[len(args)-1]; got != "env -u LC_ALL -u LC_CTYPE claude" {
 		t.Fatalf("command = %q, want env -u LC_ALL -u LC_CTYPE claude", got)
+	}
+}
+
+func TestNewSessionWithCommandAndEnvLoadsScopedCredentialEnvFile(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	scoped := filepath.Join(t.TempDir(), "scoped.env")
+	if err := os.WriteFile(scoped, []byte("OPENAI_API_KEY=scoped-openai\nGITHUB_TOKEN=scoped-github\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE": scoped,
+		"LANG":                                 "en_US.UTF-8",
+	}
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-scoped-creds", "", "claude", env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	if len(exec.calls) == 0 {
+		t.Fatal("no tmux calls recorded")
+	}
+
+	args := exec.calls[0]
+	joined := strings.Join(args, "\x00")
+	for _, want := range []string{
+		"\x00-e\x00LANG=en_US.UTF-8\x00",
+		"\x00-e\x00OPENAI_API_KEY=scoped-openai\x00",
+		"\x00-e\x00GITHUB_TOKEN=scoped-github\x00",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("new-session args missing %q: %v", want, args)
+		}
+	}
+	if strings.Contains(joined, "GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE=") || strings.Contains(joined, "GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS=1") {
+		t.Fatalf("scoped env control leaked as set value: %v", args)
+	}
+	cmd := args[len(args)-1]
+	for _, want := range []string{"-u GH_TOKEN", "-u GEMINI_API_KEY", "-u GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE", "-u GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS"} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("command %q missing scrub unset %q", cmd, want)
+		}
+	}
+	if strings.Contains(cmd, "-u OPENAI_API_KEY") || strings.Contains(cmd, "-u GITHUB_TOKEN") {
+		t.Fatalf("command %q scrubbed scoped credential", cmd)
 	}
 }
 

@@ -1,6 +1,12 @@
 package secretscrub
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
 
 func TestApplyDefaultUnsetsRequiresTruthyControl(t *testing.T) {
 	env := map[string]string{"GH_TOKEN": "shared"}
@@ -33,4 +39,74 @@ func TestApplyDefaultUnsetsScrubsAbsentDefaultsAndPreservesExplicitScopedValues(
 	if _, ok := env["GH_TOKEN"]; ok {
 		t.Fatalf("original env mutated: %#v", env)
 	}
+}
+
+func TestApplyScopedCredentialEnvFileMergesScopedCredsAndEnablesScrub(t *testing.T) {
+	path := writeScopedEnvFile(t, "OPENAI_API_KEY=scoped-openai\nGITHUB_TOKEN=scoped-github\nGC_GIT_CREDENTIAL_COMMAND=/broker/gitcred\n")
+	env := map[string]string{
+		ScopedCredentialEnvFileEnv: path,
+		"LANG":                     "en_US.UTF-8",
+	}
+	got, err := ApplyScopedCredentialEnvFile(env)
+	if err != nil {
+		t.Fatalf("ApplyScopedCredentialEnvFile: %v", err)
+	}
+	if got["OPENAI_API_KEY"] != "scoped-openai" || got["GITHUB_TOKEN"] != "scoped-github" {
+		t.Fatalf("scoped credentials not merged: %#v", got)
+	}
+	if got[ScopedGitCredentialCommandEnv] != "/broker/gitcred" {
+		t.Fatalf("%s = %q", ScopedGitCredentialCommandEnv, got[ScopedGitCredentialCommandEnv])
+	}
+	if got[EnableDefaultScrubEnv] != "1" {
+		t.Fatalf("%s = %q, want 1", EnableDefaultScrubEnv, got[EnableDefaultScrubEnv])
+	}
+	if got[ScopedCredentialEnvFileEnv] != "" {
+		t.Fatalf("%s = %q, want scrubbed control", ScopedCredentialEnvFileEnv, got[ScopedCredentialEnvFileEnv])
+	}
+	if _, ok := env["OPENAI_API_KEY"]; ok {
+		t.Fatalf("original env mutated: %#v", env)
+	}
+}
+
+func TestApplyScopedCredentialEnvFileRejectsRelativeInsecureUnknownAndConflict(t *testing.T) {
+	if _, err := ApplyScopedCredentialEnvFile(map[string]string{ScopedCredentialEnvFileEnv: "relative.env"}); err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative path error = %v, want absolute-path rejection", err)
+	}
+
+	unknown := writeScopedEnvFile(t, "PATH=/tmp/bin\n")
+	if _, err := ApplyScopedCredentialEnvFile(map[string]string{ScopedCredentialEnvFileEnv: unknown}); err == nil || !strings.Contains(err.Error(), "not an allowed credential key") {
+		t.Fatalf("unknown key error = %v, want allowlist rejection", err)
+	}
+
+	empty := writeScopedEnvFile(t, "OPENAI_API_KEY=\n")
+	if _, err := ApplyScopedCredentialEnvFile(map[string]string{ScopedCredentialEnvFileEnv: empty}); err == nil || !strings.Contains(err.Error(), "empty value") {
+		t.Fatalf("empty value error = %v, want empty-value rejection", err)
+	}
+
+	conflict := writeScopedEnvFile(t, "OPENAI_API_KEY=scoped\n")
+	if _, err := ApplyScopedCredentialEnvFile(map[string]string{ScopedCredentialEnvFileEnv: conflict, "OPENAI_API_KEY": "already-set"}); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("conflict error = %v, want conflict rejection", err)
+	}
+
+	if runtime.GOOS != "windows" {
+		insecure := filepath.Join(t.TempDir(), "scoped.env")
+		if err := os.WriteFile(insecure, []byte("OPENAI_API_KEY=scoped\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(insecure, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ApplyScopedCredentialEnvFile(map[string]string{ScopedCredentialEnvFileEnv: insecure}); err == nil || !strings.Contains(err.Error(), "group/world") {
+			t.Fatalf("insecure mode error = %v, want mode rejection", err)
+		}
+	}
+}
+
+func writeScopedEnvFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "scoped.env")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

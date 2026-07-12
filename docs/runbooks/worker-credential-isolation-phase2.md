@@ -215,6 +215,37 @@ This switch is a launch scrub, not a credential broker. It should be enabled for
 workers once their needed model/GitHub/compute credentials come from explicit
 scoped broker material rather than inherited supervisor env vars.
 
+### Scoped credential env-file launch contract
+
+The tmux runtime can also consume a broker-issued credential env file before
+starting the worker:
+
+```toml
+[env]
+GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE = "/absolute/path/to/worker-scoped.env"
+```
+
+The file uses the same simple `KEY=VALUE` dotenv subset as other Gas City env
+files, but it is intentionally narrow because this is a credential channel, not
+a general launch-env override:
+
+- the path must be absolute;
+- on Unix, the file must be mode `0600` or stricter;
+- keys must be credential keys only (for example `OPENAI_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, `GITHUB_TOKEN`, or `GC_GIT_CREDENTIAL_COMMAND`);
+- values must be non-empty;
+- a key already configured with a non-empty value in the agent env is a hard
+  conflict, not silently overwritten;
+- `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE` is scrubbed from the launched worker;
+- loading this file automatically enables the default shared-secret scrub, so
+  absent supervisor credential names are still prefixed with `env -u`.
+
+This gives the future broker a concrete launch boundary: mint/write a per-worker
+0600 env file, point the agent at it, and let the runtime inject only those
+scoped credentials while unsetting shared supervisor keys. For GitHub, prefer a
+scoped `GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker;
+do not rely on the supervisor's broad ambient `GH_TOKEN`.
+
 Target end-state: workers do not inherit shared supervisor API keys. The launcher
 should start workers with a scrubbed environment and provide only the credentials
 that worker is authorized to use, ideally through a broker that can mint or
