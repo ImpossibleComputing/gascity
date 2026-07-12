@@ -195,8 +195,9 @@ and do not paste the raw output into agent transcripts.
 The core pack includes a PATH-level tripwire for this class:
 `assets/worker-sensitive-tools/bin/launchctl` routes through
 `assets/scripts/worker-launchctl-guard.sh`. It denies `launchctl print`,
-`launchctl getenv`, and `launchctl export` before they reach the real tool, and
-passes value-blind forms such as `launchctl list`. Like the `ps` wrapper, this
+`launchctl getenv`, `launchctl export`, `launchctl procinfo`, and
+`launchctl dumpstate` before they reach the real tool, and passes value-blind
+forms such as `launchctl list`. Like the `ps` wrapper, this
 is intentionally weaker than the file sandbox: absolute `/bin/launchctl` can
 bypass a PATH wrapper, so the durable Phase-3 fix remains scoped credentials plus
 supervisor cutover with long-lived provider keys removed from launchd.

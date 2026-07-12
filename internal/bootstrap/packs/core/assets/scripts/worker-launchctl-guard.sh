@@ -11,6 +11,8 @@ Blocks launchctl forms that print launchd environments into transcripts:
   launchctl print ...
   launchctl getenv ...
   launchctl export ...
+  launchctl procinfo <pid>
+  launchctl dumpstate
 
 For supervisor status, use value-blind listing instead:
   launchctl list | grep gascity
@@ -29,7 +31,7 @@ done
 [ -n "$real_cmd" ] || { echo "launchctl guard: --real is required" >&2; usage; exit 64; }
 
 case "${1:-}" in
-  print|getenv|export)
+  print|getenv|export|procinfo|dumpstate)
     echo "launchctl guard deny: this launchctl subcommand can print launchd environment values into transcripts" >&2
     echo "launchctl guard deny: for supervisor status use: launchctl list | grep gascity; request ops review for env-bearing diagnostics" >&2
     exit 78

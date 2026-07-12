@@ -591,6 +591,8 @@ func TestWorkerLaunchctlGuardDeniesEnvDumpingForms(t *testing.T) {
 		{name: "domain print", args: []string{"print", "gui/501"}},
 		{name: "get secret env", args: []string{"getenv", "OPENAI_API_KEY"}},
 		{name: "export env", args: []string{"export"}},
+		{name: "procinfo env", args: []string{"procinfo", "12345"}},
+		{name: "dumpstate env", args: []string{"dumpstate"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "called")
