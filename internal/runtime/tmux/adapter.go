@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type Provider struct {
 }
 
 var instanceTokenReader = rand.Reader
+
+var sandboxExecGOOS = goruntime.GOOS
 
 // Compile-time check.
 var (
@@ -1415,6 +1418,9 @@ func buildLaunchCommand(name string, cfg runtime.Config) (fullCommand, promptFil
 func sandboxExecCommand(command string, cfg runtime.Config) (string, error) {
 	profile := strings.TrimSpace(cfg.SandboxProfile)
 	if profile == "" {
+		return command, nil
+	}
+	if sandboxExecGOOS != "darwin" {
 		return command, nil
 	}
 	if strings.Contains(profile, "\x00") {

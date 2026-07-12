@@ -486,6 +486,8 @@ func TestWorkerProcessListingGuardDeniesBroadAndFullCommandForms(t *testing.T) {
 		{name: "command output", args: []string{"-p", "123", "-o", "pid,command"}},
 		{name: "process specific full format", args: []string{"-p", "123", "-f"}},
 		{name: "wide process specific", args: []string{"-ww", "-p", "123"}},
+		{name: "undashed broad comm", args: []string{"axo", "pid,comm"}},
+		{name: "pid filtered BSD env", args: []string{"-p", "123", "-E"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "called")
@@ -531,18 +533,27 @@ func TestWorkerProcessListingGuardAllowsNarrowPidCommForm(t *testing.T) {
 	}
 }
 
-func TestWorkerProcessListingGuardAllowsPrivilegedBroadListing(t *testing.T) {
+func TestWorkerProcessListingGuardRejectsSelfDeclaredPrivilegeBypass(t *testing.T) {
 	guard := writeCoreAsset(t, "assets/scripts/worker-process-listing-guard.sh")
-	marker := filepath.Join(t.TempDir(), "called")
-	fake := writeFakeTool(t, marker)
-	got := runGuard(t, guard,
-		[]string{"GC_AGENT=paul", "GC_AGENT_ROLE=ops", "GC_SESSION_NAME=paul-review-test"},
-		"--real", fake, "--", "aux",
-	)
-	if got.code != 0 {
-		t.Fatalf("guard exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
-	}
-	if !strings.Contains(got.stdout, "fake-ok:aux") {
-		t.Fatalf("fake ps stdout missing pass-through args: %q", got.stdout)
+
+	for _, tt := range []struct {
+		name string
+		env  []string
+	}{
+		{name: "role mayor", env: []string{"GC_AGENT=claude-sonnet-1", "GC_AGENT_ROLE=mayor", "GC_SESSION_NAME=gt-wisp-worker-test"}},
+		{name: "agent paul", env: []string{"GC_AGENT=paul", "GC_AGENT_ROLE=worker", "GC_SESSION_NAME=gt-wisp-worker-test"}},
+		{name: "allow flag", env: []string{"GC_AGENT=claude-sonnet-1", "GC_AGENT_ROLE=worker", "GC_PROCESS_LISTING_GUARD_ALLOW=1", "GC_SESSION_NAME=gt-wisp-worker-test"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "called")
+			fake := writeFakeTool(t, marker)
+			got := runGuard(t, guard, tt.env, "--real", fake, "--", "aux")
+			if got.code != 78 {
+				t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("fake ps marker exists after denied request; err=%v", err)
+			}
+		})
 	}
 }

@@ -146,8 +146,8 @@ shared supervisor keys.
 A second environment-variable leak vector is broad process inspection. Commands
 such as `ps aux`, `ps -ef`, or env/full-command variants can copy inherited
 API-key environment variables or secret-bearing command lines into durable agent
-transcripts. Non-privileged workers should not run broad or full-command process
-listings. Prefer process-specific narrow forms such as:
+transcripts. Workers should not run broad or full-command process
+listings through the guarded PATH wrapper. Prefer process-specific narrow forms such as:
 
 ```sh
 ps -p <pid> -o pid,comm=
@@ -156,10 +156,14 @@ ps -p <pid> -o pid,comm=
 The core pack includes a PATH-level tripwire for this class:
 `assets/worker-sensitive-tools/bin/ps` routes through
 `assets/scripts/worker-process-listing-guard.sh`, denying broad/full-command ps
-forms for non-privileged worker identities while allowing narrow `-p ... -o
-pid,comm=` diagnostics. The deny list includes full-format and wide-output
-variants (`-f`, `-ww`) even when paired with a specific pid because those can
-still surface secret-bearing command lines. This guard is intentionally weaker than the macOS file
+forms with an allowlist that passes only no-arg `ps` and narrow `-p ... -o
+pid,comm=` diagnostics. The guard does not trust worker-settable identity
+environment variables (`GC_AGENT`, `GC_AGENT_ROLE`, or override flags) for
+authorization; privileged operators who need broader inspection must use an
+out-of-band ops path. Full-format, wide-output, undashed broad BSD forms, and
+BSD env-output variants (`-f`, `-ww`, `axo ...`, `-E`) are denied even when
+paired with a specific pid because those can still surface secret-bearing
+command lines or inherited environments. This guard is intentionally weaker than the macOS file
 sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
 scrub inherited environments and remove long-lived secrets from process envs.
 
