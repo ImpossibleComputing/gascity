@@ -43,6 +43,8 @@ func TestMinActive_ActiveSatisfiesMin(t *testing.T) {
 		},
 		Now: now,
 	})
+	assertAwake(t, result, "rig--pl-1")
+	assertReason(t, result, "rig--pl-1", "min-active")
 	assertAsleep(t, result, "rig--pl-2")
 }
 
@@ -335,5 +337,24 @@ func TestMinActive_CreatingCounts(t *testing.T) {
 		},
 		Now: now,
 	})
+	assertAwake(t, result, "rig--pl-1")
+	assertReason(t, result, "rig--pl-1", "min-active")
 	assertAsleep(t, result, "rig--pl-2")
+}
+
+// TestMinActive_OnlyMinLivePoolSessionsAreRetained verifies min-active keeps
+// exactly the warm-pool floor, not every surplus live pool session. Without
+// this cap, dropping demand after a burst could pin all idle surplus workers.
+func TestMinActive_OnlyMinLivePoolSessionsAreRetained(t *testing.T) {
+	result := ComputeAwakeSet(AwakeInput{
+		Agents: []AwakeAgent{{QualifiedName: "rig/pl", MinActiveSessions: 1}},
+		SessionBeads: []AwakeSessionBead{
+			{ID: "s-a", SessionName: "rig--pl-a", Template: "rig/pl", State: "active"},
+			{ID: "s-b", SessionName: "rig--pl-b", Template: "rig/pl", State: "active"},
+		},
+		Now: now,
+	})
+	assertAwake(t, result, "rig--pl-a")
+	assertReason(t, result, "rig--pl-a", "min-active")
+	assertAsleep(t, result, "rig--pl-b")
 }

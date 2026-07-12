@@ -331,24 +331,31 @@ func ComputeAwakeSet(input AwakeInput) map[string]AwakeDecision {
 		assignedAnchor[bead.SessionName] = anchorBead
 	}
 
-	// Min-active-sessions wake: keep min_active_sessions pool sessions warm
-	// across a city-stop. A pool agent whose only instance is asleep with
-	// sleep_reason=city-stop is neither counted toward the min nor woken by
-	// the demand-driven passes above, so without this pass a
-	// min_active_sessions=1 agent stays cold indefinitely after gc stop &&
-	// gc start until work is explicitly slung to it. We revive the existing
-	// asleep city-stop bead rather than relying on a fresh spawn (no
-	// orphaned-bead churn), mirroring the named-always same-tick wake (#2367)
-	// on the pool min path. Scoped to sleep_reason=city-stop so idle_timeout
-	// and wake_mode semantics are unchanged. See #2739.
+	// Min-active-sessions wake: keep min_active_sessions pool sessions warm.
+	// Demand-driven passes above may already cover the min (assigned work,
+	// pending create, explicit wake, scale/work-query demand). Otherwise,
+	// retain existing live pool beads first, then revive asleep city-stop
+	// beads. The live-retention step is the actual always-warm guarantee for
+	// an already running min-fill session; without it, a min-filled worker
+	// with no work is created, receives no wake reason on the next tick,
+	// drains, and is then recreated forever. The city-stop revival step
+	// preserves the #2739 fix for gc stop && gc start without reviving
+	// idle-timeout sleepers.
 	for _, agent := range input.Agents {
 		if agent.Suspended || agent.MinActiveSessions <= 0 {
 			continue
 		}
 		template := agent.QualifiedName
-		covered := countMinActiveCovered(input.SessionBeads, desired, template, input.Now)
-		if covered >= agent.MinActiveSessions {
-			continue
+		covered := countDesiredMinActiveCovered(input.SessionBeads, desired, template, input.Now)
+		for _, bead := range liveMinActivePoolBeads(input.SessionBeads, template, input.Now) {
+			if covered >= agent.MinActiveSessions {
+				break
+			}
+			if _, already := desired[bead.SessionName]; already {
+				continue
+			}
+			desired[bead.SessionName] = "min-active"
+			covered++
 		}
 		for _, bead := range cityStopPoolBeads(input.SessionBeads, template) {
 			if covered >= agent.MinActiveSessions {
@@ -606,12 +613,11 @@ func minActiveHardBlocked(b AwakeSessionBead, now time.Time) bool {
 		(!b.QuarantinedUntil.IsZero() && now.Before(b.QuarantinedUntil))
 }
 
-// countMinActiveCovered counts pool session beads for template that already
-// satisfy the min_active_sessions guarantee: non-asleep live beads
-// (active/creating) plus any bead an earlier pass already marked
-// desired-awake this tick. An asleep bead with no wake reason does not count —
-// that is precisely the deficit the min-active pass fills.
-func countMinActiveCovered(beads []AwakeSessionBead, desired map[string]string, template string, now time.Time) int {
+// countDesiredMinActiveCovered counts pool session beads for template that an
+// earlier pass already marked desired-awake this tick. Existing demand should
+// satisfy the warm-pool floor before we add synthetic min-active retention, so
+// assigned-work/pending-create/scale demand are not double-filled.
+func countDesiredMinActiveCovered(beads []AwakeSessionBead, desired map[string]string, template string, now time.Time) int {
 	n := 0
 	for _, b := range beads {
 		if !isMinActivePoolBead(b, template) {
@@ -620,22 +626,29 @@ func countMinActiveCovered(beads []AwakeSessionBead, desired map[string]string, 
 		if minActiveHardBlocked(b, now) {
 			continue
 		}
-		if b.State == "asleep" {
-			if _, awake := desired[b.SessionName]; awake {
-				n++
-			}
-			continue
-		}
-		// Only live beads (active/creating) count as covering the guarantee.
-		// Transitional or non-runnable states (suspended, draining,
-		// quarantined, failed-create, stopped, ...) do not — counting them
-		// would mask a real deficit and leave the pool cold when there are
-		// zero live sessions.
-		if b.State == "active" || b.State == "creating" {
+		if _, awake := desired[b.SessionName]; awake {
 			n++
 		}
 	}
 	return n
+}
+
+// liveMinActivePoolBeads returns live pool beads that can be retained to cover
+// the min_active_sessions guarantee. Transitional/non-runnable states
+// (suspended, draining, quarantined, failed-create, stopped, ...) are excluded
+// so they do not mask a real deficit and leave the pool cold.
+func liveMinActivePoolBeads(beads []AwakeSessionBead, template string, now time.Time) []AwakeSessionBead {
+	var out []AwakeSessionBead
+	for _, b := range beads {
+		if !isMinActivePoolBead(b, template) || minActiveHardBlocked(b, now) {
+			continue
+		}
+		if b.State == "active" || b.State == "creating" {
+			out = append(out, b)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // cityStopPoolBeads returns the asleep, city-stop pool beads for template in

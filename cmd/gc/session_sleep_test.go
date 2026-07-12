@@ -442,6 +442,31 @@ func TestReconcileSessionBeads_MinActiveCityStopWakeBypassesInteractiveSleepSupp
 	}
 }
 
+func TestReconcileSessionBeads_MinActiveLivePoolSessionDoesNotDrain(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{
+			Name:              "worker",
+			StartCommand:      "true",
+			MinActiveSessions: intPtr(1),
+		}},
+	}
+	env.addDesired("worker", "worker", true)
+	session := env.createSessionBead("worker", "worker")
+	env.markSessionActive(&session)
+
+	woken := env.reconcileWithPoolDesired([]beads.Bead{session}, map[string]int{"worker": 1})
+	if woken != 0 {
+		t.Fatalf("woken = %d, want 0 for already-live min-active session", woken)
+	}
+	if ds := env.dt.get(session.ID); ds != nil {
+		t.Fatalf("unexpected drain for live min-active session: %+v", ds)
+	}
+	if !env.sp.IsRunning("worker") {
+		t.Fatal("worker should stay running for min-active floor")
+	}
+}
+
 func TestReconcileSessionBeads_AssignedWorkWithReadyWaitOverridesNonInteractiveSleepPolicy(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{
