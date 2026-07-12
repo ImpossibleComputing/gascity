@@ -70,6 +70,45 @@ func TestNewSessionWithCommandAndEnvClearsEmptyVars(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithCommandAndEnvScrubsDefaultWorkerSecrets(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	env := map[string]string{
+		"GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS": "1",
+		"LANG":                                "en_US.UTF-8",
+		"OPENAI_API_KEY":                      "scoped-worker-token",
+	}
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-secret-scrub", "", "claude", env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	if len(exec.calls) == 0 {
+		t.Fatal("no tmux calls recorded")
+	}
+
+	args := exec.calls[0]
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "\x00-e\x00LANG=en_US.UTF-8\x00") {
+		t.Fatalf("new-session args missing LANG -e flag: %v", args)
+	}
+	if !strings.Contains(joined, "\x00-e\x00OPENAI_API_KEY=scoped-worker-token\x00") {
+		t.Fatalf("explicit scoped OPENAI_API_KEY should be preserved as a tmux -e flag: %v", args)
+	}
+	if strings.Contains(joined, "GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS=1") {
+		t.Fatalf("scrub control env leaked as a set value: %v", args)
+	}
+	cmd := args[len(args)-1]
+	for _, want := range []string{"-u GH_TOKEN", "-u GITHUB_TOKEN", "-u GEMINI_API_KEY", "-u ANTHROPIC_API_KEY", "-u GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS"} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("command %q missing scrub unset %q", cmd, want)
+		}
+	}
+	if strings.Contains(cmd, "-u OPENAI_API_KEY") {
+		t.Fatalf("command %q scrubbed explicit scoped OPENAI_API_KEY", cmd)
+	}
+}
+
 type promptFooterExecutor struct {
 	calls [][]string
 }

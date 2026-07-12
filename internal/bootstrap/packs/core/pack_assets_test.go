@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
 )
 
 func TestCoreMaintenanceExecAssets(t *testing.T) {
@@ -111,6 +112,13 @@ func TestBDDogAgentSecretEnvScrubMatchesWorkerPreflight(t *testing.T) {
 		t.Fatalf("Decode(examples/bd/dolt/agents/dog/agent.toml): %v", err)
 	}
 	assertNonLLMMaintenanceSecretEnvScrubbed(t, agent.Env)
+}
+
+func TestWorkerSecretEnvPreflightDefaultListMatchesRuntimeScrubDefaults(t *testing.T) {
+	keys := defaultWorkerSecretEnvPreflightForbidKeys(t)
+	if !reflect.DeepEqual(keys, secretscrub.DefaultWorkerSecretEnvKeys) {
+		t.Fatalf("worker-secret-env-preflight forbid keys drifted from runtime scrub defaults:\npreflight=%v\nruntime=%v", keys, secretscrub.DefaultWorkerSecretEnvKeys)
+	}
 }
 
 func TestWorkerSecretEnvPreflightDefaultListStaysInSyncWithMaintenanceScrubs(t *testing.T) {
