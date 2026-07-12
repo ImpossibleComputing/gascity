@@ -88,6 +88,9 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 
 func assertNonLLMMaintenanceSecretEnvScrubbed(t *testing.T, env map[string]string) {
 	t.Helper()
+	if got := env[secretscrub.EnableDefaultScrubEnv]; got != "1" {
+		t.Fatalf("non-LLM maintenance agent env[%s] = %q, want 1 to opt into launch-time default secret scrub", secretscrub.EnableDefaultScrubEnv, got)
+	}
 	for _, key := range defaultWorkerSecretEnvPreflightForbidKeys(t) {
 		value, ok := env[key]
 		if !ok {
