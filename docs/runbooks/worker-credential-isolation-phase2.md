@@ -107,7 +107,8 @@ placed there, which is still a real abuse/cost surface and must be handled as a
 follow-on.
 
 For non-LLM maintenance/system agents, use the existing empty-env convention to
-remove inherited secrets at pane launch:
+remove inherited secrets at pane launch. Keep this list aligned with
+`worker-secret-env-preflight.sh`; excerpt:
 
 ```toml
 [env]
@@ -131,10 +132,13 @@ internal/bootstrap/packs/core/assets/scripts/worker-secret-env-preflight.sh
 ```
 
 The preflight prints forbidden env names only, with `value=REDACTED`, and fails
-if default supervisor-level LLM/GitHub credential names are present. For a
-future brokered worker, allow only the scoped broker token name explicitly, e.g.
-`--forbid WORKER_LLM_BROKER_TOKEN --allow WORKER_LLM_BROKER_TOKEN`; do not allow
-the shared supervisor keys.
+if default supervisor-level LLM, cloud, or GitHub credential names are present
+(`OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `AWS_SECRET_ACCESS_KEY`, `GH_TOKEN`,
+`GITHUB_TOKEN`, and peer provider keys). For a future brokered worker, allow
+only the scoped broker token name explicitly, e.g. `--forbid
+WORKER_LLM_BROKER_TOKEN --allow WORKER_LLM_BROKER_TOKEN`; do not allow the
+shared supervisor keys.
 
 
 ### Process-listing transcript leak guard

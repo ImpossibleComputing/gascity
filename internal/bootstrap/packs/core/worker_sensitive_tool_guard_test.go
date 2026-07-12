@@ -365,9 +365,16 @@ func TestWorkerSecretEnvPreflightDeniesForbiddenNamesWithoutLeakingValues(t *tes
 	preflight := writeCoreAsset(t, "assets/scripts/worker-secret-env-preflight.sh")
 	secretOpenAI := "sk-proj-fake-secret-value-must-not-appear"
 	secretGemini := "AIza-fake-secret-value-must-not-appear"
+	secretClaude := "claude-oauth-fake-secret-value-must-not-appear"
+	secretGoogle := "google-fake-secret-value-must-not-appear"
+	secretAWS := "aws-fake-secret-value-must-not-appear"
 	got := runGuard(t, preflight, []string{
 		"OPENAI_API_KEY=" + secretOpenAI,
 		"GEMINI_API_KEY=" + secretGemini,
+		"ANTHROPIC_AUTH_TOKEN=" + secretClaude,
+		"CLAUDE_CODE_OAUTH_TOKEN=" + secretClaude,
+		"GOOGLE_API_KEY=" + secretGoogle,
+		"AWS_SECRET_ACCESS_KEY=" + secretAWS,
 		"GC_INSTANCE_TOKEN=not-in-default-forbid-list",
 	})
 	if got.code != 1 {
@@ -376,15 +383,19 @@ func TestWorkerSecretEnvPreflightDeniesForbiddenNamesWithoutLeakingValues(t *tes
 	for _, want := range []string{
 		"FAIL forbidden_env_name=OPENAI_API_KEY value=REDACTED",
 		"FAIL forbidden_env_name=GEMINI_API_KEY value=REDACTED",
+		"FAIL forbidden_env_name=ANTHROPIC_AUTH_TOKEN value=REDACTED",
+		"FAIL forbidden_env_name=CLAUDE_CODE_OAUTH_TOKEN value=REDACTED",
+		"FAIL forbidden_env_name=GOOGLE_API_KEY value=REDACTED",
+		"FAIL forbidden_env_name=AWS_SECRET_ACCESS_KEY value=REDACTED",
 		"PASS absent_env_name=GITHUB_TOKEN",
-		"forbidden_present_count=2",
+		"forbidden_present_count=6",
 		"values_not_printed_hashed_or_persisted",
 	} {
 		if !strings.Contains(got.stdout, want) {
 			t.Fatalf("preflight stdout missing %q: %q", want, got.stdout)
 		}
 	}
-	for _, leak := range []string{secretOpenAI, secretGemini, "sk-proj", "AIza-fake"} {
+	for _, leak := range []string{secretOpenAI, secretGemini, secretClaude, secretGoogle, secretAWS, "sk-proj", "AIza-fake", "claude-oauth", "google-fake", "aws-fake"} {
 		if strings.Contains(got.stdout, leak) || strings.Contains(got.stderr, leak) {
 			t.Fatalf("preflight leaked secret fragment %q; stdout=%q stderr=%q", leak, got.stdout, got.stderr)
 		}
