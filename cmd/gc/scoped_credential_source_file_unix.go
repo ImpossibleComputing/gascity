@@ -23,3 +23,14 @@ func openScopedCredentialSourceFile(path string) (*os.File, error) {
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
+
+func openScopedCredentialAuditLog(path string) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CREAT|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("scoped credential audit log %q must not be a symlink", path)
+		}
+		return nil, fmt.Errorf("open scoped credential audit log: %w", err)
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
