@@ -263,6 +263,23 @@ gc internal scoped-credential-env-file \
   --from-env GITHUB_TOKEN=SCOPED_CODEX_GITHUB_TOKEN
 ```
 
+For the no-provider-creds supervisor cutover, prefer keeping broker-issued or
+operator-provisioned scoped source values in a private dotenv file rather than
+persisting them in LaunchAgents or process env. The same writer can read those
+source keys without printing values:
+
+```bash
+gc internal scoped-credential-env-file \
+  --out "$GC_CITY_RUNTIME_DIR/worker-creds/codex.env" \
+  --source-env-file "$GC_HOME/worker-credential-sources.env" \
+  --from-env-file OPENAI_API_KEY=CODEX_OPENAI_API_KEY \
+  --from-env-file GITHUB_TOKEN=CODEX_GITHUB_TOKEN
+```
+
+`--source-env-file` must be an absolute private dotenv file (mode `0600` or
+stricter on Unix). Parse errors are reported as invalid syntax only, so a
+malformed secret-like source line is not echoed to stderr.
+
 The writer creates parent directories as private directories, writes a sorted
 dotenv file atomically at mode `0600`, applies the same credential-key allowlist
 as launch-time loading, and reports only key names/paths on errors. It is a
