@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCopyDir_RecursiveCopy(t *testing.T) {
@@ -97,6 +98,35 @@ func TestCopyDir_OverwriteExisting(t *testing.T) {
 	}
 
 	assertFileContent(t, filepath.Join(dst, "config.toml"), "new content")
+}
+
+func TestCopyDir_MergeableJSONSkipsWriteWhenAlreadyCurrent(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	rel := filepath.Join(".codex", "hooks.json")
+	srcPath := filepath.Join(src, rel)
+	dstPath := filepath.Join(dst, rel)
+	current := []byte("{\n  \"hooks\": {\n    \"SessionStart\": []\n  }\n}\n")
+	writeFile(t, srcPath, string(current))
+	writeFile(t, dstPath, string(current))
+	oldTime := time.Unix(123, 0)
+	if err := os.Chtimes(dstPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	if err := CopyDir(src, dst, &stderr); err != nil {
+		t.Fatalf("CopyDir: %v", err)
+	}
+
+	info, err := os.Stat(dstPath)
+	if err != nil {
+		t.Fatalf("stat dst: %v", err)
+	}
+	if !info.ModTime().Equal(oldTime) {
+		t.Fatalf("mergeable JSON mtime changed on idempotent copy: got %s want %s", info.ModTime(), oldTime)
+	}
+	assertFileContent(t, dstPath, string(current))
 }
 
 func TestCopyFileOrDir_FileIntoExistingDirectoryPreservesBaseName(t *testing.T) {
