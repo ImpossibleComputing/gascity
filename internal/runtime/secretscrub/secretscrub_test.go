@@ -161,6 +161,23 @@ func TestWriteScopedCredentialEnvFileRejectsBadInputsWithoutLeakingValues(t *tes
 	}
 }
 
+func TestScopedCredentialEnvFileKeysReturnsSortedNamesOnly(t *testing.T) {
+	path := writeScopedEnvFile(t, "OPENAI_API_KEY=sk-secret\nGITHUB_TOKEN=ghs-secret\n")
+	keys, err := ScopedCredentialEnvFileKeys(path)
+	if err != nil {
+		t.Fatalf("ScopedCredentialEnvFileKeys: %v", err)
+	}
+	got := strings.Join(keys, ",")
+	if got != "GITHUB_TOKEN,OPENAI_API_KEY" {
+		t.Fatalf("keys = %q", got)
+	}
+	for _, leak := range []string{"sk-secret", "ghs-secret"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("keys leaked %q: %q", leak, got)
+		}
+	}
+}
+
 func writeScopedEnvFile(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "scoped.env")

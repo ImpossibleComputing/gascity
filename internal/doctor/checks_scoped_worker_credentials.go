@@ -50,16 +50,19 @@ func (c *ScopedWorkerCredentialFilesCheck) Run(_ *CheckContext) *CheckResult {
 			continue
 		}
 		configured++
-		if err := secretscrub.ValidateScopedCredentialEnvFile(path); err != nil {
+		scopedKeys, err := secretscrub.ScopedCredentialEnvFileKeys(path)
+		if err != nil {
 			details = append(details, fmt.Sprintf("agent %q: %v", agent.QualifiedName(), err))
+			continue
 		}
+		details = append(details, c.agentCredentialEnvConflicts(agent, scopedKeys)...)
 	}
 	sort.Strings(details)
 	if len(details) > 0 {
 		r.Status = StatusWarning
 		r.Message = fmt.Sprintf("%d scoped worker credential env file issue(s)", len(details))
 		r.Details = details
-		r.FixHint = "write broker-issued credential env files as absolute 0600 dotenv files with only allowed credential keys and non-empty values"
+		r.FixHint = "write broker-issued credential env files as absolute 0600 dotenv files with only allowed credential keys and non-empty values; remove non-empty credential env values from agents that use scoped files"
 		return r
 	}
 	r.Status = StatusOK
@@ -69,6 +72,28 @@ func (c *ScopedWorkerCredentialFilesCheck) Run(_ *CheckContext) *CheckResult {
 		r.Message = fmt.Sprintf("%d scoped worker credential env file(s) valid", configured)
 	}
 	return r
+}
+
+func (c *ScopedWorkerCredentialFilesCheck) agentCredentialEnvConflicts(agent config.Agent, scopedKeys []string) []string {
+	scoped := make(map[string]bool, len(scopedKeys))
+	for _, key := range scopedKeys {
+		scoped[key] = true
+	}
+	var details []string
+	for key, value := range agent.Env {
+		if key == secretscrub.ScopedCredentialEnvFileEnv || strings.TrimSpace(value) == "" {
+			continue
+		}
+		if scoped[key] {
+			details = append(details, fmt.Sprintf("agent %q: env.%s is non-empty and will conflict with the scoped credential env file at launch", agent.QualifiedName(), key))
+			continue
+		}
+		if secretscrub.IsWorkerCredentialEnvKey(key) {
+			details = append(details, fmt.Sprintf("agent %q: env.%s is non-empty and would survive default secret scrubbing; move it into the scoped credential env file or clear it", agent.QualifiedName(), key))
+		}
+	}
+	sort.Strings(details)
+	return details
 }
 
 func (c *ScopedWorkerCredentialFilesCheck) agentScopedCredentialEnvFile(agent config.Agent) (string, error) {

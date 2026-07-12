@@ -132,3 +132,38 @@ func TestScopedWorkerCredentialFilesCheckWarnsOnFieldAndEnvConflict(t *testing.T
 		}
 	}
 }
+
+func TestScopedWorkerCredentialFilesCheckWarnsOnConfiguredCredentialEnvConflicts(t *testing.T) {
+	scoped := writeScopedWorkerCredentialTestFile(t, "OPENAI_API_KEY=scoped-openai\n", 0o600)
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:                    "codex",
+		ScopedCredentialEnvFile: scoped,
+		Env: map[string]string{
+			"OPENAI_API_KEY": "shared-openai-secret",
+			"GH_TOKEN":       "shared-gh-secret",
+			"PATH":           "/usr/bin",
+		},
+	}}}
+
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
+	if result.Status != StatusWarning {
+		t.Fatalf("Status = %v, want Warning", result.Status)
+	}
+	joined := strings.Join(result.Details, "\n")
+	for _, want := range []string{
+		"env.OPENAI_API_KEY is non-empty and will conflict",
+		"env.GH_TOKEN is non-empty and would survive default secret scrubbing",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("details missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "env.PATH") {
+		t.Fatalf("non-credential env should not be reported:\n%s", joined)
+	}
+	for _, leak := range []string{"shared-openai-secret", "shared-gh-secret", "scoped-openai"} {
+		if strings.Contains(joined, leak) || strings.Contains(result.Message, leak) || strings.Contains(result.FixHint, leak) {
+			t.Fatalf("result leaked %q: message=%q details=%q fix=%q", leak, result.Message, joined, result.FixHint)
+		}
+	}
+}

@@ -273,8 +273,9 @@ to be scoped, revocable, and audited by the broker.
 any configured `scoped_credential_env_file` or legacy
 `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE`. It validates the same contract before
 launch — absolute/resolved path, private mode, credential-key allowlist,
-non-empty values, and sanitized parse errors — without printing credential
-values.
+non-empty values, sanitized parse errors, and no explicit non-empty credential
+env values on the same agent that would either conflict at launch or survive
+default secret scrubbing — without printing credential values.
 
 ### Supervisor launchd plaintext credential audit
 

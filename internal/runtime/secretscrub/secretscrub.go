@@ -121,6 +121,21 @@ func ValidateScopedCredentialEnvFile(path string) error {
 	return err
 }
 
+// ScopedCredentialEnvFileKeys returns the sorted key names in a valid scoped
+// credential env file without exposing any values.
+func ScopedCredentialEnvFileKeys(path string) ([]string, error) {
+	entries, err := loadScopedCredentialEnvFile(path)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
+
 // WriteScopedCredentialEnvFile atomically writes broker-issued scoped
 // credentials to path using the same contract enforced at worker launch. The
 // caller supplies values out-of-band (for example from a broker or environment
@@ -269,6 +284,12 @@ func validEnvKey(key string) bool {
 }
 
 func allowedScopedCredentialKey(key string) bool {
+	return IsWorkerCredentialEnvKey(key)
+}
+
+// IsWorkerCredentialEnvKey reports whether key is a credential/provider key
+// covered by the scoped worker credential and default scrub contracts.
+func IsWorkerCredentialEnvKey(key string) bool {
 	if key == ScopedGitCredentialCommandEnv {
 		return true
 	}
