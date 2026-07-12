@@ -2,7 +2,10 @@ package core
 
 import (
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -84,41 +87,7 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 
 func assertNonLLMMaintenanceSecretEnvScrubbed(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, key := range []string{
-		"AMP_API_KEY",
-		"ANTHROPIC_API_KEY",
-		"ANTHROPIC_AUTH_TOKEN",
-		"AWS_ACCESS_KEY_ID",
-		"AWS_BEARER_TOKEN_BEDROCK",
-		"AWS_CONTAINER_AUTHORIZATION_TOKEN",
-		"AWS_SECRET_ACCESS_KEY",
-		"AWS_SESSION_TOKEN",
-		"AZURE_OPENAI_API_KEY",
-		"CEREBRAS_API_KEY",
-		"CLAUDE_CODE_OAUTH_TOKEN",
-		"COHERE_API_KEY",
-		"COPILOT_GITHUB_TOKEN",
-		"COPILOT_PROVIDER_API_KEY",
-		"CURSOR_API_KEY",
-		"DEEPSEEK_API_KEY",
-		"FIREWORKS_API_KEY",
-		"GEMINI_API_KEY",
-		"GH_TOKEN",
-		"GITHUB_TOKEN",
-		"GOOGLE_API_KEY",
-		"GOOGLE_APPLICATION_CREDENTIALS",
-		"GOOGLE_GENERATIVE_AI_API_KEY",
-		"GROQ_API_KEY",
-		"KIMI_API_KEY",
-		"KIRO_API_KEY",
-		"MISTRAL_API_KEY",
-		"OPENAI_API_KEY",
-		"OPENROUTER_API_KEY",
-		"TOGETHER_API_KEY",
-		"XAI_API_KEY",
-		"XIAOMI_API_KEY",
-		"ZAI_API_KEY",
-	} {
+	for _, key := range defaultWorkerSecretEnvPreflightForbidKeys(t) {
 		value, ok := env[key]
 		if !ok {
 			t.Fatalf("non-LLM maintenance agent must explicitly unset inherited %s", key)
@@ -127,6 +96,80 @@ func assertNonLLMMaintenanceSecretEnvScrubbed(t *testing.T, env map[string]strin
 			t.Fatalf("non-LLM maintenance agent env[%s] = %q, want empty string so tmux starts with env -u", key, value)
 		}
 	}
+}
+
+func TestBDDogAgentSecretEnvScrubMatchesWorkerPreflight(t *testing.T) {
+	type agentFile struct {
+		Env map[string]string `toml:"env"`
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "bd", "dolt", "agents", "dog", "agent.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(examples/bd/dolt/agents/dog/agent.toml): %v", err)
+	}
+	var agent agentFile
+	if _, err := toml.Decode(string(data), &agent); err != nil {
+		t.Fatalf("Decode(examples/bd/dolt/agents/dog/agent.toml): %v", err)
+	}
+	assertNonLLMMaintenanceSecretEnvScrubbed(t, agent.Env)
+}
+
+func TestWorkerSecretEnvPreflightDefaultListStaysInSyncWithMaintenanceScrubs(t *testing.T) {
+	keys := defaultWorkerSecretEnvPreflightForbidKeys(t)
+	if len(keys) < 10 {
+		t.Fatalf("default worker-secret-env-preflight forbid list is unexpectedly small: %v", keys)
+	}
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if seen[key] {
+			t.Fatalf("default worker-secret-env-preflight forbid list contains duplicate %s: %v", key, keys)
+		}
+		seen[key] = true
+	}
+	for _, want := range []string{
+		"OPENAI_API_KEY",
+		"GEMINI_API_KEY",
+		"ANTHROPIC_AUTH_TOKEN",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"GOOGLE_API_KEY",
+		"AWS_SECRET_ACCESS_KEY",
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+	} {
+		if !seen[want] {
+			t.Fatalf("default worker-secret-env-preflight forbid list missing %s: %v", want, keys)
+		}
+	}
+}
+
+func defaultWorkerSecretEnvPreflightForbidKeys(t *testing.T) []string {
+	t.Helper()
+	data, err := fs.ReadFile(PackFS, "assets/scripts/worker-secret-env-preflight.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(worker-secret-env-preflight.sh): %v", err)
+	}
+	script := string(data)
+	start := strings.Index(script, "forbid=(")
+	if start < 0 {
+		t.Fatalf("worker-secret-env-preflight.sh missing default forbid=(...) block")
+	}
+	bodyStart := start + len("forbid=(")
+	end := strings.Index(script[bodyStart:], "\n)")
+	if end < 0 {
+		t.Fatalf("worker-secret-env-preflight.sh missing end of default forbid block")
+	}
+	body := script[bodyStart : bodyStart+end]
+	var keys []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.ContainsAny(line, " \t\"'$()") {
+			t.Fatalf("unexpected non-literal env key %q in worker-secret-env-preflight.sh", line)
+		}
+		keys = append(keys, line)
+	}
+	return keys
 }
 
 func TestCoreMaintenanceOrdersCarryLegacySkipAliases(t *testing.T) {
