@@ -2,7 +2,10 @@ package core
 
 import (
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -39,12 +42,14 @@ func TestCoreMaintenanceExecAssets(t *testing.T) {
 
 func TestCoreControlDispatcherAgent(t *testing.T) {
 	type agentFile struct {
-		Description       string   `toml:"description"`
-		StartCommand      string   `toml:"start_command"`
-		PromptMode        string   `toml:"prompt_mode"`
-		ProcessNames      []string `toml:"process_names"`
-		MaxActiveSessions *int     `toml:"max_active_sessions"`
-		Scope             string   `toml:"scope"`
+		Description       string            `toml:"description"`
+		StartCommand      string            `toml:"start_command"`
+		PromptMode        string            `toml:"prompt_mode"`
+		ProcessNames      []string          `toml:"process_names"`
+		MaxActiveSessions *int              `toml:"max_active_sessions"`
+		Scope             string            `toml:"scope"`
+		SandboxProfile    string            `toml:"sandbox_profile"`
+		Env               map[string]string `toml:"env"`
 	}
 
 	data, err := fs.ReadFile(PackFS, "agents/control-dispatcher/agent.toml")
@@ -61,6 +66,10 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	if agent.Scope != "" {
 		t.Fatalf("control-dispatcher scope = %q, want empty so it expands at city and rig scope", agent.Scope)
 	}
+	if agent.SandboxProfile != "//.gc/security/worker-credential-deny.sb" {
+		t.Fatalf("control-dispatcher sandbox_profile = %q, want worker credential deny profile", agent.SandboxProfile)
+	}
+	assertNonLLMMaintenanceSecretEnvScrubbed(t, agent.Env)
 	wantStartCommand := `sh -c 'export GC_WORKFLOW_TRACE="${GC_WORKFLOW_TRACE:-${GC_CONTROL_DISPATCHER_TRACE_DEFAULT:-${GC_CITY}/.gc/runtime/control-dispatcher-trace.log}}"; trace_dir="${GC_WORKFLOW_TRACE%/*}"; if [ "$trace_dir" = "$GC_WORKFLOW_TRACE" ]; then trace_dir="."; elif [ -z "$trace_dir" ]; then trace_dir="/"; fi; mkdir -p "$trace_dir"; exec "${GC_BIN:-gc}" convoy control --serve --follow {{.Agent}}'`
 	if agent.StartCommand != wantStartCommand {
 		t.Fatalf("control-dispatcher start_command = %q, want templated dispatcher command", agent.StartCommand)
@@ -74,6 +83,93 @@ func TestCoreControlDispatcherAgent(t *testing.T) {
 	if agent.MaxActiveSessions == nil || *agent.MaxActiveSessions != 1 {
 		t.Fatalf("control-dispatcher max_active_sessions = %v, want 1", agent.MaxActiveSessions)
 	}
+}
+
+func assertNonLLMMaintenanceSecretEnvScrubbed(t *testing.T, env map[string]string) {
+	t.Helper()
+	for _, key := range defaultWorkerSecretEnvPreflightForbidKeys(t) {
+		value, ok := env[key]
+		if !ok {
+			t.Fatalf("non-LLM maintenance agent must explicitly unset inherited %s", key)
+		}
+		if value != "" {
+			t.Fatalf("non-LLM maintenance agent env[%s] = %q, want empty string so tmux starts with env -u", key, value)
+		}
+	}
+}
+
+func TestBDDogAgentSecretEnvScrubMatchesWorkerPreflight(t *testing.T) {
+	type agentFile struct {
+		Env map[string]string `toml:"env"`
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "bd", "dolt", "agents", "dog", "agent.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(examples/bd/dolt/agents/dog/agent.toml): %v", err)
+	}
+	var agent agentFile
+	if _, err := toml.Decode(string(data), &agent); err != nil {
+		t.Fatalf("Decode(examples/bd/dolt/agents/dog/agent.toml): %v", err)
+	}
+	assertNonLLMMaintenanceSecretEnvScrubbed(t, agent.Env)
+}
+
+func TestWorkerSecretEnvPreflightDefaultListStaysInSyncWithMaintenanceScrubs(t *testing.T) {
+	keys := defaultWorkerSecretEnvPreflightForbidKeys(t)
+	if len(keys) < 10 {
+		t.Fatalf("default worker-secret-env-preflight forbid list is unexpectedly small: %v", keys)
+	}
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if seen[key] {
+			t.Fatalf("default worker-secret-env-preflight forbid list contains duplicate %s: %v", key, keys)
+		}
+		seen[key] = true
+	}
+	for _, want := range []string{
+		"OPENAI_API_KEY",
+		"GEMINI_API_KEY",
+		"ANTHROPIC_AUTH_TOKEN",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"GOOGLE_API_KEY",
+		"AWS_SECRET_ACCESS_KEY",
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+	} {
+		if !seen[want] {
+			t.Fatalf("default worker-secret-env-preflight forbid list missing %s: %v", want, keys)
+		}
+	}
+}
+
+func defaultWorkerSecretEnvPreflightForbidKeys(t *testing.T) []string {
+	t.Helper()
+	data, err := fs.ReadFile(PackFS, "assets/scripts/worker-secret-env-preflight.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(worker-secret-env-preflight.sh): %v", err)
+	}
+	script := string(data)
+	start := strings.Index(script, "forbid=(")
+	if start < 0 {
+		t.Fatalf("worker-secret-env-preflight.sh missing default forbid=(...) block")
+	}
+	bodyStart := start + len("forbid=(")
+	end := strings.Index(script[bodyStart:], "\n)")
+	if end < 0 {
+		t.Fatalf("worker-secret-env-preflight.sh missing end of default forbid block")
+	}
+	body := script[bodyStart : bodyStart+end]
+	var keys []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.ContainsAny(line, " \t\"'$()") {
+			t.Fatalf("unexpected non-literal env key %q in worker-secret-env-preflight.sh", line)
+		}
+		keys = append(keys, line)
+	}
+	return keys
 }
 
 func TestCoreMaintenanceOrdersCarryLegacySkipAliases(t *testing.T) {

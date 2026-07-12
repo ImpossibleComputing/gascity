@@ -2680,6 +2680,9 @@ func TestRecordStartCrashDisabledWhenNoRuntimeDir(t *testing.T) {
 }
 
 func TestDoStartSession_SandboxProfileWrapsLaunchCommand(t *testing.T) {
+	oldGOOS := sandboxExecGOOS
+	sandboxExecGOOS = "darwin"
+	t.Cleanup(func() { sandboxExecGOOS = oldGOOS })
 	ops := &fakeStartOps{}
 
 	err := doStartSession(context.Background(), ops, "sandboxed", runtime.Config{
@@ -2700,5 +2703,29 @@ func TestDoStartSession_SandboxProfileWrapsLaunchCommand(t *testing.T) {
 	}
 	if !strings.Contains(create.command, "GC_SECURITY=/w/.gc/security") {
 		t.Fatalf("createSession command = %q, want GC_SECURITY sandbox parameter", create.command)
+	}
+}
+
+func TestDoStartSession_SandboxProfileSkippedOffDarwin(t *testing.T) {
+	oldGOOS := sandboxExecGOOS
+	sandboxExecGOOS = "linux"
+	t.Cleanup(func() { sandboxExecGOOS = oldGOOS })
+	ops := &fakeStartOps{}
+
+	err := doStartSession(context.Background(), ops, "sandboxed", runtime.Config{
+		WorkDir:        "/w",
+		Command:        "agent --serve",
+		SandboxProfile: "/city/.gc/security/worker-credential-deny.sb",
+	}, DefaultConfig().SetupTimeout)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	create := callsByMethod(t, ops, "createSession", 1)[0]
+	if strings.Contains(create.command, "sandbox-exec") || strings.Contains(create.command, "worker-credential-deny.sb") {
+		t.Fatalf("createSession command = %q, want no darwin-only sandbox-exec wrapper", create.command)
+	}
+	if !strings.Contains(create.command, "agent --serve") {
+		t.Fatalf("createSession command = %q, want original agent command", create.command)
 	}
 }

@@ -50,6 +50,144 @@ internal/bootstrap/packs/core/assets/scripts/worker-credential-sandbox-preflight
    Do not send external mail as a test.
 7. Only after the sandbox, HTTPS publication, and prompt/credential guards hold: rotate mayor@ password/token and enable 2FA.
 
+
+## Pack-defined and maintenance-agent residual coverage
+
+The named-agent rollout is not the whole fleet. Pack-defined agents must carry
+the same profile when they are prompt/code workers or when the profile does not
+conflict with their infra role.
+
+Apply the profile to:
+
+- `jacq-worktree-pool` agents (`claude`, `claude-sonnet`, `codex`): these are
+  secondary coding/pool workers and share the same risk class as the primary
+  `claude-sonnet` pool.
+- `bd.dog`: this is a maintenance worker, but its Dolt/bead work is under the
+  city store; the credential-deny profile blocks only credential roots,
+  browser-profile reads, and `.gc/security` writes. It should also explicitly
+  unset inherited LLM/GitHub secret env vars because it is not an LLM/code
+  publication worker.
+- `core.control-dispatcher` and rig-scoped `*/control-dispatcher`: these are
+  deterministic system agents with `prompt_mode = "none"`; the same profile
+  still allows `.gc/runtime` trace writes and `gc convoy control --serve`, while
+  blocking credential roots. They should explicitly unset inherited LLM/GitHub
+  secret env vars for the same reason.
+
+Only exempt a system agent with a concrete functional reason and document that
+reason in the runbook/bead. Do not leave a pack-defined prompt worker silently
+unsandboxed.
+
+## Environment-variable credential surface
+
+The file-read sandbox does **not** protect credentials that are already present in
+the worker process environment. A worker launched by the supervisor inherits the
+supervisor environment unless the launcher scrubs or replaces it before spawning
+the worker. That means a launchd plist such as
+`~/Library/LaunchAgents/com.gascity.supervisor.plist` can be a plaintext
+credential surface if it stores API keys under `EnvironmentVariables`, and those
+variables can bypass file-deny sandboxing entirely.
+
+Use the redacted audit helper instead of dumping a full plist:
+
+```sh
+internal/bootstrap/packs/core/assets/scripts/supervisor-env-surface-audit.sh \
+  --plist ~/Library/LaunchAgents/com.gascity.supervisor.plist
+```
+
+The helper prints variable names and plist metadata only; it does not print,
+hash, prefix, or persist values. Treat any secret-bearing name such as
+`OPENAI_API_KEY`, `GEMINI_API_KEY`, `*_TOKEN`, or `*_SECRET` in supervisor
+`EnvironmentVariables` as part of the assume-breach inventory if the plist or a
+full plist dump entered a transcript.
+
+This finding does not by itself block the PR#11/PR#12 pool-resume gate: the
+incident hole was worker access to mayor@ file credentials plus authority
+impersonation. Environment variables instead expose the LLM/API credentials
+placed there, which is still a real abuse/cost surface and must be handled as a
+follow-on.
+
+For non-LLM maintenance/system agents, use the existing empty-env convention to
+remove inherited secrets at pane launch. Keep this list aligned with
+`worker-secret-env-preflight.sh`; excerpt:
+
+```toml
+[env]
+OPENAI_API_KEY = ""
+GEMINI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+MISTRAL_API_KEY = ""
+ZAI_API_KEY = ""
+GH_TOKEN = ""
+GITHUB_TOKEN = ""
+```
+
+The tmux launch path converts empty configured values into `env -u <KEY>` for
+the agent command. This is not enough for Codex/LLM workers that actually need
+model access; those need the Phase-3 broker/per-worker credential path below.
+
+To verify a worker's current environment without exposing values, run:
+
+```sh
+internal/bootstrap/packs/core/assets/scripts/worker-secret-env-preflight.sh
+```
+
+The preflight prints forbidden env names only, with `value=REDACTED`, and fails
+if default supervisor-level LLM, cloud, or GitHub credential names are present
+(`OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `AWS_SECRET_ACCESS_KEY`, `GH_TOKEN`,
+`GITHUB_TOKEN`, and peer provider keys). For a future brokered worker, allow
+only the scoped broker token name explicitly, e.g. `--forbid
+WORKER_LLM_BROKER_TOKEN --allow WORKER_LLM_BROKER_TOKEN`; do not allow the
+shared supervisor keys.
+
+
+### Process-listing transcript leak guard
+
+A second environment-variable leak vector is broad process inspection. Commands
+such as `ps aux`, `ps -ef`, or env/full-command variants can copy inherited
+API-key environment variables or secret-bearing command lines into durable agent
+transcripts. Workers should not run broad or full-command process
+listings through the guarded PATH wrapper. Prefer process-specific narrow forms such as:
+
+```sh
+ps -p <pid> -o pid,comm=
+```
+
+The core pack includes a PATH-level tripwire for this class:
+`assets/worker-sensitive-tools/bin/ps` routes through
+`assets/scripts/worker-process-listing-guard.sh`, denying broad/full-command ps
+forms with an allowlist that passes only no-arg `ps` and narrow `-p ... -o
+pid,comm=` diagnostics. The guard does not trust worker-settable identity
+environment variables (`GC_AGENT`, `GC_AGENT_ROLE`, or override flags) for
+authorization; privileged operators who need broader inspection must use an
+out-of-band ops path. Full-format, wide-output, undashed broad BSD forms, and
+BSD env-output variants (`-f`, `-ww`, `axo ...`, `-E`) are denied even when
+paired with a specific pid because those can still surface secret-bearing
+command lines or inherited environments. This guard is intentionally weaker than the macOS file
+sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
+scrub inherited environments and remove long-lived secrets from process envs.
+
+## Phase-3 broker / per-worker LLM credential scope
+
+Target end-state: workers do not inherit shared supervisor API keys. The launcher
+should start workers with a scrubbed environment and provide only the credentials
+that worker is authorized to use, ideally through a broker that can mint or
+select per-worker scoped credentials, log issuance, revoke a single worker, and
+rate-limit by agent/session.
+
+Acceptance probes for that follow-on:
+
+1. A generic non-LLM worker launched by the supervisor has no `OPENAI_API_KEY`,
+   `GEMINI_API_KEY`, or other shared credential environment names. The redacted
+   `worker-secret-env-preflight.sh` should pass inside that worker.
+2. A Codex/LLM worker that needs model access receives only its scoped worker key
+   or broker token, not the shared supervisor key. The same preflight may allow
+   only that scoped token name and must still fail on shared supervisor keys.
+3. Revoking one worker credential does not require rotating every fleet key.
+4. A full launchd plist audit contains no plaintext long-lived API keys.
+5. File sandbox probes from this runbook still pass after env scrubbing/broker
+   integration.
+
 ## Limits
 
-This is stronger than a PATH wrapper: absolute path bypasses and spawned children inherit the sandbox. It is still not a substitute for a future separate Unix-user/container split where feasible, and it does not authorize workers to receive mayor@ credentials through environment variables or broker APIs.
+This is stronger than a PATH wrapper: absolute path bypasses and spawned children inherit the sandbox. It is still not a substitute for a future separate Unix-user/container split where feasible, and it does not authorize workers to receive mayor@ credentials, shared API keys, or other secrets through environment variables or broker APIs.
