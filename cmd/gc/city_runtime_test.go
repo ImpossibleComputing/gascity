@@ -5002,6 +5002,88 @@ func TestCityRuntimeSoftReloadAcceptsDriftForAppliedAndNoChange(t *testing.T) {
 	}
 }
 
+func TestCityRuntimeUpdateConfigWatcherTargetsSkipsRestartWhenUnchanged(t *testing.T) {
+	oldWatch := watchConfigTargetsForRuntime
+	var starts int
+	var cleanups int
+	watchConfigTargetsForRuntime = func(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh chan struct{}, stderr io.Writer) func() {
+		starts++
+		return func() { cleanups++ }
+	}
+	t.Cleanup(func() { watchConfigTargetsForRuntime = oldWatch })
+
+	cityPath := t.TempDir()
+	cr := &CityRuntime{
+		cityPath:    cityPath,
+		tomlPath:    filepath.Join(cityPath, "city.toml"),
+		configDirty: &atomic.Bool{},
+		pokeCh:      make(chan struct{}, 1),
+		stderr:      io.Discard,
+		watchTargets: []config.WatchTarget{
+			{Path: filepath.Join(cityPath, "agents"), Recursive: true},
+		},
+	}
+
+	cr.restartConfigWatcher()
+	if starts != 1 || cleanups != 0 {
+		t.Fatalf("after initial restart starts=%d cleanups=%d, want 1/0", starts, cleanups)
+	}
+
+	// Same target set in different order/path spelling must not rebuild the
+	// fsnotify watcher. Rebuilding on every reload was the source of the
+	// controller FD climb: each rebuild can retain a kqueue DIR fd per watched
+	// agent/config directory on Darwin if cleanup races or backend close is not
+	// fully effective.
+	cr.updateConfigWatcherTargets([]config.WatchTarget{
+		{Path: filepath.Join(cityPath, ".", "agents"), Recursive: true},
+	})
+	if starts != 1 || cleanups != 0 {
+		t.Fatalf("unchanged targets restarted watcher: starts=%d cleanups=%d, want 1/0", starts, cleanups)
+	}
+
+	cr.stopConfigWatcher()
+	if starts != 1 || cleanups != 1 {
+		t.Fatalf("after stop starts=%d cleanups=%d, want 1/1", starts, cleanups)
+	}
+}
+
+func TestCityRuntimeUpdateConfigWatcherTargetsRestartsWhenChanged(t *testing.T) {
+	oldWatch := watchConfigTargetsForRuntime
+	var starts int
+	var cleanups int
+	watchConfigTargetsForRuntime = func(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh chan struct{}, stderr io.Writer) func() {
+		starts++
+		return func() { cleanups++ }
+	}
+	t.Cleanup(func() { watchConfigTargetsForRuntime = oldWatch })
+
+	cityPath := t.TempDir()
+	cr := &CityRuntime{
+		cityPath:    cityPath,
+		tomlPath:    filepath.Join(cityPath, "city.toml"),
+		configDirty: &atomic.Bool{},
+		pokeCh:      make(chan struct{}, 1),
+		stderr:      io.Discard,
+		watchTargets: []config.WatchTarget{
+			{Path: filepath.Join(cityPath, "agents"), Recursive: true},
+		},
+	}
+
+	cr.restartConfigWatcher()
+	cr.updateConfigWatcherTargets([]config.WatchTarget{
+		{Path: filepath.Join(cityPath, "agents"), Recursive: true},
+		{Path: filepath.Join(cityPath, "packs", "extra"), Recursive: true},
+	})
+	if starts != 2 || cleanups != 1 {
+		t.Fatalf("changed targets starts=%d cleanups=%d, want 2/1", starts, cleanups)
+	}
+
+	cr.stopConfigWatcher()
+	if starts != 2 || cleanups != 2 {
+		t.Fatalf("after stop starts=%d cleanups=%d, want 2/2", starts, cleanups)
+	}
+}
+
 func TestCityRuntimeReloadRestartsConfigWatcherWithNewPackTargets(t *testing.T) {
 	old := debounceDelay
 	debounceDelay = 5 * time.Millisecond
