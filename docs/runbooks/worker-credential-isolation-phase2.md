@@ -195,6 +195,21 @@ use.
 
 ## Phase-3 broker / per-worker LLM credential scope
 
+### Launch-time shared secret scrub switch
+
+The tmux runtime supports the launch-env control
+`GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS=1`. When present in an agent's configured
+launch environment, the runtime prefixes the pane command with `env -u` for the
+default shared supervisor credential names used by
+`worker-secret-env-preflight.sh`, then unsets the control variable itself.
+Explicit non-empty values in the configured agent env win, so a future broker can
+still inject a scoped per-worker token intentionally while blocking accidental
+inheritance from the tmux/supervisor environment.
+
+This switch is a launch scrub, not a credential broker. It should be enabled for
+workers once their needed model/GitHub/compute credentials come from explicit
+scoped broker material rather than inherited supervisor env vars.
+
 Target end-state: workers do not inherit shared supervisor API keys. The launcher
 should start workers with a scrubbed environment and provide only the credentials
 that worker is authorized to use, ideally through a broker that can mint or
