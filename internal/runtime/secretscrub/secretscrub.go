@@ -1,6 +1,7 @@
 package secretscrub
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,6 +121,67 @@ func ValidateScopedCredentialEnvFile(path string) error {
 	return err
 }
 
+// WriteScopedCredentialEnvFile atomically writes broker-issued scoped
+// credentials to path using the same contract enforced at worker launch. The
+// caller supplies values out-of-band (for example from a broker or environment
+// lookup); returned errors mention keys/paths only and never include values.
+func WriteScopedCredentialEnvFile(path string, entries map[string]string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%s output path must be an absolute path", ScopedCredentialEnvFileEnv)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("scoped credential env file requires at least one credential key")
+	}
+	if err := validateScopedCredentialEntries(entries); err != nil {
+		return err
+	}
+	data, err := formatScopedCredentialEnvFile(entries)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create scoped credential env dir: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create scoped credential env temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod scoped credential env temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write scoped credential env temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync scoped credential env temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close scoped credential env temp file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("chmod scoped credential env temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("install scoped credential env file: %w", err)
+	}
+	cleanup = false
+	if err := ValidateScopedCredentialEnvFile(path); err != nil {
+		return fmt.Errorf("validate written scoped credential env file: %w", err)
+	}
+	return nil
+}
+
 func loadScopedCredentialEnvFile(path string) (map[string]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%s must be an absolute path", ScopedCredentialEnvFileEnv)
@@ -142,18 +204,62 @@ func loadScopedCredentialEnvFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse scoped credential env file: invalid dotenv syntax")
 	}
-	for k, v := range parsed {
-		if !validEnvKey(k) {
-			return nil, fmt.Errorf("scoped credential env file contains invalid env key %q", k)
-		}
-		if !allowedScopedCredentialKey(k) {
-			return nil, fmt.Errorf("scoped credential env file key %s is not an allowed credential key", k)
-		}
-		if strings.TrimSpace(v) == "" {
-			return nil, fmt.Errorf("scoped credential env file key %s has an empty value", k)
-		}
+	if err := validateScopedCredentialEntries(parsed); err != nil {
+		return nil, err
 	}
 	return parsed, nil
+}
+
+func validateScopedCredentialEntries(parsed map[string]string) error {
+	for k, v := range parsed {
+		if !validEnvKey(k) {
+			return fmt.Errorf("scoped credential env file contains invalid env key %q", k)
+		}
+		if !allowedScopedCredentialKey(k) {
+			return fmt.Errorf("scoped credential env file key %s is not an allowed credential key", k)
+		}
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("scoped credential env file key %s has an empty value", k)
+		}
+	}
+	return nil
+}
+
+func formatScopedCredentialEnvFile(entries map[string]string) ([]byte, error) {
+	keys := make([]string, 0, len(entries))
+	for k := range entries {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var buf bytes.Buffer
+	for _, k := range keys {
+		v := entries[k]
+		formatted, err := formatScopedCredentialEnvValue(k, v)
+		if err != nil {
+			return nil, err
+		}
+		buf.WriteString(k)
+		buf.WriteByte('=')
+		buf.WriteString(formatted)
+		buf.WriteByte('\n')
+	}
+	return buf.Bytes(), nil
+}
+
+func formatScopedCredentialEnvValue(key, value string) (string, error) {
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("scoped credential env file key %s contains an unsupported newline", key)
+	}
+	if strings.TrimSpace(value) == value {
+		return value, nil
+	}
+	if !strings.Contains(value, `"`) {
+		return `"` + value + `"`, nil
+	}
+	if !strings.Contains(value, `'`) {
+		return `'` + value + `'`, nil
+	}
+	return "", fmt.Errorf("scoped credential env file key %s contains unsupported surrounding whitespace plus quotes", key)
 }
 
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
