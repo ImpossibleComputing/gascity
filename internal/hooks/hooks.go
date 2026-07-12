@@ -706,6 +706,9 @@ func CodexHooksNeedManagedUpgrade(data []byte, cityDir string) bool {
 
 func applyCodexManagedHookUpgrade(root any, desired []byte, cityDir string) bool {
 	changed := upgradeCodexHookValue(root, "", cityDir)
+	if normalizeCodexManagedHookEntries(root, cityDir) {
+		changed = true
+	}
 	if addCodexPreCompactHook(root, desired) {
 		changed = true
 	}
