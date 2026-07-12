@@ -10,6 +10,7 @@ import (
 
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
 )
 
 func TestResolveTemplatePrependsGCBinDirToPATH(t *testing.T) {
@@ -98,6 +99,99 @@ func TestResolveTemplatePrependsGCBinDirToConfiguredAgentPATH(t *testing.T) {
 		if parts[i] != want {
 			t.Fatalf("PATH entry %d = %q, want %q (PATH=%q)", i, parts[i], want, tp.Env["PATH"])
 		}
+	}
+}
+
+func TestResolveTemplateProjectsScopedCredentialEnvFileField(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	rigRoot := filepath.Join(cityPath, "rigs", "demo")
+	if err := os.MkdirAll(rigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	params := &agentBuildParams{
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Provider: "test"},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		rigs:       []config.Rig{{Name: "demo", Path: rigRoot}},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+
+	agent := &config.Agent{
+		Name:                    "codex",
+		Dir:                     "demo",
+		ScopedCredentialEnvFile: ".gc/worker-creds/{{.Rig}}/{{.AgentBase}}.env",
+	}
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+
+	want := filepath.Join(cityPath, ".gc", "worker-creds", "demo", "codex.env")
+	if got := tp.Env[secretscrub.ScopedCredentialEnvFileEnv]; got != want {
+		t.Fatalf("%s = %q, want %q", secretscrub.ScopedCredentialEnvFileEnv, got, want)
+	}
+}
+
+func TestResolveTemplateRejectsScopedCredentialEnvFileFieldAndEnvConflict(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	params := &agentBuildParams{
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Provider: "test"},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name:                    "codex",
+		ScopedCredentialEnvFile: ".gc/worker-creds/codex.env",
+		Env:                     map[string]string{secretscrub.ScopedCredentialEnvFileEnv: "/tmp/other.env"},
+	}
+
+	_, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err == nil {
+		t.Fatal("resolveTemplate succeeded, want conflict error")
+	}
+	if !strings.Contains(err.Error(), "sets both scoped_credential_env_file") {
+		t.Fatalf("error = %v, want scoped_credential_env_file conflict", err)
+	}
+}
+
+func TestResolveTemplateRejectsBadScopedCredentialEnvFileTemplate(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+	params := &agentBuildParams{
+		cityName:   "city",
+		cityPath:   cityPath,
+		workspace:  &config.Workspace{Provider: "test"},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name:                    "codex",
+		ScopedCredentialEnvFile: ".gc/worker-creds/{{.NoSuchField}}.env",
+	}
+
+	_, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err == nil {
+		t.Fatal("resolveTemplate succeeded, want template error")
+	}
+	if !strings.Contains(err.Error(), "expand scoped_credential_env_file") {
+		t.Fatalf("error = %v, want scoped_credential_env_file expansion context", err)
 	}
 }
 

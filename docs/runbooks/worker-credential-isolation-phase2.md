@@ -221,15 +221,20 @@ The tmux runtime can also consume a broker-issued credential env file before
 starting the worker:
 
 ```toml
-[env]
-GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE = "/absolute/path/to/worker-scoped.env"
+scoped_credential_env_file = ".gc/worker-credentials/{{.Agent}}.env"
 ```
 
 The file uses the same simple `KEY=VALUE` dotenv subset as other Gas City env
 files, but it is intentionally narrow because this is a credential channel, not
 a general launch-env override:
 
-- the path must be absolute;
+- `scoped_credential_env_file` may be absolute or relative to the city root and
+  accepts the same template placeholders as `work_dir`; the resolved path is
+  projected to `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE` at launch;
+- if you set the legacy `env.GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE` escape hatch
+  directly, it must be absolute;
+- do not set both `scoped_credential_env_file` and
+  `env.GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE` for the same agent;
 - on Unix, the file must be mode `0600` or stricter;
 - keys must be credential keys only (for example `OPENAI_API_KEY`,
   `ANTHROPIC_AUTH_TOKEN`, `GITHUB_TOKEN`, or `GC_GIT_CREDENTIAL_COMMAND`);
@@ -241,14 +246,16 @@ a general launch-env override:
   absent supervisor credential names are still prefixed with `env -u`.
 
 This gives the future broker a concrete launch boundary: mint/write a per-worker
-0600 env file, point the agent at it, and let the runtime inject only those
-scoped credentials while unsetting shared supervisor keys. For GitHub, prefer a
-scoped `GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker;
-do not rely on the supervisor's broad ambient `GH_TOKEN`.
+0600 env file under a private city/runtime location, point the agent's
+`scoped_credential_env_file` at it, and let the runtime inject only those scoped
+credentials while unsetting shared supervisor keys. For GitHub, prefer a scoped
+`GITHUB_TOKEN` or a `GC_GIT_CREDENTIAL_COMMAND` helper from the broker; do not
+rely on the supervisor's broad ambient `GH_TOKEN`.
 
 `gc doctor` also runs the advisory `scoped-worker-credential-files` check for
-any configured `GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE`. It validates the same
-contract before launch — absolute path, private mode, credential-key allowlist,
+any configured `scoped_credential_env_file` or legacy
+`GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE`. It validates the same contract before
+launch — absolute/resolved path, private mode, credential-key allowlist,
 non-empty values, and sanitized parse errors — without printing credential
 values.
 

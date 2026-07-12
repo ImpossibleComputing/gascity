@@ -669,6 +669,9 @@ type AgentOverride struct {
 	Pool *PoolOverride `toml:"pool,omitempty"`
 	// Env adds or overrides environment variables.
 	Env map[string]string `toml:"env,omitempty"`
+	// ScopedCredentialEnvFile overrides the broker-issued scoped credential env
+	// file path template.
+	ScopedCredentialEnvFile *string `toml:"scoped_credential_env_file,omitempty"`
 	// EnvRemove lists env var keys to remove.
 	EnvRemove []string `toml:"env_remove,omitempty"`
 	// PreStart overrides the agent's pre_start commands.
@@ -2963,6 +2966,13 @@ type Agent struct {
 	EmitsPermissionWarning *bool `toml:"emits_permission_warning,omitempty"`
 	// Env sets additional environment variables for the agent process.
 	Env map[string]string `toml:"env,omitempty"`
+	// ScopedCredentialEnvFile points at a broker-issued dotenv file containing
+	// per-worker credentials for this agent. Relative paths resolve against the
+	// city root and the same template placeholders as work_dir are accepted.
+	// At launch this is projected to GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE and
+	// consumed by the supervisor; the path control variable is not passed through
+	// to the worker.
+	ScopedCredentialEnvFile string `toml:"scoped_credential_env_file,omitempty"`
 	// OptionDefaults overrides the provider's effective schema defaults
 	// for this agent. Keys are option keys, values are choice values.
 	// Applied on top of the provider's OptionDefaults (agent keys win).

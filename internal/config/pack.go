@@ -2739,6 +2739,7 @@ func (ov *AgentOverride) toAgentPatch() *AgentPatch {
 		Suspended:               ov.Suspended,
 		Pool:                    ov.Pool,
 		Env:                     ov.Env,
+		ScopedCredentialEnvFile: ov.ScopedCredentialEnvFile,
 		EnvRemove:               ov.EnvRemove,
 		PreStart:                ov.PreStart,
 		PromptTemplate:          ov.PromptTemplate,
