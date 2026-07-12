@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -226,5 +227,90 @@ func TestInternalScopedCredentialEnvFileRejectsSourceEnvFileSymlink(t *testing.T
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		t.Fatalf("output path exists after failure: statErr=%v", statErr)
+	}
+}
+
+func TestInternalScopedCredentialEnvFileWritesAuditLogWithoutLeakingValues(t *testing.T) {
+	t.Setenv("SOURCE_OPENAI", "sk-audit-openai")
+	source := filepath.Join(t.TempDir(), "source.env")
+	if err := os.WriteFile(source, []byte("SCOPED_GITHUB=ghs-audit-github\n"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "creds", "worker.env")
+	auditPath := filepath.Join(t.TempDir(), "audit", "scoped-creds.jsonl")
+	var stdout, stderr bytes.Buffer
+	cmd := newInternalScopedCredentialEnvFileCmd(&stdout, &stderr)
+	cmd.SetArgs([]string{
+		"--out", path,
+		"--from-env", "OPENAI_API_KEY=SOURCE_OPENAI",
+		"--source-env-file", source,
+		"--from-env-file", "GITHUB_TOKEN=SCOPED_GITHUB",
+		"--audit-log", auditPath,
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v stderr=%s", err, stderr.String())
+	}
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	for _, leak := range []string{"sk-audit-openai", "ghs-audit-github"} {
+		if strings.Contains(stdout.String(), leak) || strings.Contains(stderr.String(), leak) || strings.Contains(string(data), leak) {
+			t.Fatalf("leaked %q: stdout=%q stderr=%q audit=%q", leak, stdout.String(), stderr.String(), string(data))
+		}
+	}
+	info, err := os.Stat(auditPath)
+	if err != nil {
+		t.Fatalf("stat audit log: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("audit log mode = %o, want 600", info.Mode().Perm())
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("audit log lines = %d, want 1: %q", len(lines), string(data))
+	}
+	var event scopedCredentialAuditEvent
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil {
+		t.Fatalf("unmarshal audit event: %v", err)
+	}
+	if event.Action != "write-scoped-credential-env-file" || event.Out != path {
+		t.Fatalf("audit event action/out = %q/%q", event.Action, event.Out)
+	}
+	if got, want := strings.Join(event.Keys, ","), "GITHUB_TOKEN,OPENAI_API_KEY"; got != want {
+		t.Fatalf("event keys = %q, want %q", got, want)
+	}
+	if len(event.Sources) != 2 {
+		t.Fatalf("event sources = %#v, want 2", event.Sources)
+	}
+	if event.Sources[0] != (scopedCredentialAuditSource{Key: "GITHUB_TOKEN", Kind: "env-file", SourceKey: "SCOPED_GITHUB"}) ||
+		event.Sources[1] != (scopedCredentialAuditSource{Key: "OPENAI_API_KEY", Kind: "env", SourceKey: "SOURCE_OPENAI"}) {
+		t.Fatalf("event sources = %#v", event.Sources)
+	}
+}
+
+func TestScopedCredentialAuditLogRejectsUnsafePaths(t *testing.T) {
+	if err := appendScopedCredentialAuditLog("relative.jsonl", "/tmp/out.env", map[string]string{"OPENAI_API_KEY": "sk"}, nil); err == nil {
+		t.Fatal("relative audit log path succeeded, want error")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.jsonl")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "audit.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	err := appendScopedCredentialAuditLog(link, "/tmp/out.env", map[string]string{"OPENAI_API_KEY": "sk"}, nil)
+	if err == nil {
+		t.Fatal("symlink audit log path succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "must not be a symlink") {
+		t.Fatalf("error = %v, want symlink rejection", err)
 	}
 }

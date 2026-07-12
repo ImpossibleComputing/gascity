@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/processenv"
 	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
@@ -18,6 +21,7 @@ func newInternalScopedCredentialEnvFileCmd(stdout, stderr io.Writer) *cobra.Comm
 	var fromEnv []string
 	var sourceEnvFile string
 	var fromEnvFile []string
+	var auditLog string
 	cmd := &cobra.Command{
 		Use:          "scoped-credential-env-file",
 		Short:        "Write a scoped worker credential env file",
@@ -26,6 +30,7 @@ func newInternalScopedCredentialEnvFileCmd(stdout, stderr io.Writer) *cobra.Comm
 		Args:         cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			entries := make(map[string]string, len(fromEnv)+len(fromEnvFile))
+			auditSources := make([]scopedCredentialAuditSource, 0, len(fromEnv)+len(fromEnvFile))
 			for _, spec := range fromEnv {
 				key, source, err := parseScopedCredentialFromEnvSpec(spec)
 				if err != nil {
@@ -42,6 +47,7 @@ func newInternalScopedCredentialEnvFileCmd(stdout, stderr io.Writer) *cobra.Comm
 					return errExit
 				}
 				entries[key] = value
+				auditSources = append(auditSources, scopedCredentialAuditSource{Key: key, Kind: "env", SourceKey: source})
 			}
 			if len(fromEnvFile) > 0 {
 				sourceEntries, err := readScopedCredentialSourceEnvFile(sourceEnvFile)
@@ -65,9 +71,14 @@ func newInternalScopedCredentialEnvFileCmd(stdout, stderr io.Writer) *cobra.Comm
 						return errExit
 					}
 					entries[key] = value
+					auditSources = append(auditSources, scopedCredentialAuditSource{Key: key, Kind: "env-file", SourceKey: source})
 				}
 			}
 			if err := secretscrub.WriteScopedCredentialEnvFile(strings.TrimSpace(out), entries); err != nil {
+				fmt.Fprintf(stderr, "gc internal scoped-credential-env-file: %v\n", err) //nolint:errcheck // best-effort stderr
+				return errExit
+			}
+			if err := appendScopedCredentialAuditLog(strings.TrimSpace(auditLog), strings.TrimSpace(out), entries, auditSources); err != nil {
 				fmt.Fprintf(stderr, "gc internal scoped-credential-env-file: %v\n", err) //nolint:errcheck // best-effort stderr
 				return errExit
 			}
@@ -79,6 +90,7 @@ func newInternalScopedCredentialEnvFileCmd(stdout, stderr io.Writer) *cobra.Comm
 	cmd.Flags().StringArrayVar(&fromEnv, "from-env", nil, "copy one credential from the process environment as KEY or KEY=SOURCE_ENV; values are never printed")
 	cmd.Flags().StringVar(&sourceEnvFile, "source-env-file", "", "absolute private dotenv file to read --from-env-file source keys from; values are never printed")
 	cmd.Flags().StringArrayVar(&fromEnvFile, "from-env-file", nil, "copy one credential from --source-env-file as KEY or KEY=SOURCE_KEY; values are never printed")
+	cmd.Flags().StringVar(&auditLog, "audit-log", "", "optional absolute private JSONL audit log path; records key names/paths only, never values")
 	return cmd
 }
 
@@ -132,4 +144,82 @@ func readScopedCredentialSourceEnvFile(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("parse source env file: invalid dotenv syntax")
 	}
 	return entries, nil
+}
+
+type scopedCredentialAuditSource struct {
+	Key       string `json:"key"`
+	Kind      string `json:"kind"`
+	SourceKey string `json:"source_key"`
+}
+
+type scopedCredentialAuditEvent struct {
+	Time    string                        `json:"time"`
+	Action  string                        `json:"action"`
+	Out     string                        `json:"out"`
+	Keys    []string                      `json:"keys"`
+	Sources []scopedCredentialAuditSource `json:"sources"`
+}
+
+func appendScopedCredentialAuditLog(path, out string, entries map[string]string, sources []scopedCredentialAuditSource) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("--audit-log must be an absolute path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create scoped credential audit log dir: %w", err)
+	}
+	file, err := openScopedCredentialAuditLog(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close() //nolint:errcheck // append-only audit log; write/fsync errors are handled below
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat scoped credential audit log: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("scoped credential audit log %q is a directory", path)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("scoped credential audit log %q must not be group/world accessible", path)
+	}
+
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	sortedSources := append([]scopedCredentialAuditSource(nil), sources...)
+	sort.Slice(sortedSources, func(i, j int) bool {
+		if sortedSources[i].Key != sortedSources[j].Key {
+			return sortedSources[i].Key < sortedSources[j].Key
+		}
+		if sortedSources[i].Kind != sortedSources[j].Kind {
+			return sortedSources[i].Kind < sortedSources[j].Kind
+		}
+		return sortedSources[i].SourceKey < sortedSources[j].SourceKey
+	})
+	event := scopedCredentialAuditEvent{
+		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+		Action:  "write-scoped-credential-env-file",
+		Out:     out,
+		Keys:    keys,
+		Sources: sortedSources,
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode scoped credential audit log event: %w", err)
+	}
+	data = append(data, '\n')
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("append scoped credential audit log: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync scoped credential audit log: %w", err)
+	}
+	return nil
 }

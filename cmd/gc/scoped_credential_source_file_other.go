@@ -14,3 +14,11 @@ func openScopedCredentialSourceFile(path string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+func openScopedCredentialAuditLog(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open scoped credential audit log: %w", err)
+	}
+	return file, nil
+}
