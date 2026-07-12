@@ -167,6 +167,32 @@ command lines or inherited environments. This guard is intentionally weaker than
 sandbox: absolute `/bin/ps` can bypass a PATH wrapper, so Phase-3 should still
 scrub inherited environments and remove long-lived secrets from process envs.
 
+### Compute SSH without reopening `~/.ssh`
+
+The worker file sandbox intentionally denies `~/.ssh`: re-allowing that path
+would reopen the credential-theft class the sandbox closed. Sandboxed worker
+access to compute hosts (`ic-workstation`, raw-SSH RunPod-style targets, etc.)
+therefore needs an explicit compute credential path, not ambient user SSH state.
+
+The durable Phase-3 target is a compute broker using the standard SSH-CA
+pattern: a worker generates an ephemeral key under its sandbox runtime; the
+broker signs the public key for a specific host, principal, scope, and TTL; the
+worker invokes ssh with explicit `IdentityFile`, `CertificateFile`, pinned
+`UserKnownHostsFile`, and `IdentitiesOnly=yes`. Static deploy keys in a
+sandbox-allowed path are an interim throughput fallback only: they can be
+scoped and rotated, but a compromised worker can still read them while they are
+allowed.
+
+The core pack includes `assets/scripts/worker-compute-ssh.sh` as the source
+contract for both brokered certs and any time-boxed static-key fallback. It
+refuses relative paths and identity, certificate, or known-hosts paths under `~/.ssh`, disables
+ambient ssh config with `-F /dev/null`, sets only the explicit `IdentityFile`,
+forces `IdentitiesOnly=yes` and `ForwardAgent=no`, pins the known-hosts file,
+and rejects caller-supplied ssh options that could override identity,
+certificate, host-key, proxy, agent-forwarding, or local-command behavior. The helper is
+not a broker by itself; it is the launcher boundary the broker or stopgap should
+use.
+
 ## Phase-3 broker / per-worker LLM credential scope
 
 Target end-state: workers do not inherit shared supervisor API keys. The launcher

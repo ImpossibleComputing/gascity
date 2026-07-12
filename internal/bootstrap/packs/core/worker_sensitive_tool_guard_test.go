@@ -209,6 +209,7 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 		"assets/scripts/worker-sensitive-tool-path.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
 		"assets/scripts/worker-secret-env-preflight.sh",
+		"assets/scripts/worker-compute-ssh.sh",
 		"assets/worker-sensitive-tools/bin/gws",
 		"assets/worker-sensitive-tools/bin/secret-peek",
 		"assets/worker-sensitive-tools/bin/mayor-browser",
@@ -228,6 +229,7 @@ func TestWorkerSensitiveToolPhase1AssetsEmbedded(t *testing.T) {
 		if path != "assets/scripts/worker-sensitive-tool-path.sh" &&
 			path != "assets/scripts/worker-process-listing-guard.sh" &&
 			path != "assets/scripts/worker-secret-env-preflight.sh" &&
+			path != "assets/scripts/worker-compute-ssh.sh" &&
 			!strings.Contains(string(data), "worker-sensitive-tool-guard.sh") {
 			t.Fatalf("%s does not route through worker-sensitive-tool-guard.sh", path)
 		}
@@ -294,6 +296,7 @@ func TestCorePackIncludesWorkerCredentialSandboxAssets(t *testing.T) {
 		"assets/scripts/supervisor-env-surface-audit.sh",
 		"assets/scripts/worker-process-listing-guard.sh",
 		"assets/scripts/worker-secret-env-preflight.sh",
+		"assets/scripts/worker-compute-ssh.sh",
 		"assets/worker-sensitive-tools/bin/ps",
 	} {
 		if _, err := fs.Stat(PackFS, path); err != nil {
@@ -553,6 +556,133 @@ func TestWorkerProcessListingGuardRejectsSelfDeclaredPrivilegeBypass(t *testing.
 			}
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("fake ps marker exists after denied request; err=%v", err)
+			}
+		})
+	}
+}
+
+func TestWorkerComputeSSHUsesExplicitBrokerMaterial(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "called")
+	fake := writeFakeTool(t, marker)
+	identity := filepath.Join(tmp, "worker_ed25519")
+	cert := filepath.Join(tmp, "worker_ed25519-cert.pub")
+	knownHosts := filepath.Join(tmp, "known_hosts")
+
+	got := runGuard(t, guard, []string{"HOME=" + filepath.Join(tmp, "home")},
+		"--real", fake,
+		"--identity", identity,
+		"--certificate", cert,
+		"--known-hosts", knownHosts,
+		"--", "worker@10.0.0.251", "nvidia-smi",
+	)
+	if got.code != 0 {
+		t.Fatalf("guard exit = %d, want 0; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	for _, want := range []string{
+		"-F /dev/null",
+		"-o IdentitiesOnly=yes",
+		"-o IdentityFile=" + identity,
+		"-o UserKnownHostsFile=" + knownHosts,
+		"-o GlobalKnownHostsFile=/dev/null",
+		"-o PasswordAuthentication=no",
+		"-o PreferredAuthentications=publickey",
+		"-o ForwardAgent=no",
+		"-o CertificateFile=" + cert,
+		"worker@10.0.0.251 nvidia-smi",
+	} {
+		if !strings.Contains(got.stdout, want) {
+			t.Fatalf("ssh wrapper output missing %q: stdout=%q stderr=%q", want, got.stdout, got.stderr)
+		}
+	}
+	if strings.Contains(got.stdout, ".ssh") || strings.Contains(got.stderr, ".ssh") {
+		t.Fatalf("ssh wrapper mentioned ambient ~/.ssh path: stdout=%q stderr=%q", got.stdout, got.stderr)
+	}
+}
+
+func TestWorkerComputeSSHRejectsHomeSSHMaterial(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	marker := filepath.Join(tmp, "called")
+	fake := writeFakeTool(t, marker)
+
+	got := runGuard(t, guard, []string{"HOME=" + home},
+		"--real", fake,
+		"--identity", filepath.Join(home, ".ssh", "id_ed25519"),
+		"--known-hosts", filepath.Join(tmp, "known_hosts"),
+		"--", "worker@10.0.0.251",
+	)
+	if got.code != 78 {
+		t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "must not be under ~/.ssh") {
+		t.Fatalf("deny stderr missing ~/.ssh message: %q", got.stderr)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fake ssh marker exists after denied request; err=%v", err)
+	}
+}
+
+func TestWorkerComputeSSHRejectsRelativeMaterialPaths(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "called")
+	fake := writeFakeTool(t, marker)
+
+	got := runGuard(t, guard, []string{"HOME=" + filepath.Join(tmp, "home")},
+		"--real", fake,
+		"--identity", "relative-key",
+		"--known-hosts", filepath.Join(tmp, "known_hosts"),
+		"--", "worker@10.0.0.251",
+	)
+	if got.code != 78 {
+		t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "absolute path") {
+		t.Fatalf("deny stderr missing absolute-path message: %q", got.stderr)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fake ssh marker exists after denied request; err=%v", err)
+	}
+}
+
+func TestWorkerComputeSSHRejectsCallerSSHOverrides(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	baseEnv := []string{"HOME=" + filepath.Join(tmp, "home")}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{name: "identity flag", args: []string{"-i", filepath.Join(tmp, "other")}},
+		{name: "config flag", args: []string{"-F", filepath.Join(tmp, "config")}},
+		{name: "identity option", args: []string{"-o", "IdentityFile=" + filepath.Join(tmp, "other")}},
+		{name: "known hosts option", args: []string{"-oUserKnownHostsFile=" + filepath.Join(tmp, "other_known_hosts")}},
+		{name: "proxy command option", args: []string{"-oProxyCommand=sh -c leak"}},
+		{name: "proxy jump flag", args: []string{"-J", "jump.example"}},
+		{name: "agent forward flag", args: []string{"-A"}},
+		{name: "agent forward option", args: []string{"-oForwardAgent=yes"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "called")
+			fake := writeFakeTool(t, marker)
+			args := []string{
+				"--real", fake,
+				"--identity", filepath.Join(tmp, "worker_ed25519"),
+				"--known-hosts", filepath.Join(tmp, "known_hosts"),
+				"--",
+			}
+			args = append(args, tt.args...)
+			args = append(args, "worker@10.0.0.251")
+			got := runGuard(t, guard, baseEnv, args...)
+			if got.code != 78 {
+				t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("fake ssh marker exists after denied request; err=%v", err)
 			}
 		})
 	}
