@@ -26,7 +26,7 @@ func TestScopedWorkerCredentialFilesCheckOKWhenValid(t *testing.T) {
 	path := writeScopedWorkerCredentialTestFile(t, "OPENAI_API_KEY=scoped\nGC_GIT_CREDENTIAL_COMMAND=/broker/gitcred\n", 0o600)
 	cfg := &config.City{Agents: []config.Agent{{Name: "codex", Env: map[string]string{secretscrub.ScopedCredentialEnvFileEnv: path}}}}
 
-	result := NewScopedWorkerCredentialFilesCheck(cfg).Run(&CheckContext{})
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
 	if result.Status != StatusOK {
 		t.Fatalf("Status = %v, want OK (message %q details %#v)", result.Status, result.Message, result.Details)
 	}
@@ -43,7 +43,7 @@ func TestScopedWorkerCredentialFilesCheckWarnsWithoutLeakingValues(t *testing.T)
 		{Name: "bad-syntax", Env: map[string]string{secretscrub.ScopedCredentialEnvFileEnv: badSyntax}},
 	}}
 
-	result := NewScopedWorkerCredentialFilesCheck(cfg).Run(&CheckContext{})
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
 	if result.Status != StatusWarning {
 		t.Fatalf("Status = %v, want Warning (message %q)", result.Status, result.Message)
 	}
@@ -72,7 +72,7 @@ func TestScopedWorkerCredentialFilesCheckWarnsOnRelativeMissingAndLooseMode(t *t
 		{Name: "loose", Env: map[string]string{secretscrub.ScopedCredentialEnvFileEnv: loose}},
 	}}
 
-	result := NewScopedWorkerCredentialFilesCheck(cfg).Run(&CheckContext{})
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
 	if result.Status != StatusWarning {
 		t.Fatalf("Status = %v, want Warning (message %q)", result.Status, result.Message)
 	}
@@ -86,8 +86,49 @@ func TestScopedWorkerCredentialFilesCheckWarnsOnRelativeMissingAndLooseMode(t *t
 
 func TestScopedWorkerCredentialFilesCheckOKWhenNoneConfigured(t *testing.T) {
 	cfg := &config.City{Agents: []config.Agent{{Name: "worker"}}}
-	result := NewScopedWorkerCredentialFilesCheck(cfg).Run(&CheckContext{})
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
 	if result.Status != StatusOK {
 		t.Fatalf("Status = %v, want OK", result.Status)
+	}
+}
+
+func TestScopedWorkerCredentialFilesCheckSupportsConfiguredFieldTemplate(t *testing.T) {
+	cityPath := t.TempDir()
+	path := filepath.Join(cityPath, ".gc", "worker-creds", "codex.env")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("OPENAI_API_KEY=scoped\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.City{
+		Agents: []config.Agent{{
+			Name:                    "codex",
+			ScopedCredentialEnvFile: ".gc/worker-creds/{{.Agent}}.env",
+		}},
+	}
+
+	result := NewScopedWorkerCredentialFilesCheck(cfg, cityPath).Run(&CheckContext{})
+	if result.Status != StatusOK {
+		t.Fatalf("Status = %v, want OK (message %q details %#v)", result.Status, result.Message, result.Details)
+	}
+}
+
+func TestScopedWorkerCredentialFilesCheckWarnsOnFieldAndEnvConflict(t *testing.T) {
+	cfg := &config.City{Agents: []config.Agent{{
+		Name:                    "codex",
+		ScopedCredentialEnvFile: ".gc/worker-creds/codex.env",
+		Env:                     map[string]string{secretscrub.ScopedCredentialEnvFileEnv: "/tmp/other.env"},
+	}}}
+
+	result := NewScopedWorkerCredentialFilesCheck(cfg, t.TempDir()).Run(&CheckContext{})
+	if result.Status != StatusWarning {
+		t.Fatalf("Status = %v, want Warning", result.Status)
+	}
+	joined := strings.Join(result.Details, "\n")
+	for _, want := range []string{"codex", "sets both scoped_credential_env_file", secretscrub.ScopedCredentialEnvFileEnv} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("details missing %q:\n%s", want, joined)
+		}
 	}
 }

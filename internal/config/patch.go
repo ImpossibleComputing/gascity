@@ -39,6 +39,9 @@ type AgentPatch struct {
 	Pool *PoolOverride `toml:"pool,omitempty"`
 	// Env adds or overrides environment variables.
 	Env map[string]string `toml:"env,omitempty"`
+	// ScopedCredentialEnvFile overrides the broker-issued scoped credential env
+	// file path template.
+	ScopedCredentialEnvFile *string `toml:"scoped_credential_env_file,omitempty"`
 	// EnvRemove lists env var keys to remove after merging.
 	EnvRemove []string `toml:"env_remove,omitempty"`
 	// PreStart overrides the agent's pre_start commands.
@@ -585,6 +588,9 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 		for k, v := range p.Env {
 			a.Env[k] = v
 		}
+	}
+	if p.ScopedCredentialEnvFile != nil {
+		a.ScopedCredentialEnvFile = *p.ScopedCredentialEnvFile
 	}
 	// EnvRemove: remove keys after merge.
 	for _, k := range p.EnvRemove {

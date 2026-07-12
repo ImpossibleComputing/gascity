@@ -29,8 +29,10 @@ import (
 	"github.com/gastownhall/gascity/internal/convergence"
 	"github.com/gastownhall/gascity/internal/materialize"
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/shellquote"
+	workdirutil "github.com/gastownhall/gascity/internal/workdir"
 )
 
 const (
@@ -482,6 +484,20 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		// abstract render and ambient/agent env for the keys it sets).
 		for k, v := range expandEnvMap(spec.Env) {
 			env[k] = v
+		}
+	}
+	if scopedPath := strings.TrimSpace(cfgAgent.ScopedCredentialEnvFile); scopedPath != "" {
+		if existing := strings.TrimSpace(env[secretscrub.ScopedCredentialEnvFileEnv]); existing != "" {
+			return TemplateParams{}, fmt.Errorf("agent %q sets both scoped_credential_env_file and env.%s", qualifiedName, secretscrub.ScopedCredentialEnvFileEnv)
+		}
+		ctx := workdirutil.PathContextForQualifiedName(p.cityPath, p.cityName, qualifiedName, *cfgAgent, p.rigs)
+		expanded, err := workdirutil.ExpandTemplateStrict(scopedPath, ctx)
+		if err != nil {
+			return TemplateParams{}, fmt.Errorf("agent %q: expand scoped_credential_env_file %q: %w", qualifiedName, scopedPath, err)
+		}
+		expanded = strings.TrimSpace(expanded)
+		if expanded != "" {
+			env[secretscrub.ScopedCredentialEnvFileEnv] = workdirutil.ResolveDirPath(p.cityPath, expanded)
 		}
 	}
 
