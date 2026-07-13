@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Resolve stale `.gc/system/packs/...` agent file references through the
+  composed pack cache.** Existing cities that still have explicit
+  `prompt_template`, `overlay_dir`, `namepool`, or `session_setup_script`
+  values pointing at the retired per-city system-pack tree no longer depend on
+  that removed directory for spawn or `gc doctor config-refs`.
 - **Pin the `beads` dependency to the stable v1.0.4.** v1.3.0 built against
   `beads v1.0.5`, which was subsequently withdrawn (demoted to a pre-release;
   `v1.0.4` is the current stable release). v1.3.1 repins the `beads` Go module

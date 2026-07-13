@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -2677,6 +2678,75 @@ version = "` + BundledPackImportVersion + `"
 	if dir := cfg.PackDirByName("core"); dir != "" {
 		t.Errorf("PackDirByName(core) = %q, want empty on fake FS", dir)
 	}
+}
+
+func TestLoadWithIncludesNormalizesRetiredSystemPackAgentRefs(t *testing.T) {
+	city := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(city, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", path, err)
+		}
+	}
+	write("city.toml", ``)
+	write("agents/bragi/agent.toml", fmt.Sprintf(`
+prompt_template = %q
+overlay_dir = ".gc/system/packs/core/overlay/per-provider/codex"
+namepool = %q
+session_setup_script = ".gc/system/packs/core/assets/scripts/session-setup.sh"
+`, filepath.Join(city, ".gc", "system", "packs", "core", "assets", "prompts", "pool-worker.md"),
+		filepath.Join(city, ".gc", "system", "packs", "core", "assets", "namepools", "workers.txt")))
+	write("agents/custom/agent.toml", fmt.Sprintf(`
+prompt_template = %q
+`, filepath.Join(city, ".gc", "system", "packs", "missing", "assets", "prompts", "worker.md")))
+	write("pack.toml", `
+[pack]
+name = "test"
+schema = 2
+
+[imports.core]
+source = "packs/core"
+`)
+	write("packs/core/pack.toml", `
+[pack]
+name = "core"
+schema = 2
+`)
+
+	cfg, _, err := LoadWithIncludes(fsys.OSFS{}, filepath.Join(city, "city.toml"))
+	if err != nil {
+		t.Fatalf("LoadWithIncludes: %v", err)
+	}
+	var bragi, custom *Agent
+	for i := range cfg.Agents {
+		switch cfg.Agents[i].Name {
+		case "bragi":
+			bragi = &cfg.Agents[i]
+		case "custom":
+			custom = &cfg.Agents[i]
+		}
+	}
+	if bragi == nil {
+		t.Fatal("bragi agent not found")
+	}
+	assertPath := func(field, got, want string) {
+		t.Helper()
+		if got != want {
+			t.Fatalf("%s = %q, want %q", field, got, want)
+		}
+	}
+	assertPath("PromptTemplate", bragi.PromptTemplate, filepath.Join(city, "packs", "core", "assets", "prompts", "pool-worker.md"))
+	assertPath("OverlayDir", bragi.OverlayDir, filepath.Join(city, "packs", "core", "overlay", "per-provider", "codex"))
+	assertPath("Namepool", bragi.Namepool, filepath.Join(city, "packs", "core", "assets", "namepools", "workers.txt"))
+	assertPath("SessionSetupScript", bragi.SessionSetupScript, filepath.Join(city, "packs", "core", "assets", "scripts", "session-setup.sh"))
+	if custom == nil {
+		t.Fatal("custom agent not found")
+	}
+	assertPath("unknown pack prompt", custom.PromptTemplate, filepath.Join(city, ".gc", "system", "packs", "missing", "assets", "prompts", "worker.md"))
 }
 
 // TestLoadWithIncludes_FragmentAgentDefaultsUpstreamPropagates verifies that an

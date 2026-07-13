@@ -10,6 +10,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/pathutil"
 	"github.com/gastownhall/gascity/internal/pricing"
 )
 
@@ -656,6 +657,7 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 	}
 	ApplyAgentDefaults(root)
 	ApplyBeadPolicyDefaults(root)
+	normalizeRetiredSystemPackAgentPaths(root, cityRoot)
 
 	// Canonicalize duration-or-"off" session sleep fields after all config
 	// layers have been applied so runtime consumers can trust the values.
@@ -1799,6 +1801,72 @@ func (c *City) PackDirByName(name string) string {
 		}
 	}
 	return ""
+}
+
+func (c *City) packDirByNameAcrossAllDirs(name string) string {
+	for _, dir := range c.AllPackDirs() {
+		if readPackNameFromDir(dir) == name {
+			return dir
+		}
+	}
+	return ""
+}
+
+// normalizeRetiredSystemPackAgentPaths rewrites stale config references into
+// the resolved pack-cache directory. Gas City 1.3 retired per-city
+// .gc/system/packs materialization, but some existing cities have explicit
+// agent prompt_template / overlay_dir / namepool / session_setup_script values
+// that still point at that tree. The composed config must resolve those to the
+// currently imported pack directory so spawn and doctor do not depend on a
+// removed compatibility directory.
+func normalizeRetiredSystemPackAgentPaths(c *City, cityRoot string) {
+	if c == nil {
+		return
+	}
+	for i := range c.Agents {
+		a := &c.Agents[i]
+		a.PromptTemplate = c.normalizeRetiredSystemPackPath(cityRoot, a.PromptTemplate)
+		a.OverlayDir = c.normalizeRetiredSystemPackPath(cityRoot, a.OverlayDir)
+		a.Namepool = c.normalizeRetiredSystemPackPath(cityRoot, a.Namepool)
+		a.SessionSetupScript = c.normalizeRetiredSystemPackPath(cityRoot, a.SessionSetupScript)
+	}
+}
+
+func (c *City) normalizeRetiredSystemPackPath(cityRoot, p string) string {
+	packName, rel, ok := retiredSystemPackPathParts(cityRoot, p)
+	if !ok {
+		return p
+	}
+	if packDir := c.packDirByNameAcrossAllDirs(packName); packDir != "" {
+		return filepath.Join(packDir, rel)
+	}
+	return p
+}
+
+func retiredSystemPackPathParts(cityRoot, p string) (packName, rel string, ok bool) {
+	if p == "" {
+		return "", "", false
+	}
+	clean := filepath.Clean(p)
+	root := filepath.Join(".gc", "system", "packs")
+	if filepath.IsAbs(clean) && cityRoot != "" {
+		if r, err := filepath.Rel(filepath.Join(cityRoot, root), clean); err == nil && !pathutil.IsOutsideDir(r) && r != "." {
+			return splitRetiredSystemPackRel(r)
+		}
+		return "", "", false
+	}
+	if r, err := filepath.Rel(root, clean); err == nil && !pathutil.IsOutsideDir(r) && r != "." {
+		return splitRetiredSystemPackRel(r)
+	}
+	return "", "", false
+}
+
+func splitRetiredSystemPackRel(r string) (packName, rel string, ok bool) {
+	parts := strings.SplitN(filepath.Clean(r), string(os.PathSeparator), 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // ReachablePackNames reports every pack name reachable from the config's
