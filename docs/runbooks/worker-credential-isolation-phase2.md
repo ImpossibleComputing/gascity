@@ -126,9 +126,20 @@ The tmux launch path converts empty configured values into `env -u <KEY>` for
 the agent command. `GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS=1` also asks the runtime
 to unset the default shared-secret names before launch, then drop that control
 variable itself; this gives the non-LLM maintenance agents (`bd.dog` and
-`core.control-dispatcher`) a drift-resistant first rollout target. This is not
-enough for Codex/LLM workers that actually need model access; those need the
-Phase-3 broker/per-worker credential path below before any broad/default flip.
+`core.control-dispatcher`) a drift-resistant first rollout target.
+
+Credential-scrubbed launches also force `ZDOTDIR=/var/empty` at tmux
+`new-session` time. This is required because zsh reads `~/.zshenv` for
+non-interactive shells; a human dotfile that re-exports provider keys can
+otherwise re-add a key immediately after `env -u` removed it. Do not treat a
+clean `supervisor-provider-creds` plist check as fleet closure by itself: it
+proves only that the supervisor LaunchAgent no longer stores provider keys.
+Closure also requires either isolating shell startup for newly launched workers
+and recycling old sessions, or removing/revoking the upstream dotfile source.
+
+This is not enough for Codex/LLM workers that actually need model access; those
+need the Phase-3 broker/per-worker credential path below before any
+broad/default flip.
 
 To verify a worker's current environment without exposing values, run:
 

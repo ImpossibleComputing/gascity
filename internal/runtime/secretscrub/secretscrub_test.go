@@ -2,6 +2,7 @@ package secretscrub
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,6 +39,59 @@ func TestApplyDefaultUnsetsScrubsAbsentDefaultsAndPreservesExplicitScopedValues(
 	}
 	if _, ok := env["GH_TOKEN"]; ok {
 		t.Fatalf("original env mutated: %#v", env)
+	}
+}
+
+func TestApplyShellStartupIsolationWhenScrubbingSecrets(t *testing.T) {
+	unchanged := map[string]string{"LANG": "en_US.UTF-8"}
+	if got := ApplyShellStartupIsolation(unchanged); got[ZDOTDIREnv] != "" || got["LANG"] != "en_US.UTF-8" {
+		t.Fatalf("ApplyShellStartupIsolation changed env without scrub signal: %#v", got)
+	}
+
+	defaultScrub := ApplyDefaultUnsets(map[string]string{
+		EnableDefaultScrubEnv: "1",
+		"ZDOTDIR":             "/Users/example",
+	})
+	got := ApplyShellStartupIsolation(defaultScrub)
+	if got[ZDOTDIREnv] != IsolatedZDOTDIR {
+		t.Fatalf("%s = %q, want isolated %q", ZDOTDIREnv, got[ZDOTDIREnv], IsolatedZDOTDIR)
+	}
+
+	explicitUnset := ApplyShellStartupIsolation(map[string]string{
+		"GEMINI_API_KEY": "",
+		"ZDOTDIR":        "/Users/example",
+	})
+	if explicitUnset[ZDOTDIREnv] != IsolatedZDOTDIR {
+		t.Fatalf("explicit credential unset did not isolate %s: %#v", ZDOTDIREnv, explicitUnset)
+	}
+}
+
+func TestIsolatedZDOTDIRPreventsZshenvReexport(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte("export GC_ZSHENV_REEXPORT=from-dotfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readVar := func(env []string) string {
+		t.Helper()
+		cmd := exec.Command(zsh, "-c", `printf '%s' "${GC_ZSHENV_REEXPORT-unset}"`)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("zsh probe failed: %v: %s", err, out)
+		}
+		return string(out)
+	}
+	baseEnv := []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	if got := readVar(baseEnv); got != "from-dotfile" {
+		t.Fatalf("positive control .zshenv value = %q, want from-dotfile", got)
+	}
+	isolatedEnv := append(append([]string{}, baseEnv...), ZDOTDIREnv+"="+IsolatedZDOTDIR)
+	if got := readVar(isolatedEnv); got != "unset" {
+		t.Fatalf("isolated %s still sourced user .zshenv: got %q", ZDOTDIREnv, got)
 	}
 }
 

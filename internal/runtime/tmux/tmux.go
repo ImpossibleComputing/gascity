@@ -449,6 +449,7 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 		return err
 	}
 	env = secretscrub.ApplyDefaultUnsets(env)
+	env = secretscrub.ApplyShellStartupIsolation(env)
 	if err := validateSessionName(name); err != nil {
 		return err
 	}

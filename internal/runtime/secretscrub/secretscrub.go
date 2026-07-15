@@ -29,6 +29,15 @@ const ScopedCredentialEnvFileEnv = "GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE"
 // exposing a broad supervisor GH_TOKEN/GITHUB_TOKEN to the launched worker.
 const ScopedGitCredentialCommandEnv = "GC_GIT_CREDENTIAL_COMMAND"
 
+// ZDOTDIREnv controls where zsh reads per-user startup files from.
+const ZDOTDIREnv = "ZDOTDIR"
+
+// IsolatedZDOTDIR points zsh at a non-user startup directory for credential-
+// scrubbed worker launches. This prevents ~/.zshenv from re-exporting shared
+// provider keys immediately after gc unsets them. The path does not need to
+// exist; if it is absent, zsh simply finds no per-user startup files there.
+const IsolatedZDOTDIR = "/var/empty"
+
 // DefaultWorkerSecretEnvKeys names shared supervisor credential variables that
 // a scrubbed worker launch should not inherit implicitly. Keep this list in sync
 // with the core pack's worker-secret-env-preflight.sh default forbid list.
@@ -322,4 +331,31 @@ func ApplyDefaultUnsets(env map[string]string) map[string]string {
 	}
 	out[EnableDefaultScrubEnv] = ""
 	return out
+}
+
+// ApplyShellStartupIsolation forces zsh startup lookup away from the user's
+// dotfiles whenever a worker launch is scrubbing shared credential env vars.
+// Without this, ~/.zshenv can re-export a provider key after env -u removed it.
+func ApplyShellStartupIsolation(env map[string]string) map[string]string {
+	if !needsShellStartupIsolation(env) {
+		return env
+	}
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	out[ZDOTDIREnv] = IsolatedZDOTDIR
+	return out
+}
+
+func needsShellStartupIsolation(env map[string]string) bool {
+	if Enabled(env[EnableDefaultScrubEnv]) {
+		return true
+	}
+	for k, v := range env {
+		if v == "" && IsWorkerCredentialEnvKey(k) {
+			return true
+		}
+	}
+	return false
 }
