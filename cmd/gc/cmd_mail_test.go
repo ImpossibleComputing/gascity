@@ -3285,9 +3285,12 @@ func TestMailCheckInjectFormatsMessages(t *testing.T) {
 func TestMailCheckInjectLimitsMessageCount(t *testing.T) {
 	store := beads.NewMemStore()
 	mp := beadmail.New(store)
-	mp.Send("sender-a", "recipient", "", "first")  //nolint:errcheck
+	mp.Send("sender-a", "recipient", "", "first") //nolint:errcheck
+	time.Sleep(time.Millisecond)
 	mp.Send("sender-b", "recipient", "", "second") //nolint:errcheck
-	mp.Send("sender-c", "recipient", "", "third")  //nolint:errcheck
+	time.Sleep(time.Millisecond)
+	mp.Send("sender-c", "recipient", "", "third") //nolint:errcheck
+	time.Sleep(time.Millisecond)
 	mp.Send("sender-d", "recipient", "", "fourth") //nolint:errcheck
 
 	var stdout bytes.Buffer
@@ -3297,13 +3300,13 @@ func TestMailCheckInjectLimitsMessageCount(t *testing.T) {
 	}
 
 	out := stdout.String()
-	for _, want := range []string{"4 unread message(s)", "gc-1 from sender-a", "gc-2 from sender-b", "gc-3 from sender-c", "Showing the first 3 message(s)"} {
+	for _, want := range []string{"4 unread message(s)", "gc-4 from sender-d", "gc-3 from sender-c", "gc-2 from sender-b", "Showing the 3 most recent message(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "gc-4") || strings.Contains(out, "fourth") {
-		t.Errorf("stdout should not include the fourth message:\n%s", out)
+	if strings.Contains(out, "gc-1") || strings.Contains(out, "first") {
+		t.Errorf("stdout should not include the older hidden message:\n%s", out)
 	}
 }
 
@@ -3481,11 +3484,6 @@ func TestMailCheckInjectArchivesAutoHandoffMessages(t *testing.T) {
 func TestMailCheckInjectLeavesTruncatedAutoHandoffMessages(t *testing.T) {
 	store := beads.NewMemStore()
 	mp := beadmail.New(store)
-	for i := 0; i < mailInjectMaxMessages; i++ {
-		if _, err := mp.Send("human", "mayor", fmt.Sprintf("ordinary-%d", i), "still open"); err != nil {
-			t.Fatalf("Send ordinary %d: %v", i, err)
-		}
-	}
 	auto, err := store.Create(beads.Bead{
 		Title:    "context cycle",
 		Type:     "message",
@@ -3495,6 +3493,12 @@ func TestMailCheckInjectLeavesTruncatedAutoHandoffMessages(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Create auto handoff: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	for i := 0; i < mailInjectMaxMessages; i++ {
+		if _, err := mp.Send("human", "mayor", fmt.Sprintf("ordinary-%d", i), "still open"); err != nil {
+			t.Fatalf("Send ordinary %d: %v", i, err)
+		}
 	}
 
 	var stdout, stderr bytes.Buffer
