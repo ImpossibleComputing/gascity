@@ -1,3 +1,4 @@
+// Package secretscrub validates and applies worker credential environment scrub rules.
 package secretscrub
 
 import (
@@ -67,6 +68,7 @@ var DefaultWorkerSecretEnvKeys = []string{
 	"ZAI_API_KEY",
 }
 
+// Enabled reports whether a launch control value enables default secret scrubbing.
 func Enabled(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "yes", "on":

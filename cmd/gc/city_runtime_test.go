@@ -5006,7 +5006,7 @@ func TestCityRuntimeUpdateConfigWatcherTargetsSkipsRestartWhenUnchanged(t *testi
 	oldWatch := watchConfigTargetsForRuntime
 	var starts int
 	var cleanups int
-	watchConfigTargetsForRuntime = func(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh chan struct{}, stderr io.Writer) func() {
+	watchConfigTargetsForRuntime = func(_ []config.WatchTarget, _ *atomic.Bool, _ chan struct{}, _ io.Writer) func() {
 		starts++
 		return func() { cleanups++ }
 	}
@@ -5051,7 +5051,7 @@ func TestCityRuntimeUpdateConfigWatcherTargetsRestartsWhenChanged(t *testing.T) 
 	oldWatch := watchConfigTargetsForRuntime
 	var starts int
 	var cleanups int
-	watchConfigTargetsForRuntime = func(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh chan struct{}, stderr io.Writer) func() {
+	watchConfigTargetsForRuntime = func(_ []config.WatchTarget, _ *atomic.Bool, _ chan struct{}, _ io.Writer) func() {
 		starts++
 		return func() { cleanups++ }
 	}

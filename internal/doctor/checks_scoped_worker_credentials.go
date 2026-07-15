@@ -19,18 +19,24 @@ type ScopedWorkerCredentialFilesCheck struct {
 	cityPath string
 }
 
+// NewScopedWorkerCredentialFilesCheck constructs the scoped worker credential file doctor check.
 func NewScopedWorkerCredentialFilesCheck(cfg *config.City, cityPath string) *ScopedWorkerCredentialFilesCheck {
 	return &ScopedWorkerCredentialFilesCheck{cfg: cfg, cityPath: cityPath}
 }
 
+// Name returns the stable doctor check name.
 func (c *ScopedWorkerCredentialFilesCheck) Name() string { return "scoped-worker-credential-files" }
 
+// CanFix reports whether this advisory check can automatically repair findings.
 func (c *ScopedWorkerCredentialFilesCheck) CanFix() bool { return false }
 
+// WarmupEligible reports whether this check should run during warmup.
 func (c *ScopedWorkerCredentialFilesCheck) WarmupEligible() bool { return false }
 
+// Fix is a no-op because scoped credential file issues need operator action.
 func (c *ScopedWorkerCredentialFilesCheck) Fix(_ *CheckContext) error { return nil }
 
+// Run validates configured scoped credential env files without exposing values.
 func (c *ScopedWorkerCredentialFilesCheck) Run(_ *CheckContext) *CheckResult {
 	r := &CheckResult{Name: c.Name(), Severity: SeverityAdvisory}
 	if c.cfg == nil {
