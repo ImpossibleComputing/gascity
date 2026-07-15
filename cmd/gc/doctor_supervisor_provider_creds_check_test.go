@@ -33,6 +33,8 @@ func TestSupervisorProviderCredsCheckWarnsWithNamesOnly(t *testing.T) {
     <key>GC_HOME</key><string>/tmp/gc-home</string>
     <key>OPENAI_API_KEY</key><string>sk-openai-secret</string>
     <key>GEMINI_API_KEY</key><string>gemini-secret</string>
+    <key>CLAUDE_CODE_OAUTH_TOKEN</key><string>claude-oauth-secret</string>
+    <key>CLAUDE_CONFIG_DIR</key><string>/tmp/claude-config</string>
     <key>UNRELATED_SECRET</key><string>do-not-report</string>
   </dict>
 </dict></plist>`)
@@ -45,15 +47,18 @@ func TestSupervisorProviderCredsCheckWarnsWithNamesOnly(t *testing.T) {
 		t.Fatalf("Severity = %v, want advisory", result.Severity)
 	}
 	joined := strings.Join(result.Details, "\n")
-	for _, want := range []string{"GEMINI_API_KEY", "OPENAI_API_KEY"} {
+	for _, want := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "GEMINI_API_KEY", "OPENAI_API_KEY"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("details missing %s: %q", want, joined)
 		}
 	}
-	for _, leak := range []string{"sk-openai-secret", "gemini-secret", "UNRELATED_SECRET", "do-not-report"} {
+	for _, leak := range []string{"sk-openai-secret", "gemini-secret", "claude-oauth-secret", "UNRELATED_SECRET", "do-not-report"} {
 		if strings.Contains(joined, leak) || strings.Contains(result.Message, leak) || strings.Contains(result.FixHint, leak) {
 			t.Fatalf("result leaked %q: message=%q details=%q fix=%q", leak, result.Message, joined, result.FixHint)
 		}
+	}
+	if strings.Contains(joined, "CLAUDE_CONFIG_DIR") {
+		t.Fatalf("details included non-credential CLAUDE_CONFIG_DIR: %q", joined)
 	}
 	if !strings.Contains(result.FixHint, supervisorOmitProviderCredsEnv) || !strings.Contains(result.FixHint, supervisorSecretsEnvFileName) {
 		t.Fatalf("FixHint = %q, want omit env and secrets file", result.FixHint)

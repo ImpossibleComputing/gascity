@@ -60,6 +60,7 @@ var providerCredentialEnvPrefixes = []string{
 // providerCredentialEnvKeys lists exact provider credential/config env vars for
 // providers whose common env namespace is broader than provider auth.
 var providerCredentialEnvKeys = map[string]bool{
+	"CLAUDE_CODE_OAUTH_TOKEN":                true,
 	"AWS_ACCESS_KEY_ID":                      true,
 	"AWS_BEARER_TOKEN_BEDROCK":               true,
 	"AWS_CA_BUNDLE":                          true,

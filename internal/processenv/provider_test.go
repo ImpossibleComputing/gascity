@@ -20,6 +20,23 @@ func TestIsProviderCredentialEnvMatchesCuratedAllowlist(t *testing.T) {
 	}
 }
 
+func TestIsProviderCredentialEnvClassifiesClaudeOAuthTokenOnly(t *testing.T) {
+	if !IsProviderCredentialEnv("CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatal("CLAUDE_CODE_OAUTH_TOKEN must be treated as provider credential env")
+	}
+	for _, key := range []string{
+		"CLAUDE_CONFIG_DIR",
+		"CLAUDE_CODE_SUBAGENT_MODEL",
+		"CLAUDE_CODE_EFFORT_LEVEL",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+		"CLAUDE_CODE_ENTRYPOINT",
+	} {
+		if IsProviderCredentialEnv(key) {
+			t.Fatalf("IsProviderCredentialEnv(%q) = true, want false; do not add a broad CLAUDE_ prefix", key)
+		}
+	}
+}
+
 func TestIsProviderCredentialEnvRejectsNearMisses(t *testing.T) {
 	for _, key := range []string{
 		"",
