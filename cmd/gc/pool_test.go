@@ -828,6 +828,8 @@ func TestDeepCopyAgentCoversAllFields(t *testing.T) {
 		MaxActiveSessions:            intPtr(5),
 		MinActiveSessions:            intPtr(1),
 		ScaleCheck:                   "echo 3",
+		SandboxProfile:               ".gc/security/worker.sb",
+		ScopedCredentialEnvFile:      ".gc/scoped/worker.env",
 		WorkQuery:                    "bd ready",
 		SlingQuery:                   "bd update {}",
 		IdleTimeout:                  "15m",

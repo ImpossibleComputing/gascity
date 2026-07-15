@@ -232,7 +232,7 @@ use.
 
 The launch/config/preflight/materialization pieces below are plumbing. The
 credential authority that decides issuance, revocation, audit, and cutover is
-drafted separately in [Phase-3 worker credential authority architecture](worker-credential-authority-phase3.md).
+drafted separately in [Phase-3 worker credential authority architecture](worker-credential-authority-phase3).
 Do not treat the plumbing as final isolation until that authority is approved and
 live workers use scoped/revocable credentials.
 

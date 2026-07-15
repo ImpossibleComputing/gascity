@@ -212,7 +212,10 @@
             "group": "Operate",
             "pages": [
               "runbooks/managed-city-endpoints",
-              "runbooks/worker-credential-isolation-phase1"
+              "runbooks/worker-credential-isolation-phase1",
+              "runbooks/worker-credential-isolation-phase2",
+              "runbooks/worker-credential-authority-phase3",
+              "runbooks/supervisor-isolation-feasibility-20260714"
             ]
           }
         ]
