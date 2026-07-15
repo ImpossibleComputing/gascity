@@ -722,11 +722,7 @@ func doMailCheckTargetWithFormat(mp mail.Provider, target resolvedMailTarget, in
 				fmt.Fprintf(stderr, "gc mail check: writing hook output: %v\n", err) //nolint:errcheck // best-effort stderr
 				return 0
 			}
-			injectedMessages := messages
-			if len(injectedMessages) > mailInjectMaxMessages {
-				injectedMessages = injectedMessages[:mailInjectMaxMessages]
-			}
-			archiveInjectedAutoHandoffMessages(mp, injectedMessages, stderr)
+			archiveInjectedAutoHandoffMessages(mp, mailInjectMessagesToDisplay(messages), stderr)
 		}
 		return 0 // --inject always exits 0
 	}
@@ -760,15 +756,15 @@ func archiveInjectedAutoHandoffMessages(mp mail.Provider, messages []mail.Messag
 // formatInjectOutput formats messages as a <system-reminder> block for
 // injection into an agent's prompt via a UserPromptSubmit hook.
 func formatInjectOutput(messages []mail.Message) string {
+	displayed := mailInjectMessagesToDisplay(messages)
+
 	var sb strings.Builder
 	sb.WriteString("<system-reminder>\n")
 	fmt.Fprintf(&sb, "You have %d unread message(s).\n\n", len(messages))
-	limit := len(messages)
-	if limit > mailInjectMaxMessages {
-		limit = mailInjectMaxMessages
-		fmt.Fprintf(&sb, "Showing the first %d message(s) here; run 'gc mail inbox' for the full list.\n\n", limit)
+	if len(displayed) < len(messages) {
+		fmt.Fprintf(&sb, "Showing the %d most recent message(s) here; run 'gc mail inbox' for the full list.\n\n", len(displayed))
 	}
-	for _, m := range messages[:limit] {
+	for _, m := range displayed {
 		// Sanitize attacker-controllable fields (sender identity, subject,
 		// body) before interpolating into the <system-reminder> block.
 		// Without this, a sender can inject </system-reminder> sequences
@@ -795,6 +791,17 @@ func formatInjectOutput(messages []mail.Message) string {
 	sb.WriteString("\nRun 'gc mail read <id>' for full details, or 'gc mail inbox' to see all.\n")
 	sb.WriteString("</system-reminder>\n")
 	return sb.String()
+}
+
+func mailInjectMessagesToDisplay(messages []mail.Message) []mail.Message {
+	ordered := append([]mail.Message(nil), messages...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].CreatedAt.After(ordered[j].CreatedAt)
+	})
+	if len(ordered) > mailInjectMaxMessages {
+		ordered = ordered[:mailInjectMaxMessages]
+	}
+	return ordered
 }
 
 func mailInjectSubjectPreview(subject string) (string, bool) {
