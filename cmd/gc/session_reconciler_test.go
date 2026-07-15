@@ -1190,11 +1190,14 @@ func TestQueueDrainAckAsyncStopRecoversStopPanic(t *testing.T) {
 func TestQueueDrainAckAsyncStopPokesAfterSuccessfulStop(t *testing.T) {
 	var pokeCalls int
 	var pokeMu sync.Mutex
+	cityPath := t.TempDir()
 	old := drainAckAsyncStopPokeController
-	drainAckAsyncStopPokeController = func(string) error {
-		pokeMu.Lock()
-		pokeCalls++
-		pokeMu.Unlock()
+	drainAckAsyncStopPokeController = func(path string) error {
+		if path == cityPath {
+			pokeMu.Lock()
+			pokeCalls++
+			pokeMu.Unlock()
+		}
 		return nil
 	}
 	t.Cleanup(func() { drainAckAsyncStopPokeController = old })
@@ -1206,7 +1209,7 @@ func TestQueueDrainAckAsyncStopPokesAfterSuccessfulStop(t *testing.T) {
 	}
 	var stderr synchronizedBuffer
 	tracker := &asyncStartTracker{}
-	queueDrainAckAsyncStop("", store, sp, &config.City{}, "gc-worker", "worker", "", tracker, &stderr)
+	queueDrainAckAsyncStop(cityPath, store, sp, &config.City{}, "gc-worker", "worker", "", tracker, &stderr)
 	if !tracker.wait(time.Second) {
 		t.Fatal("async drain-ack stop did not complete")
 	}
@@ -1226,11 +1229,14 @@ func TestQueueDrainAckAsyncStopPokesAfterSuccessfulStop(t *testing.T) {
 func TestQueueDrainAckAsyncStopDoesNotPokeOnHardError(t *testing.T) {
 	var pokeCalls int
 	var pokeMu sync.Mutex
+	cityPath := t.TempDir()
 	old := drainAckAsyncStopPokeController
-	drainAckAsyncStopPokeController = func(string) error {
-		pokeMu.Lock()
-		pokeCalls++
-		pokeMu.Unlock()
+	drainAckAsyncStopPokeController = func(path string) error {
+		if path == cityPath {
+			pokeMu.Lock()
+			pokeCalls++
+			pokeMu.Unlock()
+		}
 		return nil
 	}
 	t.Cleanup(func() { drainAckAsyncStopPokeController = old })
@@ -1243,7 +1249,7 @@ func TestQueueDrainAckAsyncStopDoesNotPokeOnHardError(t *testing.T) {
 	sp.StopErrors = map[string]error{"worker": errors.New("hard kill error")}
 	var stderr synchronizedBuffer
 	tracker := &asyncStartTracker{}
-	queueDrainAckAsyncStop("", store, sp, &config.City{}, "gc-worker", "worker", "", tracker, &stderr)
+	queueDrainAckAsyncStop(cityPath, store, sp, &config.City{}, "gc-worker", "worker", "", tracker, &stderr)
 	if !tracker.wait(time.Second) {
 		t.Fatal("async drain-ack stop did not complete")
 	}
@@ -1265,11 +1271,14 @@ func TestQueueDrainAckAsyncStopDoesNotPokeOnHardError(t *testing.T) {
 func TestQueueDrainAckAsyncStopTokenFenceSkipsReusedName(t *testing.T) {
 	var pokeCalls int
 	var pokeMu sync.Mutex
+	cityPath := t.TempDir()
 	old := drainAckAsyncStopPokeController
-	drainAckAsyncStopPokeController = func(string) error {
-		pokeMu.Lock()
-		pokeCalls++
-		pokeMu.Unlock()
+	drainAckAsyncStopPokeController = func(path string) error {
+		if path == cityPath {
+			pokeMu.Lock()
+			pokeCalls++
+			pokeMu.Unlock()
+		}
 		return nil
 	}
 	t.Cleanup(func() { drainAckAsyncStopPokeController = old })
@@ -1287,7 +1296,7 @@ func TestQueueDrainAckAsyncStopTokenFenceSkipsReusedName(t *testing.T) {
 	var stderr synchronizedBuffer
 	tracker := &asyncStartTracker{}
 	// We queued the stop for the OLD session (stale token).
-	queueDrainAckAsyncStop("", store, sp, &config.City{}, "gc-worker", "worker", "stale-token", tracker, &stderr)
+	queueDrainAckAsyncStop(cityPath, store, sp, &config.City{}, "gc-worker", "worker", "stale-token", tracker, &stderr)
 	if !tracker.wait(time.Second) {
 		t.Fatal("async drain-ack stop did not complete")
 	}
