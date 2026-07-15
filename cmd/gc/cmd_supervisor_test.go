@@ -561,6 +561,8 @@ func TestBuildSupervisorServiceDataIncludesProviderEnv(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKIA123")
 	t.Setenv("AWS_PAGER", "less")
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(homeDir, ".claude"))
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth-token")
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "sonnet")
 	t.Setenv("GC_SUPERVISOR_ENV", "CUSTOM_PROVIDER_TOKEN,IGNORED_EMPTY")
 	t.Setenv("CUSTOM_PROVIDER_TOKEN", "custom-token")
 	t.Setenv("IGNORED_EMPTY", "")
@@ -573,16 +575,18 @@ func TestBuildSupervisorServiceDataIncludesProviderEnv(t *testing.T) {
 
 	got := supervisorServiceEnvMap(data.ExtraEnv)
 	for key, want := range map[string]string{
-		"ANTHROPIC_API_KEY":     "sk-ant-123",
-		"ANTHROPIC_BASE_URL":    "https://anthropic.example.test",
-		"OPENAI_API_KEY":        "sk-openai-123",
-		"GEMINI_API_KEY":        "gemini-123",
-		"GOOGLE_CLOUD_PROJECT":  "gc-project",
-		"DEEPSEEK_API_KEY":      "ds-123",
-		"OLLAMA_HOST":           "http://localhost:11434",
-		"AWS_ACCESS_KEY_ID":     "AKIA123",
-		"CLAUDE_CONFIG_DIR":     filepath.Join(homeDir, ".claude"),
-		"CUSTOM_PROVIDER_TOKEN": "custom-token",
+		"ANTHROPIC_API_KEY":          "sk-ant-123",
+		"ANTHROPIC_BASE_URL":         "https://anthropic.example.test",
+		"OPENAI_API_KEY":             "sk-openai-123",
+		"GEMINI_API_KEY":             "gemini-123",
+		"GOOGLE_CLOUD_PROJECT":       "gc-project",
+		"DEEPSEEK_API_KEY":           "ds-123",
+		"OLLAMA_HOST":                "http://localhost:11434",
+		"AWS_ACCESS_KEY_ID":          "AKIA123",
+		"CLAUDE_CONFIG_DIR":          filepath.Join(homeDir, ".claude"),
+		"CLAUDE_CODE_OAUTH_TOKEN":    "claude-oauth-token",
+		"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+		"CUSTOM_PROVIDER_TOKEN":      "custom-token",
 	} {
 		if got[key] != want {
 			t.Fatalf("ExtraEnv[%s] = %q, want %q (all env: %#v)", key, got[key], want, got)
@@ -610,6 +614,8 @@ func TestBuildSupervisorServiceDataOmitsProviderEnvWhenOptedOut(t *testing.T) {
 	t.Setenv("OLLAMA_HOST", "http://localhost:11434")
 	t.Setenv("AWS_ACCESS_KEY_ID", "AKIA123")
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(homeDir, ".claude"))
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth-token")
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "sonnet")
 	t.Setenv("GC_SUPERVISOR_ENV", "CUSTOM_PROVIDER_TOKEN")
 	t.Setenv("CUSTOM_PROVIDER_TOKEN", "custom-token")
 	t.Setenv(supervisorOmitProviderCredsEnv, "1")
@@ -629,6 +635,7 @@ func TestBuildSupervisorServiceDataOmitsProviderEnvWhenOptedOut(t *testing.T) {
 		"DEEPSEEK_API_KEY",
 		"OLLAMA_HOST",
 		"AWS_ACCESS_KEY_ID",
+		"CLAUDE_CODE_OAUTH_TOKEN",
 	} {
 		if _, ok := got[key]; ok {
 			t.Fatalf("ExtraEnv should not include provider key %s when %s=1: %#v",
@@ -636,8 +643,9 @@ func TestBuildSupervisorServiceDataOmitsProviderEnvWhenOptedOut(t *testing.T) {
 		}
 	}
 	for key, want := range map[string]string{
-		"CLAUDE_CONFIG_DIR":     filepath.Join(homeDir, ".claude"),
-		"CUSTOM_PROVIDER_TOKEN": "custom-token",
+		"CLAUDE_CONFIG_DIR":          filepath.Join(homeDir, ".claude"),
+		"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+		"CUSTOM_PROVIDER_TOKEN":      "custom-token",
 	} {
 		if got[key] != want {
 			t.Fatalf("ExtraEnv[%s] = %q, want %q (all env: %#v)", key, got[key], want, got)
