@@ -158,7 +158,8 @@ func (p *threadMailProvider) Thread(string) ([]mail.Message, error) {
 
 type multiRecipientInboxMailProvider struct {
 	exactRecipientMailProvider
-	calls [][]string
+	calls    [][]string
+	messages []mail.Message
 }
 
 func (p *multiRecipientInboxMailProvider) Inbox(recipient string) ([]mail.Message, error) {
@@ -167,6 +168,9 @@ func (p *multiRecipientInboxMailProvider) Inbox(recipient string) ([]mail.Messag
 
 func (p *multiRecipientInboxMailProvider) InboxRecipients(recipients []string) ([]mail.Message, error) {
 	p.calls = append(p.calls, append([]string(nil), recipients...))
+	if p.messages != nil {
+		return append([]mail.Message(nil), p.messages...), nil
+	}
 	return []mail.Message{{ID: "multi-1", To: strings.Join(recipients, ",")}}, nil
 }
 
@@ -199,6 +203,30 @@ func TestMailInboxForRecipientsUsesMultiRecipientProvider(t *testing.T) {
 	want := []string{"sky", "mayor"}
 	if fmt.Sprint(mp.calls[0]) != fmt.Sprint(want) {
 		t.Fatalf("InboxRecipients recipients = %#v, want %#v", mp.calls[0], want)
+	}
+}
+
+func TestMailInboxForRecipientsOrdersNewestFirst(t *testing.T) {
+	base := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	mp := &multiRecipientInboxMailProvider{messages: []mail.Message{
+		{ID: "msg-oldest", To: "mayor", CreatedAt: base.Add(1 * time.Minute)},
+		{ID: "msg-middle", To: "mayor", CreatedAt: base.Add(2 * time.Minute)},
+		{ID: "msg-newer", To: "mayor", CreatedAt: base.Add(3 * time.Minute)},
+		{ID: "msg-newest", To: "mayor", CreatedAt: base.Add(4 * time.Minute)},
+	}}
+
+	msgs, err := mailInboxForRecipients(mp, []string{"mayor"})
+	if err != nil {
+		t.Fatalf("mailInboxForRecipients: %v", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("messages = %d, want 4", len(msgs))
+	}
+	if msgs[0].ID != "msg-newest" {
+		t.Fatalf("first message = %q, want newest first; messages=%#v", msgs[0].ID, msgs)
+	}
+	if msgs[0].ID == "msg-oldest" {
+		t.Fatalf("oldest/provider-head message remained first: %#v", msgs)
 	}
 }
 
@@ -891,6 +919,49 @@ func assertStoreSlowProblem(t *testing.T, rec *httptest.ResponseRecorder) {
 	}
 	if !strings.HasPrefix(problem.Detail, "store_slow:") {
 		t.Fatalf("detail = %q, want store_slow prefix", problem.Detail)
+	}
+}
+
+func TestMailAPIInboxCombinesProvidersNewestFirstBeforeLimit(t *testing.T) {
+	base := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	state := newFakeState(t)
+	state.cityMailProv = nil
+	providers := map[string]mail.Provider{
+		"rig-a": &exactRecipientMailProvider{messages: map[string][]mail.Message{
+			"mayor": {
+				{ID: "a-oldest", To: "mayor", Body: "oldest", CreatedAt: base.Add(1 * time.Minute)},
+				{ID: "a-middle", To: "mayor", Body: "middle", CreatedAt: base.Add(2 * time.Minute)},
+			},
+		}},
+		"rig-b": &exactRecipientMailProvider{messages: map[string][]mail.Message{
+			"mayor": {
+				{ID: "b-newer", To: "mayor", Body: "newer", CreatedAt: base.Add(3 * time.Minute)},
+				{ID: "b-newest", To: "mayor", Body: "newest", CreatedAt: base.Add(4 * time.Minute)},
+			},
+		}},
+	}
+	wrapped := &multiProviderFakeState{fakeState: state, providers: providers}
+	h := newTestCityHandler(t, wrapped)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", cityURL(state, "/mail?agent=mayor&limit=2"), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got struct {
+		Items []mail.Message `json:"items"`
+		Total int            `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode inbox: %v; body: %s", err, rec.Body.String())
+	}
+	if got.Total != 4 {
+		t.Fatalf("total = %d, want 4; items=%#v", got.Total, got.Items)
+	}
+	ids := []string{got.Items[0].ID, got.Items[1].ID}
+	want := []string{"b-newest", "b-newer"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("limited item IDs = %#v, want %#v; items=%#v", ids, want, got.Items)
 	}
 }
 

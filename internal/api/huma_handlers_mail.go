@@ -266,6 +266,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 		if allMsgs == nil {
 			allMsgs = []mail.Message{}
 		}
+		mail.SortMessagesNewestFirst(allMsgs)
 		partial := len(partialErrs) > 0
 		if !pp.IsPaging {
 			total := len(allMsgs)
@@ -351,6 +352,7 @@ func (s *Server) humaHandleMailList(ctx context.Context, input *MailListInput) (
 		if allMsgs == nil {
 			allMsgs = []mail.Message{}
 		}
+		mail.SortMessagesNewestFirst(allMsgs)
 		partial := len(partialErrs) > 0
 		if !pp.IsPaging {
 			total := len(allMsgs)

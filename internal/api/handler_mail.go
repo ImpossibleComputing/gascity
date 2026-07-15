@@ -295,7 +295,12 @@ func (s *Server) configuredMailRecipientAddress(store beads.Store, identifier st
 func mailInboxForRecipients(mp mail.Provider, recipients []string) ([]mail.Message, error) {
 	recipients = uniqueMailRecipients(recipients)
 	if inboxer, ok := mp.(mail.MultiRecipientInboxer); ok {
-		return inboxer.InboxRecipients(recipients)
+		msgs, err := inboxer.InboxRecipients(recipients)
+		if err != nil {
+			return nil, err
+		}
+		mail.SortMessagesNewestFirst(msgs)
+		return msgs, nil
 	}
 	return mailMessagesForRecipients(mp.Inbox, recipients)
 }
@@ -323,6 +328,7 @@ func mailMessagesForRecipients(fetch func(string) ([]mail.Message, error), recip
 			all = append(all, msg)
 		}
 	}
+	mail.SortMessagesNewestFirst(all)
 	return all, nil
 }
 

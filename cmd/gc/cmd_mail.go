@@ -1368,12 +1368,7 @@ func collectMailMessages(fetch func(string) ([]mail.Message, error), recipients 
 	for _, id := range order {
 		result = append(result, seen[id])
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
-			return result[i].ID < result[j].ID
-		}
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
-	})
+	mail.SortMessagesNewestFirst(result)
 	return result, nil
 }
 
@@ -1455,8 +1450,10 @@ func newMailInboxCmd(stdout, stderr io.Writer) *cobra.Command {
 		Short: "List unread messages (defaults to your inbox)",
 		Long: `List all unread messages for a session alias or human.
 
-Shows message ID, sender, subject, and body in a table. The recipient defaults
-to $GC_SESSION_ID, $GC_ALIAS, $GC_AGENT, or "human". Pass a session alias to view another inbox.`,
+Shows message ID, sender, subject, and body in a table. Messages are ordered newest first
+by created_at; ties use message ID descending, and zero/missing timestamps sort last.
+The recipient defaults to $GC_SESSION_ID, $GC_ALIAS, $GC_AGENT, or "human". Pass a
+session alias to view another inbox.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if cmdMailInboxWithJSON(args, jsonOut, stdout, stderr) != 0 {

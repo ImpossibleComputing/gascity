@@ -2137,8 +2137,10 @@ gc mail delete <id>... [flags]
 
 List all unread messages for a session alias or human.
 
-Shows message ID, sender, subject, and body in a table. The recipient defaults
-to $GC_SESSION_ID, $GC_ALIAS, $GC_AGENT, or "human". Pass a session alias to view another inbox.
+Shows message ID, sender, subject, and body in a table. Messages are ordered newest first
+by created_at; ties use message ID descending, and zero/missing timestamps sort last.
+The recipient defaults to $GC_SESSION_ID, $GC_ALIAS, $GC_AGENT, or "human". Pass a
+session alias to view another inbox.
 
 ```
 gc mail inbox [session] [flags]
