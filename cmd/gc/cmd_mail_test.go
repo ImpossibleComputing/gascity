@@ -3282,6 +3282,7 @@ func TestMailCheckInjectFormatsMessages(t *testing.T) {
 	}
 }
 
+// Positive control: newest mail must be displayed by the inject hook.
 func TestMailCheckInjectLimitsMessageCount(t *testing.T) {
 	store := beads.NewMemStore()
 	mp := beadmail.New(store)
