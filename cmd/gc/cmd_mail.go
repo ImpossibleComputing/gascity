@@ -796,7 +796,7 @@ func formatInjectOutput(messages []mail.Message) string {
 func mailInjectMessagesToDisplay(messages []mail.Message) []mail.Message {
 	ordered := append([]mail.Message(nil), messages...)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+		return ordered[i].CreatedAt.After(ordered[j].CreatedAt)
 	})
 	if len(ordered) > mailInjectMaxMessages {
 		ordered = ordered[:mailInjectMaxMessages]
