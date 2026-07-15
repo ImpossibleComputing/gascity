@@ -819,6 +819,14 @@ func isBdNotFound(err error) bool {
 		strings.Contains(msg, "no issues found")
 }
 
+func isBdAmbiguousID(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "ambiguous id")
+}
+
 func isBdClaimConflictMessage(msg string) bool {
 	msg = strings.ToLower(msg)
 	return strings.Contains(msg, "already assigned") ||
@@ -1006,6 +1014,9 @@ func effectiveStorageFlags(b Bead, storage StorageClass) (ephemeral bool, noHist
 func (s *BdStore) Get(id string) (Bead, error) {
 	out, err := s.runner(s.dir, "bd", "show", "--json", id)
 	if err != nil {
+		if isBdAmbiguousID(err) {
+			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrIDCollision)
+		}
 		if isBdNotFound(err) {
 			return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
 		}

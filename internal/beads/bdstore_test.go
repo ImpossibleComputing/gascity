@@ -521,6 +521,30 @@ func TestBdStoreGetExactIDGuard(t *testing.T) {
 	}
 }
 
+func TestBdStoreGetAmbiguousIDGuard(t *testing.T) {
+	runner := fakeRunner(map[string]struct {
+		out []byte
+		err error
+	}{
+		`bd show --json tyr`: {
+			err: fmt.Errorf(`exit status 1: Error fetching tyr: ambiguous ID "tyr" matches 4 issues: [gt-rtyro gt-wisp-6ltyri1 gt-wisp-n6tyro5 gt-wisp-erlutyr]`),
+		},
+	})
+	s := beads.NewBdStore("/city", runner)
+
+	_, err := s.Get("tyr")
+
+	if err == nil {
+		t.Fatal("Get returned nil error, want ErrIDCollision")
+	}
+	if !errors.Is(err, beads.ErrNotFound) {
+		t.Errorf("Get error = %v, want errors.Is(err, ErrNotFound) true", err)
+	}
+	if !errors.Is(err, beads.ErrIDCollision) {
+		t.Errorf("Get error = %v, want errors.Is(err, ErrIDCollision) true", err)
+	}
+}
+
 // TestBdStoreMutationsPassThroughOnNotFound verifies that Update/Delete/Close
 // always reach bd directly (internal hot-path callers supply canonical full IDs;
 // the exact-ID collision guard lives at the CLI/API entry points — gcy-g4o).

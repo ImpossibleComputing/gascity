@@ -95,6 +95,37 @@ func TestResolveSessionID_Alias(t *testing.T) {
 	}
 }
 
+type exactIDCollisionStore struct {
+	*beads.MemStore
+	collisionID string
+}
+
+func (s *exactIDCollisionStore) Get(id string) (beads.Bead, error) {
+	if id == s.collisionID {
+		return beads.Bead{}, fmt.Errorf("getting bead %q: %w", id, beads.ErrIDCollision)
+	}
+	return s.MemStore.Get(id)
+}
+
+func TestResolveSessionID_AliasSurvivesExactIDCollision(t *testing.T) {
+	store := &exactIDCollisionStore{MemStore: beads.NewMemStore(), collisionID: "tyr"}
+	b, _ := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias": "tyr",
+		},
+	})
+
+	id, err := session.ResolveSessionID(store, "tyr")
+	if err != nil {
+		t.Fatalf("ResolveSessionID() error = %v", err)
+	}
+	if id != b.ID {
+		t.Fatalf("ResolveSessionID() = %q, want %q", id, b.ID)
+	}
+}
+
 type noBroadSessionListStore struct {
 	*beads.MemStore
 	t *testing.T

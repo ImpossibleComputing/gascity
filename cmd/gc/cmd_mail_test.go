@@ -952,6 +952,65 @@ func TestResolveMailTargetsIncludesAliasHistoryAndSessionID(t *testing.T) {
 	}
 }
 
+type mailExactIDCollisionStore struct {
+	*beads.MemStore
+	collisionID string
+}
+
+func (s *mailExactIDCollisionStore) Get(id string) (beads.Bead, error) {
+	if id == s.collisionID {
+		return beads.Bead{}, fmt.Errorf("getting bead %q: %w", id, beads.ErrIDCollision)
+	}
+	return s.MemStore.Get(id)
+}
+
+func TestResolveMailTargetsAliasSurvivesExactIDCollision(t *testing.T) {
+	store := &mailExactIDCollisionStore{MemStore: beads.NewMemStore(), collisionID: "tyr"}
+	b, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias": "tyr",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	target, err := resolveMailTargets(store, "tyr")
+	if err != nil {
+		t.Fatalf("resolveMailTargets: %v", err)
+	}
+	if target.display != "tyr" {
+		t.Fatalf("display = %q, want tyr", target.display)
+	}
+	want := []string{"tyr", b.ID}
+	if strings.Join(target.recipients, ",") != strings.Join(want, ",") {
+		t.Fatalf("recipients = %#v, want %#v", target.recipients, want)
+	}
+}
+
+func TestResolveMailIdentityAliasSurvivesExactIDCollision(t *testing.T) {
+	store := &mailExactIDCollisionStore{MemStore: beads.NewMemStore(), collisionID: "tyr"}
+	if _, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias": "tyr",
+		},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	sender, err := resolveMailIdentityCached(store, "tyr", nil)
+	if err != nil {
+		t.Fatalf("resolveMailIdentityCached: %v", err)
+	}
+	if sender != "tyr" {
+		t.Fatalf("sender = %q, want tyr", sender)
+	}
+}
+
 func TestResolveMailTargets_BareRigScopedNamedUsesUniqueLiveConfiguredNamedSession(t *testing.T) {
 	store := beads.NewMemStore()
 	b, err := store.Create(beads.Bead{
