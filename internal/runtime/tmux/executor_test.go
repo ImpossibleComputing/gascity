@@ -156,6 +156,61 @@ func TestNewSessionWithCommandAndEnvScrubsDefaultWorkerSecrets(t *testing.T) {
 	}
 }
 
+func TestNewSessionWithCommandAndEnvIsolatesZshStartupWhenScrubbingSecrets(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	env := map[string]string{
+		"GC_WORKER_SECRET_ENV_SCRUB_DEFAULTS": "1",
+		"LANG":                                "en_US.UTF-8",
+	}
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-secret-zdotdir", "", "claude", env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	if len(exec.calls) == 0 {
+		t.Fatal("no tmux calls recorded")
+	}
+	args := exec.calls[0]
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "\x00-e\x00ZDOTDIR=/var/empty\x00") {
+		t.Fatalf("new-session args missing isolated ZDOTDIR -e flag: %v", args)
+	}
+	cmd := args[len(args)-1]
+	if !strings.Contains(cmd, "-u GEMINI_API_KEY") {
+		t.Fatalf("command %q missing credential unset", cmd)
+	}
+	if strings.Contains(cmd, "-u ZDOTDIR") {
+		t.Fatalf("command %q must not unset isolated ZDOTDIR", cmd)
+	}
+}
+
+func TestNewSessionWithCommandAndEnvIsolatesZshStartupForExplicitCredentialUnset(t *testing.T) {
+	exec := &fakeExecutor{}
+	tm := NewTmux()
+	tm.exec = exec
+
+	env := map[string]string{
+		"GEMINI_API_KEY": "",
+		"LANG":           "en_US.UTF-8",
+	}
+	if err := tm.NewSessionWithCommandAndEnv("gc-test-empty-credential-zdotdir", "", "claude", env); err != nil {
+		t.Fatalf("NewSessionWithCommandAndEnv: %v", err)
+	}
+	if len(exec.calls) == 0 {
+		t.Fatal("no tmux calls recorded")
+	}
+	args := exec.calls[0]
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "\x00-e\x00ZDOTDIR=/var/empty\x00") {
+		t.Fatalf("new-session args missing isolated ZDOTDIR -e flag: %v", args)
+	}
+	cmd := args[len(args)-1]
+	if !strings.Contains(cmd, "-u GEMINI_API_KEY") {
+		t.Fatalf("command %q missing explicit credential unset", cmd)
+	}
+}
+
 type promptFooterExecutor struct {
 	calls [][]string
 }
