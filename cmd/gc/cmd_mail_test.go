@@ -33,6 +33,15 @@ type failingListByLabelStore struct {
 	err error
 }
 
+type staticInboxMailProvider struct {
+	countOnlyMailProvider
+	messages []mail.Message
+}
+
+func (p staticInboxMailProvider) Inbox(string) ([]mail.Message, error) {
+	return append([]mail.Message(nil), p.messages...), nil
+}
+
 type threadOnlyMailProvider struct {
 	countOnlyMailProvider
 	messages []mail.Message
@@ -1556,6 +1565,52 @@ func TestMailInboxShowsMessages(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestMailInboxOrdersNewestFirstInHumanAndJSON(t *testing.T) {
+	base := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	mp := staticInboxMailProvider{messages: []mail.Message{
+		{ID: "msg-oldest", From: "sender-a", To: "mayor", Subject: "oldest", Body: "body-oldest", CreatedAt: base.Add(1 * time.Minute)},
+		{ID: "msg-middle", From: "sender-b", To: "mayor", Subject: "middle", Body: "body-middle", CreatedAt: base.Add(2 * time.Minute)},
+		{ID: "msg-newer", From: "sender-c", To: "mayor", Subject: "newer", Body: "body-newer", CreatedAt: base.Add(3 * time.Minute)},
+		{ID: "msg-newest", From: "sender-d", To: "mayor", Subject: "newest", Body: "body-newest", CreatedAt: base.Add(4 * time.Minute), ThreadID: "thread-newest", ReplyTo: "msg-parent"},
+	}}
+
+	var humanStdout, humanStderr bytes.Buffer
+	if code := doMailInbox(mp, "mayor", &humanStdout, &humanStderr); code != 0 {
+		t.Fatalf("doMailInbox human = %d, want 0; stderr: %s", code, humanStderr.String())
+	}
+	humanRows := strings.Split(strings.TrimSpace(humanStdout.String()), "\n")
+	if len(humanRows) < 2 {
+		t.Fatalf("human inbox output has no message rows:\n%s", humanStdout.String())
+	}
+	if !strings.Contains(humanRows[1], "msg-newest") {
+		t.Fatalf("first human inbox row = %q, want newest message first; full output:\n%s", humanRows[1], humanStdout.String())
+	}
+	if strings.Contains(humanRows[1], "msg-oldest") {
+		t.Fatalf("first human inbox row used oldest/provider-head message: %q", humanRows[1])
+	}
+
+	var jsonStdout, jsonStderr bytes.Buffer
+	if code := doMailInboxTargetWithJSON(mp, resolvedMailTarget{display: "mayor", recipients: []string{"mayor"}}, true, &jsonStdout, &jsonStderr); code != 0 {
+		t.Fatalf("doMailInbox JSON = %d, want 0; stderr: %s", code, jsonStderr.String())
+	}
+	var got mailInboxJSONResult
+	if err := json.Unmarshal(bytes.TrimSpace(jsonStdout.Bytes()), &got); err != nil {
+		t.Fatalf("unmarshal JSON inbox: %v; output=%s", err, jsonStdout.String())
+	}
+	if len(got.Messages) != 4 {
+		t.Fatalf("JSON messages = %d, want 4: %#v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].ID != "msg-newest" {
+		t.Fatalf("JSON first message = %q, want msg-newest; messages=%#v", got.Messages[0].ID, got.Messages)
+	}
+	if got.Messages[0].ID == "msg-oldest" {
+		t.Fatalf("JSON first message used oldest/provider-head message: %#v", got.Messages)
+	}
+	if got.Messages[0].ThreadID != "thread-newest" || got.Messages[0].ReplyTo != "msg-parent" {
+		t.Fatalf("JSON first message metadata = thread %q reply_to %q, want preserved thread/reply metadata", got.Messages[0].ThreadID, got.Messages[0].ReplyTo)
 	}
 }
 
