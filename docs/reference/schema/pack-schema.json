@@ -63,6 +63,10 @@
           "type": "string",
           "description": "Provider names the provider preset to use for this agent."
         },
+        "sandbox_profile": {
+          "type": "string",
+          "description": "SandboxProfile wraps this agent's command in sandbox-exec -f \u003cprofile\u003e.\nThis is a host-enforced Phase-2 credential boundary for local workers:\nchildren inherit the sandbox and cannot read denied mayor/founder credential\npaths even when they share the controller's Unix uid. Empty disables it."
+        },
         "upstream": {
           "type": "string",
           "description": "Upstream selects the model-serving endpoint (a key in [upstreams]) for\nthis agent — WHO serves the model. \"\" (default) falls back to\nagent_defaults.upstream; if still empty, no upstream env is injected\n(ambient behavior). Switching it relaunches the agent in the warm box."
@@ -125,6 +129,10 @@
           },
           "type": "object",
           "description": "Env sets additional environment variables for the agent process."
+        },
+        "scoped_credential_env_file": {
+          "type": "string",
+          "description": "ScopedCredentialEnvFile points at a broker-issued dotenv file containing\nper-worker credentials for this agent. Relative paths resolve against the\ncity root and the same template placeholders as work_dir are accepted.\nAt launch this is projected to GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE and\nconsumed by the supervisor; the path control variable is not passed through\nto the worker."
         },
         "option_defaults": {
           "additionalProperties": {
@@ -397,6 +405,10 @@
           "type": "object",
           "description": "Env adds or overrides environment variables."
         },
+        "scoped_credential_env_file": {
+          "type": "string",
+          "description": "ScopedCredentialEnvFile overrides the broker-issued scoped credential env\nfile path template."
+        },
         "env_remove": {
           "items": {
             "type": "string"
@@ -422,6 +434,10 @@
         "provider": {
           "type": "string",
           "description": "Provider overrides the provider name."
+        },
+        "sandbox_profile": {
+          "type": "string",
+          "description": "SandboxProfile wraps the launched agent command in sandbox-exec -f \u003cprofile\u003e."
         },
         "upstream": {
           "type": "string",

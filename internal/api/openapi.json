@@ -377,6 +377,12 @@
               "null"
             ]
           },
+          "SandboxProfile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ScaleCheck": {
             "type": [
               "string",
@@ -384,6 +390,12 @@
             ]
           },
           "Scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ScopedCredentialEnvFile": {
             "type": [
               "string",
               "null"
@@ -507,11 +519,13 @@
           "Suspended",
           "Pool",
           "Env",
+          "ScopedCredentialEnvFile",
           "EnvRemove",
           "PreStart",
           "PromptTemplate",
           "Session",
           "Provider",
+          "SandboxProfile",
           "Upstream",
           "Args",
           "StartCommand",

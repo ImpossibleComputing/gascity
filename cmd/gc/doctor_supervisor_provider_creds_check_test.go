@@ -10,7 +10,7 @@ import (
 	"github.com/gastownhall/gascity/internal/doctor"
 )
 
-func writeSupervisorProviderCredsPlist(t *testing.T, body string) string {
+func writeSupervisorProviderCredsPlist(t *testing.T, body string) {
 	t.Helper()
 	path := supervisorLaunchdPlistPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -19,7 +19,6 @@ func writeSupervisorProviderCredsPlist(t *testing.T, body string) string {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write plist: %v", err)
 	}
-	return path
 }
 
 func TestSupervisorProviderCredsCheckWarnsWithNamesOnly(t *testing.T) {

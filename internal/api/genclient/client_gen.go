@@ -443,8 +443,10 @@ type AgentPatch struct {
 	PromptTemplate          *string           `json:"PromptTemplate"`
 	Provider                *string           `json:"Provider"`
 	ResumeCommand           *string           `json:"ResumeCommand"`
+	SandboxProfile          *string           `json:"SandboxProfile"`
 	ScaleCheck              *string           `json:"ScaleCheck"`
 	Scope                   *string           `json:"Scope"`
+	ScopedCredentialEnvFile *string           `json:"ScopedCredentialEnvFile"`
 	Session                 *string           `json:"Session"`
 	SessionLive             *[]string         `json:"SessionLive"`
 	SessionLiveAppend       *[]string         `json:"SessionLiveAppend"`

@@ -88,6 +88,7 @@ Agent defines a configured agent in the city.
 | `nudge` | string |  |  | Nudge is text typed into the agent's tmux session after startup. Used for CLI agents that don't accept command-line prompts. |
 | `session` | string |  |  | Session overrides the session transport for this agent. "" (default) uses the city-level session provider (typically tmux). "acp" uses the Agent Client Protocol (JSON-RPC over stdio). The agent's resolved provider must have supports_acp = true. Enum: `acp` |
 | `provider` | string |  |  | Provider names the provider preset to use for this agent. |
+| `sandbox_profile` | string |  |  | SandboxProfile wraps this agent's command in sandbox-exec -f &lt;profile&gt;. This is a host-enforced Phase-2 credential boundary for local workers: children inherit the sandbox and cannot read denied mayor/founder credential paths even when they share the controller's Unix uid. Empty disables it. |
 | `upstream` | string |  |  | Upstream selects the model-serving endpoint (a key in [upstreams]) for this agent — WHO serves the model. "" (default) falls back to agent_defaults.upstream; if still empty, no upstream env is injected (ambient behavior). Switching it relaunches the agent in the warm box. |
 | `start_command` | string |  |  | StartCommand overrides the provider's command for this agent. |
 | `lifecycle` | string |  |  | Lifecycle controls runtime lifetime semantics. Empty uses the default long-lived session lifecycle; "one_shot" means the command is expected to do bounded work and exit cleanly. Enum: `one_shot` |
@@ -99,6 +100,7 @@ Agent defines a configured agent in the city.
 | `process_names` | []string |  |  | ProcessNames lists process names to look for when checking if the agent is running. |
 | `emits_permission_warning` | boolean |  |  | EmitsPermissionWarning indicates whether the agent emits permission prompts that should be suppressed. |
 | `env` | map[string]string |  |  | Env sets additional environment variables for the agent process. |
+| `scoped_credential_env_file` | string |  |  | ScopedCredentialEnvFile points at a broker-issued dotenv file containing per-worker credentials for this agent. Relative paths resolve against the city root and the same template placeholders as work_dir are accepted. At launch this is projected to GC_WORKER_SCOPED_CREDENTIAL_ENV_FILE and consumed by the supervisor; the path control variable is not passed through to the worker. |
 | `option_defaults` | map[string]string |  |  | OptionDefaults overrides the provider's effective schema defaults for this agent. Keys are option keys, values are choice values. Applied on top of the provider's OptionDefaults (agent keys win). Example: option_defaults = &#123; permission_mode = "plan", model = "sonnet" &#125; |
 | `max_active_sessions` | integer |  |  | MaxActiveSessions is the agent-level cap on concurrent sessions. Nil means inherit from rig, then workspace, then unlimited. Replaces pool.max. |
 | `min_active_sessions` | integer |  |  | MinActiveSessions is the minimum number of sessions to keep alive. Agent-level only. Counts against rig/workspace caps. Replaces pool.min. This controls pool sessions independently of [[named_session]] mode="always"; both produce sessions, and gc doctor reports accidental combinations. |
@@ -162,11 +164,13 @@ AgentOverride modifies a pack-stamped agent for a specific rig.
 | `suspended` | boolean |  |  | Suspended sets the agent's suspended state. |
 | `pool` | PoolOverride |  |  | Pool overrides legacy [pool] fields that map to session scaling. |
 | `env` | map[string]string |  |  | Env adds or overrides environment variables. |
+| `scoped_credential_env_file` | string |  |  | ScopedCredentialEnvFile overrides the broker-issued scoped credential env file path template. |
 | `env_remove` | []string |  |  | EnvRemove lists env var keys to remove. |
 | `pre_start` | []string |  |  | PreStart overrides the agent's pre_start commands. |
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
 | `session` | string |  |  | Session overrides the session transport ("acp"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
+| `sandbox_profile` | string |  |  | SandboxProfile wraps the launched agent command in sandbox-exec -f &lt;profile&gt;. Use for Phase-2 credential isolation profiles that deny worker access to founder-comms/payment credential paths even under the same Unix user. |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
 | `args` | []string |  |  | Args overrides the provider's default arguments. Leave unset to keep the pack-defined args; set to an empty list to clear them; set to a populated list to replace them entirely (full replace, not append). |
 | `start_command` | string |  |  | StartCommand overrides the start command. |
@@ -219,11 +223,13 @@ AgentPatch modifies an existing agent identified by (Dir, Name).
 | `suspended` | boolean |  |  | Suspended overrides the agent's suspended state. |
 | `pool` | PoolOverride |  |  | Pool overrides legacy [pool] fields that map to session scaling. |
 | `env` | map[string]string |  |  | Env adds or overrides environment variables. |
+| `scoped_credential_env_file` | string |  |  | ScopedCredentialEnvFile overrides the broker-issued scoped credential env file path template. |
 | `env_remove` | []string |  |  | EnvRemove lists env var keys to remove after merging. |
 | `pre_start` | []string |  |  | PreStart overrides the agent's pre_start commands. |
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
 | `session` | string |  |  | Session overrides the session transport ("acp" or "tmux"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
+| `sandbox_profile` | string |  |  | SandboxProfile wraps the launched agent command in sandbox-exec -f &lt;profile&gt;. |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
 | `args` | []string |  |  | Args overrides the provider's default arguments. Leave unset to keep the pack-defined args; set to an empty list to clear them; set to a populated list to replace them entirely (full replace, not append). |
 | `start_command` | string |  |  | StartCommand overrides the start command. |

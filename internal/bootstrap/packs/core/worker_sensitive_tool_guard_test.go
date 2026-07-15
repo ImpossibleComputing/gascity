@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -56,7 +57,8 @@ func runGuard(t *testing.T, guard string, env []string, args ...string) guardRes
 	err := cmd.Run()
 	code := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			code = exitErr.ExitCode()
 		} else {
 			t.Fatalf("running guard: %v; stderr=%s", err, stderr.String())
