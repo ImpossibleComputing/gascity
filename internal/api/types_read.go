@@ -65,6 +65,8 @@ type StatusView struct {
 	StoreHealth   *StatusStoreHealthView
 	Beads         *beads.BeadsDiagnostic
 	Summary       StatusSummaryView
+	Partial       bool
+	PartialErrors []string
 }
 
 // StatusAgentView is the CLI-facing per-agent row.
