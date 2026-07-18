@@ -2064,3 +2064,46 @@ func mustTime(s string) time.Time {
 	}
 	return t
 }
+
+func TestDefaultSearchPathsHonorsClaudeConfigDirOnly(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(t.TempDir(), "isolated-claude")
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	got := DefaultSearchPaths()
+	want := []string{filepath.Join(configDir, "projects")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultSearchPaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDefaultSearchPathsDedupesClaudeConfigDirFallback(t *testing.T) {
+	home := t.TempDir()
+	fallbackConfig := filepath.Join(home, ".claude")
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", fallbackConfig)
+
+	got := DefaultSearchPaths()
+	want := []string{filepath.Join(home, ".claude", "projects")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultSearchPaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDefaultSearchPathsWithClaudeConfigDirDoesNotLeakToHomeFallback(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(t.TempDir(), "isolated-claude")
+	workDir := filepath.Join(t.TempDir(), "city-root")
+	sessionID := "session-123"
+	homeProjects := filepath.Join(home, ".claude", "projects")
+	homeSlugDir := filepath.Join(homeProjects, ProjectSlug(workDir))
+	writeTestFile(t, filepath.Join(homeSlugDir, sessionID+".jsonl"), `{"type":"user"}`+"\n")
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+
+	got := FindSessionFileByID(DefaultSearchPaths(), workDir, sessionID)
+	if got != "" {
+		t.Fatalf("FindSessionFileByID(DefaultSearchPaths()) = %q, want empty isolated miss (must not fall back to HOME/.claude/projects)", got)
+	}
+}
