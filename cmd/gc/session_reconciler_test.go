@@ -786,6 +786,49 @@ func TestReconcileSessionBeads_DesiredFastPathSkipsAttachmentActivityObservation
 	}
 }
 
+func TestReconcileSessionBeads_MinActiveFloorCancelsAgentDrainAck(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{Agents: []config.Agent{{
+		Name:              "worker",
+		StartCommand:      "true",
+		MinActiveSessions: intPtr(1),
+		MaxActiveSessions: intPtr(1),
+	}}}
+	const sessionName = "worker-gt-wisp-floor"
+	env.addDesired(sessionName, "worker", true)
+	session := env.createSessionBead(sessionName, "worker")
+	env.setSessionMetadata(&session, map[string]string{
+		"agent_name":     "worker",
+		"alias":          "worker",
+		"pool_managed":   "true",
+		"session_origin": "ephemeral",
+	})
+	env.markSessionActive(&session)
+	dops := &providerDrainOps{sp: env.sp}
+	if err := dops.setDrainAck(sessionName); err != nil {
+		t.Fatalf("setDrainAck: %v", err)
+	}
+
+	env.reconcileWithPoolDesiredAndDrainOps([]beads.Bead{session}, map[string]int{"worker": 1}, dops)
+
+	if !env.sp.IsRunning(sessionName) {
+		t.Fatal("min-active floor session should ignore a no-work agent drain-ack and stay running")
+	}
+	if ack, _ := env.sp.GetMeta(sessionName, "GC_DRAIN_ACK"); ack != "" {
+		t.Fatalf("GC_DRAIN_ACK = %q, want cleared", ack)
+	}
+	if ds := env.dt.get(session.ID); ds != nil {
+		t.Fatalf("drain = %+v, want canceled", ds)
+	}
+	got, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatalf("store.Get(%s): %v", session.ID, err)
+	}
+	if got.Metadata["state_reason"] == sessionpkg.DrainAckStopPendingReason {
+		t.Fatalf("state_reason = %q; min-active floor must not enter drain-ack stop-pending", got.Metadata["state_reason"])
+	}
+}
+
 func TestReconcileSessionBeads_DrainAckMarksStopPendingAndStopsAsync(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{
