@@ -1422,11 +1422,17 @@ func listDirsReverse(dir string) []string {
 	return names
 }
 
-// DefaultSearchPaths returns the default search paths for JSONL
-// session files (~/.claude/projects/).
+// DefaultSearchPaths returns the default search paths for Claude JSONL
+// session files. When Claude is launched with CLAUDE_CONFIG_DIR, transcripts
+// live under that config directory's projects/ tree; return only that isolated
+// root rather than falling back to HOME/.claude/projects, because the fallback
+// is the fleet-wide WAL this env var is meant to escape.
 func DefaultSearchPaths() []string {
+	if configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); configDir != "" {
+		return mergePaths(nil, []string{filepath.Join(configDir, "projects")})
+	}
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || strings.TrimSpace(home) == "" {
 		return nil
 	}
 	return []string{filepath.Join(home, ".claude", "projects")}
