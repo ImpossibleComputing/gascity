@@ -1103,8 +1103,8 @@ func pendingResumePreservingNamedRestartInfo(i sessionpkg.Info, clk clock.Clock,
 	return true
 }
 
-func minActiveFloorProtectsDrainAck(info sessionpkg.Info, infoByID map[string]sessionpkg.Info, cfg *config.City, now time.Time) (bool, string, int, int) {
-	if cfg == nil || info.Closed || isNamedSessionInfo(info) || isManualSessionInfo(info) || !isPoolManagedSessionInfo(info) {
+func minActiveFloorProtectsDrainAck(info sessionpkg.Info, infoByID map[string]sessionpkg.Info, cfg *config.City, now time.Time, alive bool) (bool, string, int, int) {
+	if !alive || cfg == nil || info.Closed || isNamedSessionInfo(info) || isManualSessionInfo(info) || !isPoolManagedSessionInfo(info) {
 		return false, "", 0, 0
 	}
 	if strings.TrimSpace(info.WaitHold) == "true" || lifecycleTimerBlockerInfo(info, now) != "" {
@@ -1906,7 +1906,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							continue
 						}
 						ackReason := assignedWorkDrainCancelReason(*session, sp, dt, name)
-						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now()); protected {
+						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now(), providerAlive); protected {
 							if err := dops.clearDrain(name); err != nil {
 								fmt.Fprintf(stderr, "session reconciler: clearing min-active drain-ack for %s: %v\n", name, err) //nolint:errcheck
 							}
@@ -2258,7 +2258,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 						continue
 					}
 					if !reconcilerOwnedAck || drainReasonCancelable(ackReason) {
-						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now()); protected {
+						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now(), alive); protected {
 							if err := dops.clearDrain(name); err != nil {
 								fmt.Fprintf(stderr, "session reconciler: clearing min-active drain-ack for %s: %v\n", name, err) //nolint:errcheck
 							}
