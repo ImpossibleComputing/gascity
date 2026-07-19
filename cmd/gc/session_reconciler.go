@@ -1103,6 +1103,32 @@ func pendingResumePreservingNamedRestartInfo(i sessionpkg.Info, clk clock.Clock,
 	return true
 }
 
+func minActiveFloorProtectsDrainAck(info sessionpkg.Info, infoByID map[string]sessionpkg.Info, cfg *config.City, now time.Time, alive bool) (bool, string, int, int) {
+	if !alive || cfg == nil || info.Closed || isNamedSessionInfo(info) || isManualSessionInfo(info) || !isPoolManagedSessionInfo(info) {
+		return false, "", 0, 0
+	}
+	if strings.TrimSpace(info.WaitHold) == "true" || lifecycleTimerBlockerInfo(info, now) != "" {
+		return false, "", 0, 0
+	}
+	template := normalizedSessionTemplateInfo(info, cfg)
+	if template == "" {
+		template = strings.TrimSpace(info.Template)
+	}
+	if template == "" {
+		return false, "", 0, 0
+	}
+	agent := findAgentByTemplate(cfg, template)
+	if agent == nil || agent.Suspended {
+		return false, "", 0, 0
+	}
+	minFloor := agent.EffectiveMinActiveSessions()
+	if minFloor <= 0 {
+		return false, template, minFloor, 0
+	}
+	openInPool := openPoolManagedSessionCountForTemplate(infoByID, cfg, template)
+	return isMinFloorIdleWorker(minFloor, openInPool), template, minFloor, openInPool
+}
+
 func wakeDemandOverridesSleepSuppression(
 	decision AwakeDecision,
 	eval wakeEvaluation,
@@ -1880,6 +1906,23 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							continue
 						}
 						ackReason := assignedWorkDrainCancelReason(*session, sp, dt, name)
+						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now(), providerAlive); protected {
+							if err := dops.clearDrain(name); err != nil {
+								fmt.Fprintf(stderr, "session reconciler: clearing min-active drain-ack for %s: %v\n", name, err) //nolint:errcheck
+							}
+							if dt != nil {
+								dt.clearIdleProbe(session.ID)
+								dt.remove(session.ID)
+							}
+							if trace != nil {
+								trace.RecordDecision(TraceSiteDrainCancel, TraceReasonMinFloorIdleWorker, TraceOutcomeCancelReconcilerAck, template, name, traceRecordPayload{
+									"pool_min":  minFloor,
+									"pool_open": openInPool,
+								})
+							}
+							fmt.Fprintf(stdout, "Canceled drain-acked session '%s' (min-active floor)\n", name) //nolint:errcheck
+							continue
+						}
 						hasAssignedWork, assignedErr := sessionHasAwakeAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)
 						if assignedErr != nil {
 							fmt.Fprintf(stderr, "session reconciler: checking assigned work for drain-acked %s: %v\n", name, assignedErr) //nolint:errcheck
@@ -2213,6 +2256,25 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 							})
 						}
 						continue
+					}
+					if !reconcilerOwnedAck || drainReasonCancelable(ackReason) {
+						if protected, template, minFloor, openInPool := minActiveFloorProtectsDrainAck(infoByID[session.ID], infoByID, cfg, clk.Now(), alive); protected {
+							if err := dops.clearDrain(name); err != nil {
+								fmt.Fprintf(stderr, "session reconciler: clearing min-active drain-ack for %s: %v\n", name, err) //nolint:errcheck
+							}
+							if dt != nil {
+								dt.clearIdleProbe(session.ID)
+								dt.remove(session.ID)
+							}
+							if trace != nil {
+								trace.RecordDecision(TraceSiteDrainCancel, TraceReasonMinFloorIdleWorker, TraceOutcomeCancelReconcilerAck, template, name, traceRecordPayload{
+									"pool_min":  minFloor,
+									"pool_open": openInPool,
+								})
+							}
+							fmt.Fprintf(stdout, "Canceled drain-acked session '%s' (min-active floor)\n", name) //nolint:errcheck
+							continue
+						}
 					}
 					if reconcilerOwnedAck && assignedWorkDrainReasonCancelable(ackReason) {
 						hasAssignedWork, assignedErr := sessionHasAwakeAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, *session)

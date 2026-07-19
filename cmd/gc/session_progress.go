@@ -26,6 +26,20 @@ func openPoolSessionCountForTemplate(infoByID map[string]sessionpkg.Info, cfg *c
 	return open
 }
 
+func openPoolManagedSessionCountForTemplate(infoByID map[string]sessionpkg.Info, cfg *config.City, template string) int {
+	open := 0
+	for _, info := range infoByID {
+		if info.Closed || normalizedSessionTemplateInfo(info, cfg) != template {
+			continue
+		}
+		if isNamedSessionInfo(info) || isManualSessionInfo(info) || !isPoolManagedSessionInfo(info) {
+			continue
+		}
+		open++
+	}
+	return open
+}
+
 // isMinFloorIdleWorker reports whether a session is a legitimate pool floor
 // worker that should be exempt from the progress-stall recycler.
 //
