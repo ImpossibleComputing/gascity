@@ -370,6 +370,28 @@ func TestBdStoreGet(t *testing.T) {
 	}
 }
 
+func TestBdStoreGetRejectsNonIDNamesBeforeBDShow(t *testing.T) {
+	calls := 0
+	runner := func(_, _ string, _ ...string) ([]byte, error) {
+		calls++
+		return nil, fmt.Errorf("unexpected bd show for non-ID lookup")
+	}
+	s := beads.NewBdStore("/city", runner)
+
+	for _, id := range []string{"mayor", "gascity/workflows.codex-max", "", " external:thing "} {
+		_, err := s.Get(id)
+		if err == nil {
+			t.Fatalf("Get(%q) error = nil, want ErrNotFound", id)
+		}
+		if !errors.Is(err, beads.ErrNotFound) {
+			t.Fatalf("Get(%q) error = %v, want ErrNotFound", id, err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("bd show calls = %d, want 0 for non-ID names", calls)
+	}
+}
+
 func TestBdStoreListUsesDecodedUpdatedAtForUpdatedBefore(t *testing.T) {
 	cutoff := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 	runner := func(_, name string, args ...string) ([]byte, error) {
@@ -526,13 +548,13 @@ func TestBdStoreGetAmbiguousIDGuard(t *testing.T) {
 		out []byte
 		err error
 	}{
-		`bd show --json tyr`: {
-			err: fmt.Errorf(`exit status 1: Error fetching tyr: ambiguous ID "tyr" matches 4 issues: [gt-rtyro gt-wisp-6ltyri1 gt-wisp-n6tyro5 gt-wisp-erlutyr]`),
+		`bd show --json gt-rty`: {
+			err: fmt.Errorf(`exit status 1: Error fetching gt-rty: ambiguous ID "gt-rty" matches 4 issues: [gt-rtyro gt-wisp-6ltyri1 gt-wisp-n6tyro5 gt-wisp-erlutyr]`),
 		},
 	})
 	s := beads.NewBdStore("/city", runner)
 
-	_, err := s.Get("tyr")
+	_, err := s.Get("gt-rty")
 
 	if err == nil {
 		t.Fatal("Get returned nil error, want ErrIDCollision")

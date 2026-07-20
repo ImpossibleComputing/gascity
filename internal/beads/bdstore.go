@@ -1012,6 +1012,10 @@ func effectiveStorageFlags(b Bead, storage StorageClass) (ephemeral bool, noHist
 
 // Get retrieves a bead by ID via bd show.
 func (s *BdStore) Get(id string) (Bead, error) {
+	id = strings.TrimSpace(id)
+	if !bdShowExactIDCandidate(id) {
+		return Bead{}, fmt.Errorf("getting bead %q: %w", id, ErrNotFound)
+	}
 	out, err := s.runner(s.dir, "bd", "show", "--json", id)
 	if err != nil {
 		if isBdAmbiguousID(err) {
@@ -1044,6 +1048,17 @@ func (s *BdStore) Get(id string) (Bead, error) {
 		return Bead{}, fmt.Errorf("getting bead %q (resolved to %q): %w", id, bead.ID, ErrIDCollision)
 	}
 	return bead, nil
+}
+
+// bdShowExactIDCandidate keeps Get on its documented exact-ID path. Passing
+// agent names through `bd show` falls into bd's fuzzy name/title resolver, whose
+// current SQL shape full-scans wisps/issues under fleet polling load.
+func bdShowExactIDCandidate(id string) bool {
+	if id == "" || strings.ContainsAny(id, "/\\: \t\r\n") {
+		return false
+	}
+	hyphen := strings.IndexByte(id, '-')
+	return hyphen > 0 && hyphen < len(id)-1
 }
 
 // Update modifies fields of an existing bead via bd update.
