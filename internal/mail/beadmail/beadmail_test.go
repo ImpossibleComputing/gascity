@@ -52,36 +52,50 @@ func (s *messageListProbeStore) List(query beads.ListQuery) ([]beads.Bead, error
 
 func assertMessageRouteQueries(t *testing.T, queries []beads.ListQuery, wantRoutes []string) {
 	t.Helper()
-	if len(queries) != 1+len(wantRoutes) {
-		t.Fatalf("message query count = %d, want %d; queries=%+v", len(queries), 1+len(wantRoutes), queries)
+	if len(queries) != 2*len(wantRoutes) {
+		t.Fatalf("message query count = %d, want %d; queries=%+v", len(queries), 2*len(wantRoutes), queries)
 	}
-	assigneeQuery := queries[0]
-	if assigneeQuery.TierMode != beads.TierBoth || assigneeQuery.AllowScan || assigneeQuery.Type != "message" || assigneeQuery.Status != "open" || assigneeQuery.Assignee != "" || !slices.Equal(assigneeQuery.Assignees, wantRoutes) {
-		t.Fatalf("message assignee query = %+v, want one both-tier Assignees scan for %v", assigneeQuery, wantRoutes)
-	}
-	if !assigneeQuery.Live {
-		t.Fatalf("message assignee query = %+v, want live read for command-visible mail freshness", assigneeQuery)
-	}
-
+	seenAssigneeRoutes := make(map[string]bool, len(wantRoutes))
 	seenMetadataRoutes := make(map[string]bool, len(wantRoutes))
-	for _, query := range queries[1:] {
-		if query.TierMode != beads.TierBoth || query.AllowScan || query.Type != "message" || query.Status != "open" || query.Assignee != "" || len(query.Assignees) != 0 {
-			t.Fatalf("message metadata query = %+v, want targeted both-tier metadata read", query)
+	for _, query := range queries {
+		if query.TierMode != beads.TierBoth || query.AllowScan || query.Type != "message" || query.Status != "open" || len(query.Assignees) != 0 {
+			t.Fatalf("message query = %+v, want targeted both-tier route read with no multi-Assignees fallback", query)
 		}
 		if !query.Live {
-			t.Fatalf("message metadata query = %+v, want live read for command-visible mail freshness", query)
+			t.Fatalf("message query = %+v, want live read for command-visible mail freshness", query)
 		}
-		if len(query.Metadata) != 1 {
-			t.Fatalf("message metadata query = %+v, want exactly one metadata filter", query)
+		switch {
+		case query.Assignee != "":
+			if len(query.Metadata) != 0 {
+				t.Fatalf("message assignee query = %+v, want no metadata filter", query)
+			}
+			if !slices.Contains(wantRoutes, query.Assignee) {
+				t.Fatalf("message assignee query = %+v, want one of %v", query, wantRoutes)
+			}
+			if seenAssigneeRoutes[query.Assignee] {
+				t.Fatalf("duplicate assignee query for %q; queries=%+v", query.Assignee, queries)
+			}
+			seenAssigneeRoutes[query.Assignee] = true
+		case len(query.Metadata) == 1:
+			toSessionID := query.Metadata[toSessionIDMetadataKey]
+			if toSessionID == "" || !slices.Contains(wantRoutes, toSessionID) {
+				t.Fatalf("message metadata query = %+v, want mail.to_session_id for one of %v", query, wantRoutes)
+			}
+			if seenMetadataRoutes[toSessionID] {
+				t.Fatalf("duplicate mail.to_session_id metadata query for %q; queries=%+v", toSessionID, queries)
+			}
+			seenMetadataRoutes[toSessionID] = true
+		default:
+			t.Fatalf("message query = %+v, want exact assignee or mail.to_session_id route filter", query)
 		}
-		toSessionID := query.Metadata[toSessionIDMetadataKey]
-		if toSessionID == "" || !slices.Contains(wantRoutes, toSessionID) {
-			t.Fatalf("message metadata query = %+v, want mail.to_session_id for one of %v", query, wantRoutes)
+	}
+	for _, route := range wantRoutes {
+		if !seenAssigneeRoutes[route] {
+			t.Fatalf("missing assignee query for %q; queries=%+v", route, queries)
 		}
-		if seenMetadataRoutes[toSessionID] {
-			t.Fatalf("duplicate mail.to_session_id metadata query for %q; queries=%+v", toSessionID, queries)
+		if !seenMetadataRoutes[route] {
+			t.Fatalf("missing metadata query for %q; queries=%+v", route, queries)
 		}
-		seenMetadataRoutes[toSessionID] = true
 	}
 }
 
