@@ -50,6 +50,41 @@ func (s *messageListProbeStore) List(query beads.ListQuery) ([]beads.Bead, error
 	return s.MemStore.List(query)
 }
 
+func assertMessageRouteQueries(t *testing.T, queries []beads.ListQuery, wantRoutes []string) {
+	t.Helper()
+	if len(queries) != 1+len(wantRoutes) {
+		t.Fatalf("message query count = %d, want %d; queries=%+v", len(queries), 1+len(wantRoutes), queries)
+	}
+	assigneeQuery := queries[0]
+	if assigneeQuery.TierMode != beads.TierBoth || assigneeQuery.AllowScan || assigneeQuery.Type != "message" || assigneeQuery.Status != "open" || assigneeQuery.Assignee != "" || !slices.Equal(assigneeQuery.Assignees, wantRoutes) {
+		t.Fatalf("message assignee query = %+v, want one both-tier Assignees scan for %v", assigneeQuery, wantRoutes)
+	}
+	if !assigneeQuery.Live {
+		t.Fatalf("message assignee query = %+v, want live read for command-visible mail freshness", assigneeQuery)
+	}
+
+	seenMetadataRoutes := make(map[string]bool, len(wantRoutes))
+	for _, query := range queries[1:] {
+		if query.TierMode != beads.TierBoth || query.AllowScan || query.Type != "message" || query.Status != "open" || query.Assignee != "" || len(query.Assignees) != 0 {
+			t.Fatalf("message metadata query = %+v, want targeted both-tier metadata read", query)
+		}
+		if !query.Live {
+			t.Fatalf("message metadata query = %+v, want live read for command-visible mail freshness", query)
+		}
+		if len(query.Metadata) != 1 {
+			t.Fatalf("message metadata query = %+v, want exactly one metadata filter", query)
+		}
+		toSessionID := query.Metadata[toSessionIDMetadataKey]
+		if toSessionID == "" || !slices.Contains(wantRoutes, toSessionID) {
+			t.Fatalf("message metadata query = %+v, want mail.to_session_id for one of %v", query, wantRoutes)
+		}
+		if seenMetadataRoutes[toSessionID] {
+			t.Fatalf("duplicate mail.to_session_id metadata query for %q; queries=%+v", toSessionID, queries)
+		}
+		seenMetadataRoutes[toSessionID] = true
+	}
+}
+
 type noCloseAllStore struct {
 	*beads.MemStore
 	t *testing.T
@@ -102,7 +137,7 @@ func TestMessageCreatedInWispTier(t *testing.T) {
 	}
 }
 
-func TestInboxUsesSingleBothTierMessageScanAcrossRoutes(t *testing.T) {
+func TestInboxUsesTargetedMessageQueriesAcrossRoutes(t *testing.T) {
 	store := &messageListProbeStore{MemStore: beads.NewMemStore()}
 	p := New(store)
 
@@ -134,16 +169,139 @@ func TestInboxUsesSingleBothTierMessageScanAcrossRoutes(t *testing.T) {
 	if len(msgs) != 4 {
 		t.Fatalf("Inbox = %#v, want four routed messages", msgs)
 	}
-	if len(store.messageQueries) != 1 {
-		t.Fatalf("message query count = %d, want 1; queries=%+v", len(store.messageQueries), store.messageQueries)
-	}
-	query := store.messageQueries[0]
 	wantRoutes := []string{"sky", sessionBead.ID, "runtime-sky", "mayor", "witness"}
-	if query.TierMode != beads.TierBoth || query.AllowScan || query.Type != "message" || query.Status != "open" || query.Assignee != "" || !slices.Equal(query.Assignees, wantRoutes) {
-		t.Fatalf("message query = %+v, want one both-tier Assignees scan for %v", query, wantRoutes)
+	assertMessageRouteQueries(t, store.messageQueries, wantRoutes)
+}
+
+func TestInboxUsesRetargetedToSessionMetadataForStrandedReply(t *testing.T) {
+	store := beads.NewMemStore()
+	p := New(store)
+
+	oldSession, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Status: "closed",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "odin",
+			"session_name": "odin-old",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
 	}
-	if !query.Live {
-		t.Fatalf("message query = %+v, want live read for command-visible mail freshness", query)
+	if err := store.Close(oldSession.ID); err != nil {
+		t.Fatalf("Close old session: %v", err)
+	}
+	newSession, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "freya",
+			"session_name": "freya-new",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create new session: %v", err)
+	}
+	strandedReply, err := store.Create(beads.Bead{
+		Title:       "gate reply",
+		Description: "this must surface after retarget",
+		Type:        "message",
+		Status:      "open",
+		Assignee:    oldSession.ID,
+		From:        "thor",
+		Metadata: map[string]string{
+			toSessionIDMetadataKey: newSession.ID,
+			toDisplayMetadataKey:   "freya",
+		},
+		Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatalf("Create stranded reply: %v", err)
+	}
+
+	inbox, err := p.Inbox("freya")
+	if err != nil {
+		t.Fatalf("Inbox(freya): %v", err)
+	}
+	if len(inbox) != 1 || inbox[0].ID != strandedReply.ID {
+		t.Fatalf("Inbox(freya) = %#v, want retargeted reply %s", inbox, strandedReply.ID)
+	}
+	total, unread, err := p.Count("freya")
+	if err != nil {
+		t.Fatalf("Count(freya): %v", err)
+	}
+	if total != 1 || unread != 1 {
+		t.Fatalf("Count(freya) = (%d, %d), want (1, 1)", total, unread)
+	}
+
+	if err := p.MarkRead(strandedReply.ID); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+	inbox, err = p.Inbox("freya")
+	if err != nil {
+		t.Fatalf("Inbox(freya) after read: %v", err)
+	}
+	if len(inbox) != 0 {
+		t.Fatalf("Inbox(freya) after read = %#v, want empty", inbox)
+	}
+}
+
+func TestInboxIncludesUnreadMailAssignedToClosedPredecessorSession(t *testing.T) {
+	store := beads.NewMemStore()
+	p := New(store)
+
+	oldSession, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "freya",
+			"session_name": "freya-old",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
+	}
+	if err := store.Close(oldSession.ID); err != nil {
+		t.Fatalf("Close old session: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "freya",
+			"session_name": "freya-new",
+		},
+	}); err != nil {
+		t.Fatalf("Create new session: %v", err)
+	}
+	orphaned, err := store.Create(beads.Bead{
+		Title:       "unseen old-session reply",
+		Description: "assigned before predecessor closed",
+		Type:        "message",
+		Status:      "open",
+		Assignee:    oldSession.ID,
+		From:        "thor",
+		Ephemeral:   true,
+	})
+	if err != nil {
+		t.Fatalf("Create orphaned reply: %v", err)
+	}
+
+	inbox, err := p.Inbox("freya")
+	if err != nil {
+		t.Fatalf("Inbox(freya): %v", err)
+	}
+	if len(inbox) != 1 || inbox[0].ID != orphaned.ID {
+		t.Fatalf("Inbox(freya) = %#v, want old-session assigned reply %s", inbox, orphaned.ID)
+	}
+	total, unread, err := p.Count("freya")
+	if err != nil {
+		t.Fatalf("Count(freya): %v", err)
+	}
+	if total != 1 || unread != 1 {
+		t.Fatalf("Count(freya) = (%d, %d), want (1, 1)", total, unread)
 	}
 }
 
@@ -240,9 +398,8 @@ func TestInboxRecipientsDedupesRoutesAndReadFiltering(t *testing.T) {
 	if msgs[0].ID != msg1.ID && msgs[1].ID != msg1.ID {
 		t.Fatalf("InboxRecipients = %#v, want current-alias message %s", msgs, msg1.ID)
 	}
-	if len(store.messageQueries) != 1 {
-		t.Fatalf("message query count = %d, want 1; queries=%+v", len(store.messageQueries), store.messageQueries)
-	}
+	wantRoutes := []string{"sky", sessionBead.ID, "mayor"}
+	assertMessageRouteQueries(t, store.messageQueries, wantRoutes)
 }
 
 func TestInboxRecipientsEmptyReturnsAllUnreadMessages(t *testing.T) {
