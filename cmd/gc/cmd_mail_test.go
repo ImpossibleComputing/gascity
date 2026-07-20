@@ -42,6 +42,57 @@ func (p staticInboxMailProvider) Inbox(string) ([]mail.Message, error) {
 	return append([]mail.Message(nil), p.messages...), nil
 }
 
+type multiRecipientInboxMailProvider struct {
+	countOnlyMailProvider
+	inboxRecipients []string
+	checkRecipients []string
+	inboxRoutes     []string
+	checkRoutes     []string
+	countRoutes     []string
+	messages        []mail.Message
+	err             error
+}
+
+func (p *multiRecipientInboxMailProvider) InboxRecipients(recipients []string) ([]mail.Message, error) {
+	p.inboxRecipients = append([]string(nil), recipients...)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]mail.Message(nil), p.messages...), nil
+}
+
+func (p *multiRecipientInboxMailProvider) CheckRecipients(recipients []string) ([]mail.Message, error) {
+	p.checkRecipients = append([]string(nil), recipients...)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]mail.Message(nil), p.messages...), nil
+}
+
+func (p *multiRecipientInboxMailProvider) InboxRoutes(routes []string) ([]mail.Message, error) {
+	p.inboxRoutes = append([]string(nil), routes...)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]mail.Message(nil), p.messages...), nil
+}
+
+func (p *multiRecipientInboxMailProvider) CheckRoutes(routes []string) ([]mail.Message, error) {
+	p.checkRoutes = append([]string(nil), routes...)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return append([]mail.Message(nil), p.messages...), nil
+}
+
+func (p *multiRecipientInboxMailProvider) CountRoutes(routes []string) (int, int, error) {
+	p.countRoutes = append([]string(nil), routes...)
+	if p.err != nil {
+		return 0, 0, p.err
+	}
+	return len(p.messages), len(p.messages), nil
+}
+
 type threadOnlyMailProvider struct {
 	countOnlyMailProvider
 	messages []mail.Message
@@ -1673,6 +1724,56 @@ func TestMailInboxOrdersNewestFirstInHumanAndJSON(t *testing.T) {
 	}
 }
 
+func TestMailInboxUsesResolvedRoutesProviderOnce(t *testing.T) {
+	base := time.Date(2026, 7, 20, 23, 0, 0, 0, time.UTC)
+	mp := &multiRecipientInboxMailProvider{messages: []mail.Message{
+		{ID: "older", From: "sender-a", To: "route-a", Subject: "older", Body: "older body", CreatedAt: base.Add(1 * time.Minute)},
+		{ID: "newer", From: "sender-b", To: "route-b", Subject: "newer", Body: "newer body", CreatedAt: base.Add(2 * time.Minute)},
+	}}
+
+	var stdout, stderr bytes.Buffer
+	target := resolvedMailTarget{display: "worker", recipients: []string{"route-a", "route-b", "route-a"}}
+	if code := doMailInboxTargetWithJSON(mp, target, false, &stdout, &stderr); code != 0 {
+		t.Fatalf("doMailInboxTargetWithJSON = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if got, want := mp.inboxRoutes, target.recipients; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("InboxRoutes routes = %#v, want %#v", got, want)
+	}
+	if len(mp.inboxRecipients) != 0 {
+		t.Fatalf("InboxRecipients called with %#v; command should use already-resolved routes", mp.inboxRecipients)
+	}
+	rows := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(rows) < 2 {
+		t.Fatalf("mail inbox output has no message rows:\n%s", stdout.String())
+	}
+	if !strings.Contains(rows[1], "newer") {
+		t.Fatalf("first mail inbox row = %q, want newest message first; output:\n%s", rows[1], stdout.String())
+	}
+}
+
+func TestMailCheckUsesResolvedRoutesProviderOnce(t *testing.T) {
+	base := time.Date(2026, 7, 20, 23, 5, 0, 0, time.UTC)
+	mp := &multiRecipientInboxMailProvider{messages: []mail.Message{
+		{ID: "older", From: "sender-a", To: "route-a", Subject: "older", Body: "older body", CreatedAt: base.Add(1 * time.Minute)},
+		{ID: "newer", From: "sender-b", To: "route-b", Subject: "newer", Body: "newer body", CreatedAt: base.Add(2 * time.Minute)},
+	}}
+
+	var stdout, stderr bytes.Buffer
+	target := resolvedMailTarget{display: "worker", recipients: []string{"route-a", "route-b", "route-a"}}
+	if code := doMailCheckTargetWithFormat(mp, target, false, "", &stdout, &stderr); code != 0 {
+		t.Fatalf("doMailCheckTargetWithFormat = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if got, want := mp.checkRoutes, target.recipients; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("CheckRoutes routes = %#v, want %#v", got, want)
+	}
+	if len(mp.checkRecipients) != 0 {
+		t.Fatalf("CheckRecipients called with %#v; command should use already-resolved routes", mp.checkRecipients)
+	}
+	if !strings.Contains(stdout.String(), "2 unread message(s) for worker") {
+		t.Fatalf("stdout = %q, want unread count", stdout.String())
+	}
+}
+
 func TestMailInboxJSON(t *testing.T) {
 	store := beads.NewMemStore()
 	mp := beadmail.New(store)
@@ -2695,6 +2796,26 @@ func TestMailCountTargetUsesCountPerRecipient(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "3 total, 2 unread for sky") {
 		t.Fatalf("stdout = %q, want merged count output", stdout.String())
+	}
+}
+
+func TestMailCountUsesResolvedRoutesProviderOnce(t *testing.T) {
+	mp := &multiRecipientInboxMailProvider{messages: []mail.Message{
+		{ID: "msg-1"},
+		{ID: "msg-2"},
+	}}
+	target := resolvedMailTarget{display: "worker", recipients: []string{"route-a", "route-b", "route-a"}}
+
+	var stdout, stderr bytes.Buffer
+	code := doMailCountTarget(mp, target, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doMailCountTarget = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if got, want := mp.countRoutes, target.recipients; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("CountRoutes routes = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(stdout.String(), "2 total, 2 unread for worker") {
+		t.Fatalf("stdout = %q, want route count output", stdout.String())
 	}
 }
 
