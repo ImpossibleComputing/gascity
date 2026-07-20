@@ -250,8 +250,8 @@ func (p *Provider) Inbox(recipient string) ([]mail.Message, error) {
 	return p.filterMessages(recipient, false)
 }
 
-// InboxRecipients returns all unread messages matching any recipient route in
-// one message-bead scan.
+// InboxRecipients returns all unread messages matching any recipient route.
+// Non-empty recipient route sets stay on targeted per-route message queries.
 func (p *Provider) InboxRecipients(recipients []string) ([]mail.Message, error) {
 	return p.filterMessagesForRecipients(recipients, false)
 }
@@ -957,45 +957,53 @@ func (p *Provider) messageCandidatesForRoutes(routes []string) ([]beads.Bead, er
 }
 
 // messageCandidatesAll returns all open message beads matching any route.
-// TierBoth is one logical query for the normal assignee path; when routes are
-// present it is supplemented by targeted mail.to_session_id metadata reads. The
-// metadata supplement is the session-rotation repair path: replies are stored
-// against the sender's stable session bead ID, and an operator may later retarget
+// Empty routes are the explicit global-mail path and may scan all open messages.
+// Non-empty route sets use one exact-assignee read per route instead of a
+// multi-route Assignees query: BdStore cannot push multi-assignee filters down
+// to bd and falls back to a client-side scan of all open messages, which is the
+// fill-to-capacity inbox/count stall this path must avoid. Each assignee route
+// is supplemented by a targeted mail.to_session_id metadata read. The metadata
+// supplement is the session-rotation repair path: replies are stored against
+// the sender's stable session bead ID, and an operator may later retarget
 // mail.to_session_id from a stranded session to its successor without rewriting
-// the message bead's assignee. Empty routes return all open messages. Live reads
-// are required so command-visible mail sees fresh wisps even when the active
-// store cache was primed earlier.
+// the message bead's assignee. Live reads are required so command-visible mail
+// sees fresh wisps even when the active store cache was primed earlier.
 func (p *Provider) messageCandidatesAll(routes []string) ([]beads.Bead, error) {
-	query := beads.ListQuery{
-		Type:     "message",
-		Status:   "open",
-		TierMode: beads.TierBoth,
-		Live:     true,
-	}
-	if len(routes) > 0 {
-		query.Assignees = routes
-	} else {
-		query.AllowScan = true
-	}
-	all, err := p.store.List(query)
-	if err != nil {
-		return nil, fmt.Errorf("scanning message beads: %w", err)
-	}
 	if len(routes) == 0 {
+		all, err := p.store.List(beads.ListQuery{
+			Type:      "message",
+			Status:    "open",
+			TierMode:  beads.TierBoth,
+			Live:      true,
+			AllowScan: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("scanning message beads: %w", err)
+		}
 		return all, nil
 	}
-	out := make([]beads.Bead, 0, len(all))
-	seen := make(map[string]bool, len(all))
-	for _, b := range all {
-		// matchesMessageRecipientRoute is defense-in-depth: HQStore returns exact
-		// assignee matches from the index; BdStore multi-route fallback may return
-		// excess. The metadata half keeps retargeted stranded-session replies
-		// visible after mail.to_session_id is repaired.
-		if matchesMessageRecipientRoute(routes, b) {
-			out = appendUniqueMessageCandidate(out, seen, b)
-		}
-	}
+
+	out := make([]beads.Bead, 0, len(routes))
+	seen := make(map[string]bool, len(routes))
 	for _, route := range routes {
+		assigneeQuery := beads.ListQuery{
+			Type:     "message",
+			Status:   "open",
+			Assignee: route,
+			TierMode: beads.TierBoth,
+			Live:     true,
+		}
+		items, err := p.store.List(assigneeQuery)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message assignee route %q: %w", route, err)
+		}
+		for _, b := range items {
+			// Keep defense-in-depth against stores that return excess rows.
+			if matchesMessageRecipientRoute(routes, b) {
+				out = appendUniqueMessageCandidate(out, seen, b)
+			}
+		}
+
 		metaQuery := beads.ListQuery{
 			Type:     "message",
 			Status:   "open",
@@ -1003,7 +1011,7 @@ func (p *Provider) messageCandidatesAll(routes []string) ([]beads.Bead, error) {
 			TierMode: beads.TierBoth,
 			Live:     true,
 		}
-		items, err := p.store.List(metaQuery)
+		items, err = p.store.List(metaQuery)
 		if err != nil {
 			return nil, fmt.Errorf("scanning message route metadata %q: %w", route, err)
 		}
