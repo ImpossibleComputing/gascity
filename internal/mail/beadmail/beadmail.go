@@ -668,7 +668,7 @@ func (p *Provider) CountRecipients(recipients []string) (int, int, error) {
 		if b.Status != "open" {
 			continue
 		}
-		if len(routes) > 0 && !matchesRecipientRoute(routes, b.Assignee) {
+		if len(routes) > 0 && !matchesMessageRecipientRoute(routes, b) {
 			continue
 		}
 		total++
@@ -698,7 +698,7 @@ func (p *Provider) filterMessagesForRecipients(recipients []string, includeRead 
 		if b.Status != "open" {
 			continue
 		}
-		if len(routes) > 0 && !matchesRecipientRoute(routes, b.Assignee) {
+		if len(routes) > 0 && !matchesMessageRecipientRoute(routes, b) {
 			continue
 		}
 		if !includeRead && hasLabel(b.Labels, "read") {
@@ -761,7 +761,11 @@ func (p *Provider) recipientRoutes(recipient string) []string {
 		return []string{recipient}
 	}
 	if len(liveMatches) == 1 {
-		return appendSessionRecipientRoutes(routes, liveMatches[0])
+		routes = appendSessionRecipientRoutes(routes, liveMatches[0])
+		// Include closed predecessors for the same mailbox identity so unread
+		// messages assigned before a session.stranded rotation are recovered by
+		// the successor inbox even when no operator has rewritten the assignee.
+		return p.appendClosedSessionRecipientRoutes(recipient, routes)
 	}
 
 	closedMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, true)
@@ -887,6 +891,18 @@ func (p *Provider) recipientRoutesByHistoricalAlias(recipient string, routes []s
 	return routes
 }
 
+func (p *Provider) appendClosedSessionRecipientRoutes(recipient string, routes []string) []string {
+	closedMatches, err := p.recipientSessionMatchesByCurrentAddress(recipient, true)
+	if err != nil {
+		log.Printf("beadmail: listing closed sessions for recipient route %q: %v", recipient, err)
+		return routes
+	}
+	for _, match := range closedMatches {
+		routes = appendSessionRecipientRoutes(routes, match)
+	}
+	return routes
+}
+
 func (p *Provider) recipientRoutesForAll(recipients []string) []string {
 	var routes []string
 	for _, recipient := range recipients {
@@ -941,10 +957,14 @@ func (p *Provider) messageCandidatesForRoutes(routes []string) ([]beads.Bead, er
 }
 
 // messageCandidatesAll returns all open message beads matching any route.
-// TierBoth is one logical query; BdStore may satisfy it with separate
-// issue-tier and wisp-tier reads before deduping. Empty routes return all open
-// messages. Live reads are required so command-visible mail sees fresh wisps
-// even when the active store cache was primed earlier.
+// TierBoth is one logical query for the normal assignee path; when routes are
+// present it is supplemented by targeted mail.to_session_id metadata reads. The
+// metadata supplement is the session-rotation repair path: replies are stored
+// against the sender's stable session bead ID, and an operator may later retarget
+// mail.to_session_id from a stranded session to its successor without rewriting
+// the message bead's assignee. Empty routes return all open messages. Live reads
+// are required so command-visible mail sees fresh wisps even when the active
+// store cache was primed earlier.
 func (p *Provider) messageCandidatesAll(routes []string) ([]beads.Bead, error) {
 	query := beads.ListQuery{
 		Type:     "message",
@@ -965,14 +985,48 @@ func (p *Provider) messageCandidatesAll(routes []string) ([]beads.Bead, error) {
 		return all, nil
 	}
 	out := make([]beads.Bead, 0, len(all))
+	seen := make(map[string]bool, len(all))
 	for _, b := range all {
-		// matchesRecipientRoute is defense-in-depth: HQStore returns exact
-		// matches from the index; BdStore multi-route fallback may return excess.
-		if matchesRecipientRoute(routes, b.Assignee) {
-			out = append(out, b)
+		// matchesMessageRecipientRoute is defense-in-depth: HQStore returns exact
+		// assignee matches from the index; BdStore multi-route fallback may return
+		// excess. The metadata half keeps retargeted stranded-session replies
+		// visible after mail.to_session_id is repaired.
+		if matchesMessageRecipientRoute(routes, b) {
+			out = appendUniqueMessageCandidate(out, seen, b)
+		}
+	}
+	for _, route := range routes {
+		metaQuery := beads.ListQuery{
+			Type:     "message",
+			Status:   "open",
+			Metadata: map[string]string{toSessionIDMetadataKey: route},
+			TierMode: beads.TierBoth,
+			Live:     true,
+		}
+		items, err := p.store.List(metaQuery)
+		if err != nil {
+			return nil, fmt.Errorf("scanning message route metadata %q: %w", route, err)
+		}
+		for _, b := range items {
+			if matchesMessageRecipientRoute(routes, b) {
+				out = appendUniqueMessageCandidate(out, seen, b)
+			}
 		}
 	}
 	return out, nil
+}
+
+func appendUniqueMessageCandidate(out []beads.Bead, seen map[string]bool, b beads.Bead) []beads.Bead {
+	if seen[b.ID] {
+		return out
+	}
+	seen[b.ID] = true
+	return append(out, b)
+}
+
+func matchesMessageRecipientRoute(routes []string, b beads.Bead) bool {
+	return matchesRecipientRoute(routes, b.Assignee) ||
+		matchesRecipientRoute(routes, strings.TrimSpace(b.Metadata[toSessionIDMetadataKey]))
 }
 
 // beadToMessage converts a bead to a mail.Message.
