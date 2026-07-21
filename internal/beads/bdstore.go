@@ -2273,6 +2273,7 @@ func (s *BdStore) listEphemeral(query ListQuery) ([]Bead, error) {
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "type", serverQuery.Type)
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "assignee", serverQuery.Assignee)
 	clauses, serverFilteredOnly = appendBdQueryClause(clauses, serverFilteredOnly, "parent", serverQuery.ParentID)
+	clauses, serverFilteredOnly = appendBdQueryMetadataClauses(clauses, serverFilteredOnly, serverQuery.Metadata)
 
 	args := []string{"query", "--json", strings.Join(clauses, " AND ")}
 	if serverQuery.IncludeClosed || serverQuery.Status == "closed" {
@@ -2338,6 +2339,46 @@ func appendBdQueryClause(clauses []string, serverFilteredOnly bool, field, value
 		return clauses, false
 	}
 	return append(clauses, field+"="+value), serverFilteredOnly
+}
+
+func appendBdQueryMetadataClauses(clauses []string, serverFilteredOnly bool, metadata map[string]string) ([]string, bool) {
+	if len(metadata) == 0 {
+		return clauses, serverFilteredOnly
+	}
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := metadata[key]
+		if value == "" {
+			continue
+		}
+		if !isBareBdQueryMetadataKey(key) || !isBareBdQueryValue(value) {
+			serverFilteredOnly = false
+			continue
+		}
+		clauses = append(clauses, "metadata."+key+"="+value)
+	}
+	return clauses, serverFilteredOnly
+}
+
+func isBareBdQueryMetadataKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isBareBdQueryValue(value string) bool {
