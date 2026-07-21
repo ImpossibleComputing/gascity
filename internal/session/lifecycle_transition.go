@@ -224,6 +224,7 @@ func ConfirmStartedPatch(now time.Time) MetadataPatch {
 		"awake_started_at":          awakeIntervalStartedAt(now),
 		"pending_create_claim":      "",
 		"pending_create_started_at": "",
+		ResetCommittedAtKey:         "",
 		"sleep_reason":              "",
 	}
 }
@@ -267,6 +268,7 @@ func CommitStartedPatch(input CommitStartedPatchInput) MetadataPatch {
 		"started_provision_hash":     input.ProvisionHash,
 		"started_launch_hash":        input.LaunchHash,
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 	}
 	if input.CoreBreakdown != "" {
 		patch["core_hash_breakdown"] = input.CoreBreakdown

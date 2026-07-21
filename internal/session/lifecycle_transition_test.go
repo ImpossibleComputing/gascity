@@ -129,6 +129,7 @@ func TestLifecycleTransitionPatchesSetCompleteMetadata(t *testing.T) {
 				"awake_started_at":          now.UTC().Format(time.RFC3339),
 				"pending_create_claim":      "",
 				"pending_create_started_at": "",
+				ResetCommittedAtKey:         "",
 				"sleep_reason":              "",
 			},
 		},
@@ -525,6 +526,7 @@ func TestCommitStartedPatchBuildsAtomicStartMetadata(t *testing.T) {
 		"started_provision_hash":     "provision-hash",
 		"started_launch_hash":        "launch-hash",
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 		"core_hash_breakdown":        `{"command":"core-hash"}`,
 		"state":                      string(StateActive),
 		"state_reason":               "creation_complete",
@@ -581,6 +583,22 @@ func TestCommitStartedPatchClearsCreateStartedAtWhenConfirmingNoClaimStart(t *te
 	}
 }
 
+func TestCommitStartedPatchClearsResetCommittedMarker(t *testing.T) {
+	patch := CommitStartedPatch(CommitStartedPatchInput{
+		CoreHash:     "core-hash",
+		LiveHash:     "live-hash",
+		ConfirmState: true,
+		Now:          time.Date(2026, 7, 21, 18, 0, 0, 0, time.UTC),
+	})
+
+	if got := patch["continuation_reset_pending"]; got != "" {
+		t.Fatalf("continuation_reset_pending = %q, want cleared", got)
+	}
+	if got := patch[ResetCommittedAtKey]; got != "" {
+		t.Fatalf("%s = %q, want cleared on successful start", ResetCommittedAtKey, got)
+	}
+}
+
 func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) {
 	patch := CommitStartedPatch(CommitStartedPatchInput{
 		CoreHash:         "core-hash",
@@ -597,6 +615,7 @@ func TestCommitStartedPatchCanPersistHashesWithoutRestampingState(t *testing.T) 
 		"started_provision_hash":     "provision-hash",
 		"started_launch_hash":        "launch-hash",
 		"continuation_reset_pending": "",
+		ResetCommittedAtKey:          "",
 		"sleep_reason":               "",
 	}
 	if !reflect.DeepEqual(patch, want) {
