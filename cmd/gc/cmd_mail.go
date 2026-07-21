@@ -1982,6 +1982,9 @@ func doMailInboxTargetWithJSON(mp mail.Provider, target resolvedMailTarget, json
 	}
 
 	if jsonOut {
+		if messages == nil {
+			messages = []mail.Message{}
+		}
 		if err := writeCLIJSONLine(stdout, mailInboxJSONResult{
 			SchemaVersion: "1",
 			Recipient:     target.display,
