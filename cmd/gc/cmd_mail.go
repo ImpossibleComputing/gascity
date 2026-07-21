@@ -706,7 +706,21 @@ func doMailCheckTarget(mp mail.Provider, target resolvedMailTarget, inject bool,
 }
 
 func doMailCheckTargetWithFormat(mp mail.Provider, target resolvedMailTarget, inject bool, hookFormat string, stdout, stderr io.Writer) int {
-	messages, err := collectMailMessages(mp.Check, target.recipients)
+	var messages []mail.Message
+	var err error
+	if checker, ok := mp.(routeMailChecker); ok {
+		messages, err = checker.CheckRoutes(target.recipients)
+		if err == nil {
+			mail.SortMessagesNewestFirst(messages)
+		}
+	} else if checker, ok := mp.(multiRecipientMailChecker); ok {
+		messages, err = checker.CheckRecipients(target.recipients)
+		if err == nil {
+			mail.SortMessagesNewestFirst(messages)
+		}
+	} else {
+		messages, err = collectMailMessages(mp.Check, target.recipients)
+	}
 	if err != nil {
 		if inject {
 			fmt.Fprintf(stderr, "gc mail check: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -1390,6 +1404,26 @@ type multiRecipientMailCounter interface {
 	CountRecipients([]string) (int, int, error)
 }
 
+type multiRecipientMailInboxer interface {
+	InboxRecipients([]string) ([]mail.Message, error)
+}
+
+type routeMailInboxer interface {
+	InboxRoutes([]string) ([]mail.Message, error)
+}
+
+type multiRecipientMailChecker interface {
+	CheckRecipients([]string) ([]mail.Message, error)
+}
+
+type routeMailChecker interface {
+	CheckRoutes([]string) ([]mail.Message, error)
+}
+
+type routeMailCounter interface {
+	CountRoutes([]string) (int, int, error)
+}
+
 func newMailSendCmd(stdout, stderr io.Writer) *cobra.Command {
 	var notify bool
 	var all bool
@@ -1927,13 +1961,30 @@ func doMailInboxTarget(mp mail.Provider, target resolvedMailTarget, stdout, stde
 }
 
 func doMailInboxTargetWithJSON(mp mail.Provider, target resolvedMailTarget, jsonOut bool, stdout, stderr io.Writer) int {
-	messages, err := collectMailMessages(mp.Inbox, target.recipients)
+	var messages []mail.Message
+	var err error
+	if inboxer, ok := mp.(routeMailInboxer); ok {
+		messages, err = inboxer.InboxRoutes(target.recipients)
+		if err == nil {
+			mail.SortMessagesNewestFirst(messages)
+		}
+	} else if inboxer, ok := mp.(multiRecipientMailInboxer); ok {
+		messages, err = inboxer.InboxRecipients(target.recipients)
+		if err == nil {
+			mail.SortMessagesNewestFirst(messages)
+		}
+	} else {
+		messages, err = collectMailMessages(mp.Inbox, target.recipients)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "gc mail inbox: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
 	if jsonOut {
+		if messages == nil {
+			messages = []mail.Message{}
+		}
 		if err := writeCLIJSONLine(stdout, mailInboxJSONResult{
 			SchemaVersion: "1",
 			Recipient:     target.display,
@@ -2600,7 +2651,9 @@ func doMailCountTarget(mp mail.Provider, target resolvedMailTarget, stdout, stde
 func doMailCountTargetWithJSON(mp mail.Provider, target resolvedMailTarget, jsonOut bool, stdout, stderr io.Writer) int {
 	var total, unread int
 	var err error
-	if counter, ok := mp.(multiRecipientMailCounter); ok {
+	if counter, ok := mp.(routeMailCounter); ok {
+		total, unread, err = counter.CountRoutes(target.recipients)
+	} else if counter, ok := mp.(multiRecipientMailCounter); ok {
 		total, unread, err = counter.CountRecipients(target.recipients)
 	} else {
 		total, unread, err = collectMailCounts(mp.Count, target.recipients)

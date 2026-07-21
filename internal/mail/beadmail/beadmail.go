@@ -256,6 +256,14 @@ func (p *Provider) InboxRecipients(recipients []string) ([]mail.Message, error) 
 	return p.filterMessagesForRecipients(recipients, false)
 }
 
+// InboxRoutes returns unread messages for already-resolved recipient routes.
+// Unlike InboxRecipients it does not expand routes through session metadata
+// again; command front-ends that already resolved a mailbox must use this to
+// avoid O(routes × session-expansion) inbox reads.
+func (p *Provider) InboxRoutes(routes []string) ([]mail.Message, error) {
+	return p.filterMessagesForRoutes(routes, false)
+}
+
 // Get retrieves a message by ID without marking it read.
 // Returns an error if the bead is not a message type.
 func (p *Provider) Get(id string) (mail.Message, error) {
@@ -520,6 +528,17 @@ func (p *Provider) Check(recipient string) ([]mail.Message, error) {
 	return p.filterMessages(recipient, false)
 }
 
+// CheckRecipients returns unread messages matching any recipient route.
+// Non-empty recipient route sets stay on targeted per-route message queries.
+func (p *Provider) CheckRecipients(recipients []string) ([]mail.Message, error) {
+	return p.filterMessagesForRecipients(recipients, false)
+}
+
+// CheckRoutes returns unread messages for already-resolved recipient routes.
+func (p *Provider) CheckRoutes(routes []string) ([]mail.Message, error) {
+	return p.filterMessagesForRoutes(routes, false)
+}
+
 // Reply creates a reply to an existing message. Inherits ThreadID from the
 // original, sets ReplyTo to the original's ID. Reply is addressed to the
 // original sender.
@@ -659,6 +678,12 @@ func (p *Provider) CountRecipients(recipients []string) (int, int, error) {
 		return 0, 0, nil
 	}
 	routes := p.recipientRoutesForAll(recipients)
+	return p.CountRoutes(routes)
+}
+
+// CountRoutes returns deduplicated total and unread counts for already-resolved
+// recipient routes.
+func (p *Provider) CountRoutes(routes []string) (int, int, error) {
 	candidates, err := p.messageCandidatesForRoutes(routes)
 	if err != nil {
 		return 0, 0, fmt.Errorf("listing messages: %w", err)
@@ -689,6 +714,10 @@ func (p *Provider) filterMessages(recipient string, includeRead bool) ([]mail.Me
 // recipient route represented by recipients. Empty recipients mean all routes.
 func (p *Provider) filterMessagesForRecipients(recipients []string, includeRead bool) ([]mail.Message, error) {
 	routes := p.recipientRoutesForAll(recipients)
+	return p.filterMessagesForRoutes(routes, includeRead)
+}
+
+func (p *Provider) filterMessagesForRoutes(routes []string, includeRead bool) ([]mail.Message, error) {
 	candidates, err := p.messageCandidatesForRoutes(routes)
 	if err != nil {
 		return nil, fmt.Errorf("beadmail: listing beads: %w", err)
