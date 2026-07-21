@@ -675,20 +675,12 @@ func formatMailCheckPartialDegradedNotice() string {
 
 // doMailCheckFallback is the direct-bd path for `gc mail check`.
 func doMailCheckFallback(args []string, inject bool, hookFormat string, stdout, stderr io.Writer) int {
-	mp, code := openCityMailProvider(stderr, "gc mail check")
+	mp, target, code := openCityMailProviderAndTarget(args, stderr, "gc mail check")
 	if mp == nil {
 		if inject {
 			return 0 // --inject always exits 0
 		}
 		return code
-	}
-
-	target, ok := resolveMailTargetFromArgs(args, stderr, "gc mail check")
-	if !ok {
-		if inject {
-			return 0
-		}
-		return 1
 	}
 
 	return doMailCheckTargetWithFormat(mp, target, inject, hookFormat, stdout, stderr)
@@ -1179,6 +1171,18 @@ func resolveMailTargetsWithConfigCached(cityPath string, cfg *config.City, store
 		// resolveMailTargetsCached / resolveMailIdentityWithConfigCached carry the
 		// same pre-existing gap and are swept on the mail DI pass.)
 		sessStore := cliSessionStore(store, cfg, cityPath)
+		if b, _, err := session.ResolveSessionBeadByExactID(sessStore, identifier); err == nil {
+			addresses := sessionMailboxAddresses(b)
+			if len(addresses) == 0 {
+				return resolvedMailTarget{}, fmt.Errorf("session %q has no mailbox identity", identifier)
+			}
+			return resolvedMailTarget{
+				display:    addresses[0],
+				recipients: addresses,
+			}, nil
+		} else if !errors.Is(err, session.ErrSessionNotFound) {
+			return resolvedMailTarget{}, err
+		}
 		sessionID, err := resolveSessionIDWithConfig(cityPath, cfg, sessStore, identifier)
 		if err == nil {
 			b, err := sessStore.Get(sessionID)
@@ -1253,6 +1257,21 @@ func resolveMailTargetsForCommand(identifier string, stderr io.Writer, cmdName s
 	return target, true
 }
 
+func resolveMailTargetsForCommandWithStore(cityPath string, cfg *config.City, store beads.Store, identifier string, stderr io.Writer, cmdName string) (resolvedMailTarget, bool) {
+	if normalized := normalizeNamedSessionTarget(identifier); normalized == "" || normalized == "human" {
+		return resolvedMailTarget{display: "human", recipients: []string{"human"}}, true
+	}
+	if isStorelessMailProvider() {
+		return resolveRawMailTargetForStorelessProvider(identifier, stderr, cmdName)
+	}
+	target, err := resolveMailTargetsWithConfig(cityPath, cfg, store, identifier)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", cmdName, err) //nolint:errcheck // best-effort stderr
+		return resolvedMailTarget{}, false
+	}
+	return target, true
+}
+
 // resolveDefaultMailTargetsForCommand tries each default identity candidate
 // against the city's bead store and returns the first that resolves. A
 // stale GC_ALIAS on a pool worker would otherwise block inbox access when
@@ -1270,6 +1289,26 @@ func resolveDefaultMailTargetsForCommand(stderr io.Writer, cmdName string) (reso
 	// Memoize the gc:session enumeration so multi-candidate retry shares one
 	// broad scan instead of issuing one per candidate (ga-q6ct Layer 2).
 	cityPath, cfg := ambientMailTargetConfig()
+	cache := &mailIdentitySessionCache{}
+	for _, c := range candidates {
+		target, err := resolveMailTargetsWithConfigCached(cityPath, cfg, store, c, cache)
+		if err == nil {
+			return target, true
+		}
+		if !errors.Is(err, session.ErrSessionNotFound) {
+			fmt.Fprintf(stderr, "%s: %v\n", cmdName, err) //nolint:errcheck // best-effort stderr
+			return resolvedMailTarget{}, false
+		}
+	}
+	fmt.Fprintf(stderr, "%s: no mail identity resolved (tried %v)\n", cmdName, candidates) //nolint:errcheck // best-effort stderr
+	return resolvedMailTarget{}, false
+}
+
+func resolveDefaultMailTargetsForCommandWithStore(cityPath string, cfg *config.City, store beads.Store, stderr io.Writer, cmdName string) (resolvedMailTarget, bool) {
+	candidates := defaultMailIdentityCandidates()
+	if len(candidates) == 1 || isStorelessMailProvider() {
+		return resolveMailTargetsForCommandWithStore(cityPath, cfg, store, candidates[0], stderr, cmdName)
+	}
 	cache := &mailIdentitySessionCache{}
 	for _, c := range candidates {
 		target, err := resolveMailTargetsWithConfigCached(cityPath, cfg, store, c, cache)
@@ -1312,6 +1351,13 @@ func resolveMailTargetFromArgs(args []string, stderr io.Writer, cmdName string) 
 	return resolveDefaultMailTargetsForCommand(stderr, cmdName)
 }
 
+func resolveMailTargetFromArgsWithStore(args []string, cityPath string, cfg *config.City, store beads.Store, stderr io.Writer, cmdName string) (resolvedMailTarget, bool) {
+	if len(args) > 0 {
+		return resolveMailTargetsForCommandWithStore(cityPath, cfg, store, args[0], stderr, cmdName)
+	}
+	return resolveDefaultMailTargetsForCommandWithStore(cityPath, cfg, store, stderr, cmdName)
+}
+
 func resolveRawMailTargetForStorelessProvider(identifier string, stderr io.Writer, cmdName string) (resolvedMailTarget, bool) {
 	if !isStorelessMailProvider() {
 		return resolvedMailTarget{}, false
@@ -1335,6 +1381,34 @@ func resolveRawMailTargetForStorelessProvider(identifier string, stderr io.Write
 		}
 	}
 	return resolvedMailTarget{display: identifier, recipients: []string{identifier}}, true
+}
+
+func openCityMailProviderAndTarget(args []string, stderr io.Writer, cmdName string) (mail.Provider, resolvedMailTarget, int) {
+	if isStorelessMailProvider() {
+		mp, code := openCityMailProvider(stderr, cmdName)
+		if mp == nil {
+			return nil, resolvedMailTarget{}, code
+		}
+		target, ok := resolveMailTargetFromArgs(args, stderr, cmdName)
+		if !ok {
+			return nil, resolvedMailTarget{}, 1
+		}
+		return mp, target, 0
+	}
+
+	store, cityPath, code := openCityStoreWithPath(stderr, cmdName)
+	if store == nil {
+		return nil, resolvedMailTarget{}, code
+	}
+	cfg, _ := loadCityConfigWithoutBuiltinPackRefresh(cityPath, io.Discard)
+	msgStore := resolveMailMessagesStore(store, cfg, cityPath, nil)
+	sessStore := cliSessionStore(store, cfg, cityPath)
+	mp := newMailProviderWithSessionStore(msgStore, sessStore)
+	target, ok := resolveMailTargetFromArgsWithStore(args, cityPath, cfg, store, stderr, cmdName)
+	if !ok {
+		return nil, resolvedMailTarget{}, 1
+	}
+	return mp, target, 0
 }
 
 func isNoCityStoreError(err error) bool {
@@ -1938,14 +2012,9 @@ func cmdMailInbox(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdMailInboxWithJSON(args []string, jsonOut bool, stdout, stderr io.Writer) int {
-	mp, code := openCityMailProvider(stderr, "gc mail inbox")
+	mp, target, code := openCityMailProviderAndTarget(args, stderr, "gc mail inbox")
 	if mp == nil {
 		return code
-	}
-
-	target, ok := resolveMailTargetFromArgs(args, stderr, "gc mail inbox")
-	if !ok {
-		return 1
 	}
 
 	return doMailInboxTargetWithJSON(mp, target, jsonOut, stdout, stderr)
@@ -2626,14 +2695,9 @@ func routeMailCount(_ string, args []string, c *api.Client, nilReason string, js
 
 // doMailCountFallback is the direct-bd path for `gc mail count`.
 func doMailCountFallback(args []string, jsonOut bool, stdout, stderr io.Writer) int {
-	mp, code := openCityMailProvider(stderr, "gc mail count")
+	mp, target, code := openCityMailProviderAndTarget(args, stderr, "gc mail count")
 	if mp == nil {
 		return code
-	}
-
-	target, ok := resolveMailTargetFromArgs(args, stderr, "gc mail count")
-	if !ok {
-		return 1
 	}
 
 	return doMailCountTargetWithJSON(mp, target, jsonOut, stdout, stderr)
