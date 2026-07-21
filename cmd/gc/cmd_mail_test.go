@@ -33,6 +33,16 @@ type failingListByLabelStore struct {
 	err error
 }
 
+type countingGetStore struct {
+	beads.Store
+	gets int
+}
+
+func (s *countingGetStore) Get(id string) (beads.Bead, error) {
+	s.gets++
+	return s.Store.Get(id)
+}
+
 type staticInboxMailProvider struct {
 	countOnlyMailProvider
 	messages []mail.Message
@@ -421,6 +431,43 @@ func TestResolveDefaultMailTargetsForCommand_UsesGCSessionIDBeforeAlias(t *testi
 	}
 	if !foundConcrete || foundAliasOnly {
 		t.Fatalf("target.recipients = %#v, want concrete bead %q and not alias bead %q", target.recipients, b.ID, aliasOnly.ID)
+	}
+}
+
+func TestResolveMailTargetsWithConfigExactIDUsesLoadedSessionBead(t *testing.T) {
+	base := beads.NewMemStore()
+	sessionBead, err := base.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "heimdall",
+			"session_name": "heimdall-gt-wisp-xzet49",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+	store := &countingGetStore{Store: base}
+
+	target, err := resolveMailTargetsWithConfigCached(t.TempDir(), &config.City{}, store, sessionBead.ID, nil)
+	if err != nil {
+		t.Fatalf("resolveMailTargetsWithConfigCached: %v", err)
+	}
+	if target.display != "heimdall" {
+		t.Fatalf("target.display = %q, want heimdall", target.display)
+	}
+	foundSessionID := false
+	for _, recipient := range target.recipients {
+		if recipient == sessionBead.ID {
+			foundSessionID = true
+			break
+		}
+	}
+	if !foundSessionID {
+		t.Fatalf("target.recipients = %#v, want exact session id %q", target.recipients, sessionBead.ID)
+	}
+	if store.gets != 1 {
+		t.Fatalf("store.Get calls = %d, want 1 exact-session read (no resolve-then-read duplicate)", store.gets)
 	}
 }
 
