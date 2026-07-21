@@ -3674,6 +3674,78 @@ func TestBdStoreListByMetadataIncludeClosedAddsAll(t *testing.T) {
 	}
 }
 
+func TestBdStoreBothTierMetadataQueryNarrowsEphemeralRead(t *testing.T) {
+	var queryArgs []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		cmd := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(cmd, "bd list --json"):
+			return []byte(`[]`), nil
+		case strings.Contains(cmd, "bd query --json"):
+			queryArgs = append([]string(nil), args...)
+			return []byte(`[]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s", cmd)
+		}
+	}
+	s := beads.NewBdStore("/city", runner)
+	_, err := s.List(beads.ListQuery{
+		Type:     "message",
+		Status:   "open",
+		Metadata: map[string]string{"mail.to_session_id": "gt-wisp-xzet49"},
+		TierMode: beads.TierBoth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queryArgs) == 0 {
+		t.Fatal("missing bd query call")
+	}
+	expr := strings.Join(queryArgs, " ")
+	if !strings.Contains(expr, "metadata.mail.to_session_id=gt-wisp-xzet49") {
+		t.Fatalf("bd query args = %q, want metadata predicate pushed down", expr)
+	}
+	if strings.Contains(expr, "ephemeral=true AND status=open AND type=message --limit") {
+		t.Fatalf("bd query args = %q, got broad message wisp scan without metadata predicate", expr)
+	}
+}
+
+func TestBdStoreBothTierMetadataQueryClientFiltersUnsafeEphemeralValue(t *testing.T) {
+	var queryArgs []string
+	runner := func(_, name string, args ...string) ([]byte, error) {
+		cmd := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.Contains(cmd, "bd list --json"):
+			return []byte(`[]`), nil
+		case strings.Contains(cmd, "bd query --json"):
+			queryArgs = append([]string(nil), args...)
+			return []byte(`[]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected command: %s", cmd)
+		}
+	}
+	s := beads.NewBdStore("/city", runner)
+	_, err := s.List(beads.ListQuery{
+		Type:     "message",
+		Status:   "open",
+		Metadata: map[string]string{"mail.to_session_id": "gascity/workflows.codex-max"},
+		TierMode: beads.TierBoth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queryArgs) == 0 {
+		t.Fatal("missing bd query call")
+	}
+	expr := strings.Join(queryArgs, " ")
+	if strings.Contains(expr, "metadata.mail.to_session_id=") {
+		t.Fatalf("bd query args = %q, unsafe slash value should stay client-filtered", expr)
+	}
+	if !strings.Contains(expr, "ephemeral=true AND status=open AND type=message") {
+		t.Fatalf("bd query args = %q, want safe non-metadata predicates preserved", expr)
+	}
+}
+
 // --- Verify working directory is passed ---
 
 func TestBdStorePassesDir(t *testing.T) {
