@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -772,6 +774,48 @@ func TestStateCache_ConcurrentInvalidateAndRead(_ *testing.T) {
 	wg.Wait()
 
 	// No panics, no data races — that's the assertion (run with -race).
+}
+
+func TestProcessSnapshotPermissionBackoffSuppressesRepeatedPS(t *testing.T) {
+	processSnapshotPermissionBackoff.reset()
+	prevCommandContext := processSnapshotCommandContext
+	t.Cleanup(func() {
+		processSnapshotCommandContext = prevCommandContext
+		processSnapshotPermissionBackoff.reset()
+	})
+
+	permissionErr := &os.PathError{Op: "fork/exec", Path: "/bin/ps", Err: os.ErrPermission}
+	firstErr := processSnapshotError("fetching Darwin process args snapshot", permissionErr)
+	if firstErr == nil {
+		t.Fatal("processSnapshotError returned nil for permission failure")
+	}
+
+	var calls int
+	processSnapshotCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		calls++
+		return prevCommandContext(ctx, name, arg...)
+	}
+
+	_, err := fetchProcessSnapshot(context.Background())
+	if err == nil {
+		t.Fatal("fetchProcessSnapshot during permission backoff returned nil error")
+	}
+	if !strings.Contains(err.Error(), "process snapshot permission backoff active") {
+		t.Fatalf("fetchProcessSnapshot error = %v, want permission backoff", err)
+	}
+	if calls != 0 {
+		t.Fatalf("process snapshot command calls during active permission backoff = %d, want 0", calls)
+	}
+}
+
+func TestProcessSnapshotNonPermissionErrorDoesNotEnterBackoff(t *testing.T) {
+	processSnapshotPermissionBackoff.reset()
+	t.Cleanup(processSnapshotPermissionBackoff.reset)
+
+	_ = processSnapshotError("fetching process snapshot", errors.New("exit status 1"))
+	if ok, err := processSnapshotPermissionBackoff.active(time.Now()); ok {
+		t.Fatalf("permission backoff active after non-permission error: %v", err)
+	}
 }
 
 // TestStateCache_RefreshLogIsOptInViaEnvVar verifies that the successful
