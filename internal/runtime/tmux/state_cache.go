@@ -429,27 +429,80 @@ func newProcessSnapshot(processes []processRuntimeState) processSnapshot {
 	return snapshot
 }
 
+var processSnapshotCommandContext = exec.CommandContext
+
+var processSnapshotPermissionBackoff = newPermissionBackoff(30 * time.Second)
+
+type permissionBackoff struct {
+	mu       sync.Mutex
+	duration time.Duration
+	until    time.Time
+	err      error
+}
+
+func newPermissionBackoff(duration time.Duration) *permissionBackoff {
+	return &permissionBackoff{duration: duration}
+}
+
+func (b *permissionBackoff) active(now time.Time) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err == nil || !now.Before(b.until) {
+		return false, nil
+	}
+	return true, b.err
+}
+
+func (b *permissionBackoff) mark(now time.Time, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.err = err
+	b.until = now.Add(b.duration)
+}
+
+func (b *permissionBackoff) reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.until = time.Time{}
+	b.err = nil
+}
+
 func fetchProcessSnapshot(ctx context.Context) (processSnapshot, error) {
+	if ok, err := processSnapshotPermissionBackoff.active(time.Now()); ok {
+		return processSnapshot{}, fmt.Errorf("process snapshot permission backoff active: %w", err)
+	}
 	if goruntime.GOOS == "darwin" {
 		return fetchDarwinProcessSnapshot(ctx)
 	}
-	out, err := exec.CommandContext(ctx, "ps", processSnapshotPSArgs()...).Output()
+	out, err := processSnapshotCommandContext(ctx, "ps", processSnapshotPSArgs()...).Output()
 	if err != nil {
-		return processSnapshot{}, fmt.Errorf("fetching process snapshot: %w", err)
+		return processSnapshot{}, processSnapshotError("fetching process snapshot", err)
 	}
 	return parseProcessSnapshot(string(out)), nil
 }
 
 func fetchDarwinProcessSnapshot(ctx context.Context) (processSnapshot, error) {
-	argsOut, err := exec.CommandContext(ctx, "ps", processSnapshotPSArgs()...).Output()
+	argsOut, err := processSnapshotCommandContext(ctx, "ps", processSnapshotPSArgs()...).Output()
 	if err != nil {
-		return processSnapshot{}, fmt.Errorf("fetching Darwin process args snapshot: %w", err)
+		return processSnapshot{}, processSnapshotError("fetching Darwin process args snapshot", err)
 	}
-	commOut, err := exec.CommandContext(ctx, "ps", darwinCommandSnapshotPSArgs()...).Output()
+	commOut, err := processSnapshotCommandContext(ctx, "ps", darwinCommandSnapshotPSArgs()...).Output()
 	if err != nil {
-		return processSnapshot{}, fmt.Errorf("fetching Darwin process command snapshot: %w", err)
+		return processSnapshot{}, processSnapshotError("fetching Darwin process command snapshot", err)
 	}
 	return parseDarwinProcessSnapshot(string(argsOut), string(commOut)), nil
+}
+
+func processSnapshotError(op string, err error) error {
+	wrapped := fmt.Errorf("%s: %w", op, err)
+	if isPermissionDenied(err) {
+		processSnapshotPermissionBackoff.mark(time.Now(), wrapped)
+	}
+	return wrapped
+}
+
+func isPermissionDenied(err error) bool {
+	return errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "operation not permitted")
 }
 
 // processSnapshotPSArgs returns the platform-appropriate `ps` arguments for
