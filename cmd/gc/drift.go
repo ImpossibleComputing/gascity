@@ -215,9 +215,12 @@ type restartHelpers struct {
 //     systemd's responsibility; attempting to kill the PID ourselves
 //     would race with systemd's own respawn.
 //
-//   - LaunchdManaged: a single `launchctl kickstart -k <target>` call
-//     restarts the launchd service. This is the macOS production upgrade
-//     path and does not require /proc/<pid>/exe.
+//   - LaunchdManaged: send the running supervisor SIGTERM, wait for it to
+//     exit, then run `launchctl kickstart -p <target>`. This mirrors the
+//     manual binary-swap runbook: the supervisor gets its preserve-mode
+//     shutdown path instead of launchd forcibly killing it with -k, and
+//     launchd still owns the replacement start. The path does not require
+//     /proc/<pid>/exe.
 //
 //   - Direct: we kill the process by PID and spawn a new instance from
 //     ExePath. Kill failures abort the restart so we never run two
@@ -239,12 +242,23 @@ func restartSupervisor(spec restartSpec, h restartHelpers) error {
 		return nil
 	}
 	if spec.LaunchdManaged {
-		if h.Launchctl == nil {
-			return fmt.Errorf("restartSupervisor: nil Launchctl helper")
+		if h.Launchctl == nil || h.Kill == nil {
+			return fmt.Errorf("restartSupervisor: nil Launchctl/Kill helper")
+		}
+		if spec.PID <= 0 {
+			return fmt.Errorf("restartSupervisor: launchd-managed restart requires a live supervisor pid")
+		}
+		if err := h.Kill(spec.PID); err != nil {
+			return fmt.Errorf("gracefully stopping launchd-managed supervisor pid %d: %w", spec.PID, err)
+		}
+		if h.WaitExit != nil {
+			if err := h.WaitExit(spec.PID); err != nil {
+				return fmt.Errorf("waiting for launchd-managed supervisor pid %d to exit: %w", spec.PID, err)
+			}
 		}
 		target := supervisorLaunchdServiceTarget(spec.LaunchdLabel)
-		if err := h.Launchctl("kickstart", "-k", target); err != nil {
-			return fmt.Errorf("launchctl kickstart -k %s: %w", target, err)
+		if err := h.Launchctl("kickstart", "-p", target); err != nil {
+			return fmt.Errorf("launchctl kickstart -p %s: %w", target, err)
 		}
 		return nil
 	}

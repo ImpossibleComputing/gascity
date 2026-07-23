@@ -364,11 +364,18 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 				t.Fatal("systemctl should not handle a Darwin launchd supervisor")
 				return nil
 			},
-			Kill: func(int) error {
-				t.Fatal("direct kill should not handle a Darwin launchd supervisor")
+			Kill: func(pid int) error {
+				if pid != os.Getpid() {
+					t.Fatalf("launchd restart Kill pid = %d, want %d", pid, os.Getpid())
+				}
 				return nil
 			},
-			WaitExit: func(int) error { return nil },
+			WaitExit: func(pid int) error {
+				if pid != os.Getpid() {
+					t.Fatalf("launchd restart WaitExit pid = %d, want %d", pid, os.Getpid())
+				}
+				return nil
+			},
 			Spawn: func(string, ...string) error {
 				t.Fatal("direct spawn should not handle a Darwin launchd supervisor")
 				return nil
@@ -384,7 +391,7 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 	if !cont {
 		t.Fatalf("cont = false after successful launchd restart; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	wantArgs := []string{"kickstart", "-k", supervisorLaunchdServiceTarget(supervisorLaunchdLabel())}
+	wantArgs := []string{"kickstart", "-p", supervisorLaunchdServiceTarget(supervisorLaunchdLabel())}
 	if len(launchctlArgs) != len(wantArgs) {
 		t.Fatalf("launchctl args = %v, want %v", launchctlArgs, wantArgs)
 	}
