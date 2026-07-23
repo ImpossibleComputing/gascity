@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,5 +79,50 @@ func writeFakeExitDolt(t *testing.T, dir string, exitCode int) {
 	body := "#!/bin/sh\nexit " + strconv.Itoa(exitCode) + "\n"
 	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
 		t.Fatalf("write fake dolt: %v", err)
+	}
+}
+
+func TestServerSQLUsesNeutralWorkingDirectory(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; skipping shell-function test")
+	}
+
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	serverSQL := extractShellFunction(t, string(scriptBytes), "server_sql")
+
+	binDir := t.TempDir()
+	pwdFile := filepath.Join(t.TempDir(), "pwd.txt")
+	fakeDolt := filepath.Join(binDir, "dolt")
+	body := "#!/bin/sh\npwd > " + strconv.Quote(pwdFile) + "\n"
+	if err := os.WriteFile(fakeDolt, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake dolt: %v", err)
+	}
+
+	poisonCWD := t.TempDir()
+	script := "connect_host() { printf '127.0.0.1'; }\n" +
+		serverSQL + "\n" +
+		"server_sql 'SELECT 1'\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Dir = poisonCWD
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DOLT_PORT=42188",
+		"DOLT_USER=root",
+		"DOLT_PASSWORD=",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("server_sql failed: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := filepath.Clean(string(bytes.TrimSpace(data))), filepath.Clean(os.TempDir()); !samePath(got, want) {
+		t.Fatalf("server_sql cwd = %q, want neutral temp dir %q", got, want)
 	}
 }

@@ -159,3 +159,37 @@ dolt      123 user    5u   REG   1,4     4096  99 /tmp/my city/.beads/dolt/held.
 		t.Fatalf("target = %q, want full spaced path", targets[0])
 	}
 }
+
+func TestManagedDoltOwnershipFallsBackToLiveDataDirLockWhenPSDenied(t *testing.T) {
+	cityPath := t.TempDir()
+	layout, err := resolveManagedDoltRuntimeLayout(cityPath)
+	if err != nil {
+		t.Fatalf("resolveManagedDoltRuntimeLayout: %v", err)
+	}
+	lockPath := filepath.Join(layout.DataDir, "hq", ".dolt", "noms", "LOCK")
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "ps"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(ps): %v", err)
+	}
+	lsofScript := fmt.Sprintf("#!/bin/sh\nprintf 'p%d\\nfcwd\\nn%s\\nf5\\nn%s\\n'\n", os.Getpid(), cityPath, lockPath)
+	if err := os.WriteFile(filepath.Join(binDir, "lsof"), []byte(lsofScript), 0o755); err != nil {
+		t.Fatalf("WriteFile(lsof): %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	owned := managedDoltProcessOwnedWithStateDir(os.Getpid(), layout, layout.DataDir)
+	if !owned {
+		t.Fatal("managedDoltProcessOwnedWithStateDir() = false, want true from live data-dir LOCK fallback when ps is denied")
+	}
+}
+
+func TestLiveDataDirLockTargetsIgnoreDeletedLocks(t *testing.T) {
+	output := "p123\nn/private/tmp/city/.beads/dolt/hq/.dolt/noms/LOCK (deleted)\nn/private/tmp/city/.beads/dolt/ja/.dolt/noms/LOCK\n"
+	targets := liveDataDirLockTargetsFromFormattedLsofOutput(output)
+	if len(targets) != 1 {
+		t.Fatalf("liveDataDirLockTargetsFromFormattedLsofOutput returned %d targets, want 1: %#v", len(targets), targets)
+	}
+	if !strings.HasSuffix(targets[0], filepath.Join("ja", ".dolt", "noms", "LOCK")) {
+		t.Fatalf("target = %q, want live ja LOCK", targets[0])
+	}
+}

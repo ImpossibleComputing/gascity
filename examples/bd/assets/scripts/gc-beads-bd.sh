@@ -275,8 +275,11 @@ do_query_probe() {
 server_sql() {
     local host
     host=$(connect_host)
-    dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
-        sql -q "$1"
+    # Dolt performs cwd-rooted database discovery before honoring explicit
+    # --host/--port SQL client flags. Run server-mode SQL probes away from
+    # city roots that may contain unreadable .secrets entries.
+    (cd "${TMPDIR:-/tmp}" && dolt --host "$host" --port "$DOLT_PORT" --user "$DOLT_USER" --password "${DOLT_PASSWORD:-}" --no-tls \
+        sql -q "$1")
 }
 
 # is_retryable_error checks if an error message is a transient Dolt failure worth retrying.
