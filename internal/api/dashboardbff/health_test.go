@@ -2,6 +2,8 @@ package dashboardbff
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -64,4 +66,62 @@ func TestUnavailableSanitizesReason(t *testing.T) {
 	if !strings.Contains(tv.Reason, "boom") || !strings.Contains(tv.Reason, "here") {
 		t.Errorf("sanitizer dropped legible text: %q", tv.Reason)
 	}
+}
+
+func TestProbeSemverDoltVersionUsesNeutralWorkingDirectory(t *testing.T) {
+	binDir := t.TempDir()
+	cityRoot := t.TempDir()
+	pwdLog := filepath.Join(t.TempDir(), "pwd.log")
+	doltPath := filepath.Join(binDir, "dolt")
+	script := `#!/bin/sh
+printf '%s\n' "$PWD" > ` + shellQuote(pwdLog) + `
+if [ "$PWD" = ` + shellQuote(cityRoot) + ` ]; then
+  printf 'refusing city cwd\n' >&2
+  exit 42
+fi
+printf 'dolt version 2.1.10\n'
+`
+	if err := os.WriteFile(doltPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ADMIN_PATH", binDir)
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(origWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+	if err := os.Chdir(cityRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	got := New(Deps{}).probeSemverTool(context.Background(), "dolt", "version")
+	if got.Status != "available" || got.Version != "2.1.10" {
+		t.Fatalf("dolt local tool = %+v, want available 2.1.10", got)
+	}
+	raw, err := os.ReadFile(pwdLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDir, wantDir := filepath.Clean(strings.TrimSpace(string(raw))), filepath.Clean(os.TempDir())
+	gotDirEval, _ := filepath.EvalSymlinks(gotDir)
+	wantDirEval, _ := filepath.EvalSymlinks(wantDir)
+	if gotDirEval == "" {
+		gotDirEval = gotDir
+	}
+	if wantDirEval == "" {
+		wantDirEval = wantDir
+	}
+	if gotDirEval != wantDirEval {
+		t.Fatalf("dolt version cwd = %q, want neutral temp dir %q", gotDir, wantDir)
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

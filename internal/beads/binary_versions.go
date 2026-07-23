@@ -3,6 +3,7 @@ package beads
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -51,7 +52,14 @@ func probeBinaryVersion(name string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), binaryVersionProbeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, path, "version")
+	if name == "dolt" {
+		// Dolt performs cwd-rooted database discovery before returning version
+		// output. Keep status/dashboard probes away from city roots that may
+		// contain intentionally unreadable entries such as .secrets.
+		cmd.Dir = os.TempDir()
+	}
+	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return string(out), fmt.Errorf("%s version timed out after %s", name, binaryVersionProbeTimeout)
 	}
