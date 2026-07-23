@@ -248,6 +248,8 @@ type fakeRestartHelpers struct {
 	launchctlErr  error
 	killedPID     int
 	killErr       error
+	waitedPID     int
+	waitErr       error
 	spawnExe      string
 	spawnArgv     []string
 	spawnErr      error
@@ -268,10 +270,34 @@ func (f *fakeRestartHelpers) Kill(pid int) error {
 	return f.killErr
 }
 
+func (f *fakeRestartHelpers) WaitExit(pid int) error {
+	f.waitedPID = pid
+	return f.waitErr
+}
+
 func (f *fakeRestartHelpers) Spawn(exe string, argv ...string) error {
 	f.spawnExe = exe
 	f.spawnArgv = append([]string(nil), argv...)
 	return f.spawnErr
+}
+
+func TestPidGone_DarwinMissingProcDoesNotMeanGone(t *testing.T) {
+	oldGOOS := supervisorRuntimeGOOS
+	oldProcRoot := supervisorProcRoot
+	oldReadFile := supervisorProcReadFile
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorProcRoot = oldProcRoot
+		supervisorProcReadFile = oldReadFile
+	})
+
+	supervisorRuntimeGOOS = "darwin"
+	supervisorProcRoot = t.TempDir()
+	supervisorProcReadFile = os.ReadFile
+
+	if pidGone(os.Getpid()) {
+		t.Fatalf("pidGone(os.Getpid()) = true on darwin with missing /proc status; want false so launchd graceful restarts wait for real exit")
+	}
 }
 
 func TestRestartSupervisor_SystemdManaged(t *testing.T) {
@@ -316,7 +342,7 @@ func TestRestartSupervisor_LaunchdManaged(t *testing.T) {
 	if err := restartSupervisor(spec, restartHelpersFromFake(h)); err != nil {
 		t.Fatalf("restartSupervisor: %v", err)
 	}
-	wantArgs := []string{"kickstart", "-k", supervisorLaunchdServiceTarget("com.gascity.supervisor.test")}
+	wantArgs := []string{"kickstart", "-p", supervisorLaunchdServiceTarget("com.gascity.supervisor.test")}
 	if len(h.launchctlArgs) != len(wantArgs) {
 		t.Fatalf("launchctl args = %v, want %v", h.launchctlArgs, wantArgs)
 	}
@@ -328,11 +354,14 @@ func TestRestartSupervisor_LaunchdManaged(t *testing.T) {
 	if len(h.systemctlArgs) != 0 {
 		t.Errorf("systemctl invoked for launchd-managed restart: %v", h.systemctlArgs)
 	}
-	if h.killedPID != 0 {
-		t.Errorf("Kill called for launchd-managed restart (pid=%d); should delegate to launchd only", h.killedPID)
+	if h.killedPID != 12345 {
+		t.Errorf("Kill called with pid %d, want 12345", h.killedPID)
+	}
+	if h.waitedPID != 12345 {
+		t.Errorf("WaitExit called with pid %d, want 12345", h.waitedPID)
 	}
 	if h.spawnExe != "" {
-		t.Errorf("Spawn called for launchd-managed restart; should delegate to launchd only")
+		t.Errorf("Spawn called for launchd-managed restart; launchd should own replacement start")
 	}
 }
 
@@ -411,6 +440,7 @@ func restartHelpersFromFake(f *fakeRestartHelpers) restartHelpers {
 		Systemctl: f.Systemctl,
 		Launchctl: f.Launchctl,
 		Kill:      f.Kill,
+		WaitExit:  f.WaitExit,
 		Spawn:     f.Spawn,
 	}
 }

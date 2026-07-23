@@ -571,11 +571,14 @@ func pidGone(pid int) bool {
 	if err := syscall.Kill(pid, syscall.Signal(0)); err == syscall.ESRCH {
 		return true
 	}
-	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	data, err := supervisorProcReadFile(filepath.Join(supervisorProcRoot, strconv.Itoa(pid), "status"))
 	if err != nil {
-		// If /proc/<pid>/status is missing, the kernel has already
-		// torn down the entry — ESRCH-equivalent.
-		return os.IsNotExist(err)
+		// On Linux, a missing /proc/<pid>/status after signal-zero said the
+		// pid was live usually means the process disappeared between probes.
+		// On Darwin there is no /proc, so treating ENOENT as gone would skip
+		// the graceful launchd wait and race kickstart -p against the old
+		// supervisor's shutdown path.
+		return supervisorRuntimeGOOS == "linux" && os.IsNotExist(err)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if !strings.HasPrefix(line, "State:") {
