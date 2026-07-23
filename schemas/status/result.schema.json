@@ -236,6 +236,17 @@
           "type": "integer"
         }
       }
+    },
+    "partial": {
+      "type": "boolean",
+      "description": "Whether the status payload is partial because one or more probes degraded or timed out."
+    },
+    "partial_errors": {
+      "type": "array",
+      "description": "Human-readable reasons why the status payload is partial.",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

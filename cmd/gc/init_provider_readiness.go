@@ -519,6 +519,13 @@ var initRunDoltConfigGet = func(key string) (string, error) {
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "dolt", "config", "--global", "--get", key)
+	// `dolt config --global` still performs cwd-rooted database discovery before
+	// reading the user config. During recovery, gc is often launched from the
+	// city root, where deliberately protected directories such as `.secrets` may
+	// be unreadable to the current worker. Run the global-config probe from a
+	// neutral directory so an inaccessible city child cannot masquerade as a
+	// missing/broken Dolt identity and block `gc start`.
+	cmd.Dir = os.TempDir()
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()

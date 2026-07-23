@@ -1717,6 +1717,48 @@ func TestInitRunDoltConfigGetReportsExitStderrAsProbeError(t *testing.T) {
 	}
 }
 
+func TestInitRunDoltConfigGetUsesNeutralWorkingDirectory(t *testing.T) {
+	binDir := t.TempDir()
+	doltPath := filepath.Join(binDir, "dolt")
+	if err := os.WriteFile(doltPath, []byte(`#!/bin/sh
+case "$(pwd)" in
+  *city-with-denied-child*)
+    echo "failed to load database names: lstat .secrets: operation not permitted" >&2
+    exit 1
+    ;;
+esac
+echo "Keith Ballinger"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cityPath := filepath.Join(t.TempDir(), "city-with-denied-child")
+	if err := os.MkdirAll(cityPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cityPath); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldCWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	value, err := initRunDoltConfigGet("user.name")
+	if err != nil {
+		t.Fatalf("initRunDoltConfigGet error = %v, want neutral-cwd success", err)
+	}
+	if value != "Keith Ballinger" {
+		t.Fatalf("value = %q, want Keith Ballinger", value)
+	}
+}
+
 func TestInitRunDoltConfigGetTreatsSilentEmptyExitAsMissingKey(t *testing.T) {
 	binDir := t.TempDir()
 	doltPath := filepath.Join(binDir, "dolt")
