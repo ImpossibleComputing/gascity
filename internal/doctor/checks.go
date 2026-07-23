@@ -2739,6 +2739,10 @@ func (c *DoltVersionCheck) Run(_ *CheckContext) *CheckResult {
 			ctx, cancel := context.WithTimeout(context.Background(), doltVersionCommandTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, path, "version")
+			// Dolt performs cwd-rooted database discovery before returning
+			// version output. Doctor may be run from the city root, which can
+			// contain intentionally unreadable entries such as .secrets.
+			cmd.Dir = os.TempDir()
 			out, err := cmd.CombinedOutput()
 			if ctx.Err() == context.DeadlineExceeded {
 				return string(out), fmt.Errorf("dolt version timed out after %s", doltVersionCommandTimeout)

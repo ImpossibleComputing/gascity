@@ -83,6 +83,12 @@ func (r *execRunner) run(ctx context.Context, cmd string, args []string, timeout
 	start := time.Now()
 	c := exec.CommandContext(cctx, cmd, args...)
 	c.Env = cleanEnv()
+	if cmd == "dolt" && len(args) == 1 && args[0] == "version" {
+		// Dolt performs cwd-rooted database discovery before returning version
+		// output. Keep dashboard local-tool probes away from city roots that
+		// may contain intentionally unreadable entries such as .secrets.
+		c.Dir = os.TempDir()
+	}
 	stdout := &cappedBuffer{limit: capBytes, onOverflow: cancel}
 	stderr := &cappedBuffer{limit: maxBytes}
 	c.Stdout = stdout
