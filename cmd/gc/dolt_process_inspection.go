@@ -257,6 +257,80 @@ func benignManagedDeletedInodeTarget(target string) bool {
 	return strings.HasSuffix(clean, string(filepath.Separator)+".dolt"+string(filepath.Separator)+"noms"+string(filepath.Separator)+"LOCK")
 }
 
+func processHoldsLiveDataDirLock(pid int, dataDir string) bool {
+	if pid <= 0 || strings.TrimSpace(dataDir) == "" {
+		return false
+	}
+	for _, target := range liveDataDirLockTargetsFromLsof(pid) {
+		clean := normalizePathForCompare(strings.TrimSpace(target))
+		if !pathWithinOrSame(clean, dataDir) {
+			continue
+		}
+		if strings.Contains(clean, " (deleted)") {
+			continue
+		}
+		if strings.HasSuffix(clean, string(filepath.Separator)+".dolt"+string(filepath.Separator)+"noms"+string(filepath.Separator)+"LOCK") {
+			return true
+		}
+	}
+	return false
+}
+
+func liveDataDirLockTargetsFromLsof(pid int) []string {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		return nil
+	}
+	if out, err := lsofOutput("-a", "-p", strconv.Itoa(pid), "-Fn"); err == nil {
+		if targets := liveDataDirLockTargetsFromFormattedLsofOutput(string(out)); len(targets) > 0 {
+			return targets
+		}
+	}
+	out, err := lsofOutput("-p", strconv.Itoa(pid))
+	if err != nil {
+		return nil
+	}
+	return liveDataDirLockTargetsFromPlainLsofOutput(string(out))
+}
+
+func liveDataDirLockTargetsFromFormattedLsofOutput(output string) []string {
+	var targets []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "n") {
+			continue
+		}
+		target := normalizeLsofReportedPath(strings.TrimPrefix(line, "n"))
+		if strings.Contains(target, " (deleted)") {
+			continue
+		}
+		if benignManagedDeletedInodeTarget(target) {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+func liveDataDirLockTargetsFromPlainLsofOutput(output string) []string {
+	var targets []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "COMMAND ") {
+			continue
+		}
+		idx := strings.Index(line, " /")
+		if idx < 0 {
+			continue
+		}
+		target := normalizeLsofReportedPath(line[idx+1:])
+		if strings.Contains(target, " (deleted)") {
+			continue
+		}
+		if benignManagedDeletedInodeTarget(target) {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
 func processHasDeletedDataInodes(pid int, dataDir string) bool {
 	if pid <= 0 {
 		return false
@@ -533,6 +607,12 @@ func managedDoltProcessOwnedWithStateDir(pid int, layout managedDoltRuntimeLayou
 	case processDataDirMatches(procArgs, layout.DataDir):
 		return true
 	case processCWDMatches(pid, layout.DataDir):
+		return true
+	case processHoldsLiveDataDirLock(pid, layout.DataDir):
+		// macOS worker seatbelts can deny /bin/ps, making argv unavailable even
+		// for our own Dolt server. A live noms LOCK under the state-file-matched
+		// managed data dir is a narrower ownership witness than cwd alone and
+		// lets gc reuse/recover its managed server without spawning a duplicate.
 		return true
 	default:
 		return false

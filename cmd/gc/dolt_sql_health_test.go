@@ -417,3 +417,35 @@ func TestRunManagedDoltSQLIncludesConfiguredPasswordFlag(t *testing.T) {
 		t.Fatalf("dolt args missing configured password flag:\n%s", data)
 	}
 }
+
+func TestRunManagedDoltSQLUsesNeutralWorkingDirectory(t *testing.T) {
+	binDir := t.TempDir()
+	pwdFile := filepath.Join(t.TempDir(), "pwd.txt")
+	fakeDolt := filepath.Join(binDir, "dolt")
+	script := fmt.Sprintf("#!/bin/sh\npwd > %q\n", pwdFile)
+	if err := os.WriteFile(fakeDolt, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedCityRoot := t.TempDir()
+	if err := os.Chdir(blockedCityRoot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalCWD) })
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := runManagedDoltSQL("127.0.0.1", "3311", "root", "-q", "SELECT 1"); err != nil {
+		t.Fatalf("runManagedDoltSQL() error = %v", err)
+	}
+	data, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(data)), os.TempDir(); !samePath(got, want) {
+		t.Fatalf("dolt SQL cwd = %q, want neutral temp dir %q", got, want)
+	}
+}

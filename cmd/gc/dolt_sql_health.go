@@ -471,6 +471,11 @@ func runManagedDoltSQLContext(parent context.Context, host, port, user string, a
 	ctx, cancel := context.WithTimeout(parent, managedDoltSQLCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "dolt", append(baseArgs, args...)...)
+	// Dolt performs cwd-rooted database discovery before honoring explicit
+	// --host/--port SQL client flags. City roots may intentionally contain
+	// unreadable entries (for example .secrets under worker seatbelts), so
+	// managed-server readiness probes must run from a neutral directory.
+	cmd.Dir = os.TempDir()
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		msg := strings.TrimSpace(string(out))
