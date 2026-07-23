@@ -2020,15 +2020,19 @@ ensure_dolt_identity() {
     # is set, non-zero otherwise; some tests stub dolt to return 0 with
     # empty stdout for any `config` invocation, and we treat that as
     # configured too (matches historical behavior of this helper).
+    # Run dolt global-config reads/writes from a neutral directory: Dolt still
+    # performs cwd-rooted database discovery before handling global config, and
+    # recovery often launches this script from a city root with protected
+    # children such as .secrets.
     local dolt_has_name=0 dolt_has_email=0
     local dolt_name="" dolt_email="" git_name git_email
-    if dolt config --global --get user.name >/dev/null 2>&1; then
+    if (cd "${TMPDIR:-/tmp}" && dolt config --global --get user.name) >/dev/null 2>&1; then
         dolt_has_name=1
-        dolt_name=$(dolt config --global --get user.name 2>/dev/null || true)
+        dolt_name=$(cd "${TMPDIR:-/tmp}" && dolt config --global --get user.name 2>/dev/null || true)
     fi
-    if dolt config --global --get user.email >/dev/null 2>&1; then
+    if (cd "${TMPDIR:-/tmp}" && dolt config --global --get user.email) >/dev/null 2>&1; then
         dolt_has_email=1
-        dolt_email=$(dolt config --global --get user.email 2>/dev/null || true)
+        dolt_email=$(cd "${TMPDIR:-/tmp}" && dolt config --global --get user.email 2>/dev/null || true)
     fi
     if [ "$dolt_has_name" -eq 1 ] && [ "$dolt_has_email" -eq 1 ]; then
         return 0
@@ -2058,10 +2062,10 @@ ensure_dolt_identity() {
 
     # Backfill missing dolt fields from git.
     if [ "$dolt_has_name" -ne 1 ]; then
-        dolt config --global --add user.name "$git_name" || die "failed to set dolt user.name"
+        (cd "${TMPDIR:-/tmp}" && dolt config --global --add user.name "$git_name") || die "failed to set dolt user.name"
     fi
     if [ "$dolt_has_email" -ne 1 ]; then
-        dolt config --global --add user.email "$git_email" || die "failed to set dolt user.email"
+        (cd "${TMPDIR:-/tmp}" && dolt config --global --add user.email "$git_email") || die "failed to set dolt user.email"
     fi
 }
 

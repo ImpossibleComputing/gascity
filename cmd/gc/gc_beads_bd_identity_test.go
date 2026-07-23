@@ -158,6 +158,62 @@ func TestEnsureDoltIdentityErrorMessages(t *testing.T) {
 	}
 }
 
+func TestEnsureDoltIdentityUsesNeutralWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; skipping shell-function test")
+	}
+
+	root := repoRootForLint(t)
+	scriptPath := filepath.Join(root, "examples", "bd", "assets", "scripts", "gc-beads-bd.sh")
+	scriptBytes, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	fnSrc := extractShellFunction(t, string(scriptBytes), "ensure_dolt_identity")
+
+	binDir := t.TempDir()
+	poisonDir := filepath.Join(t.TempDir(), "city-with-denied-child")
+	if err := os.MkdirAll(poisonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/usr/bin/env bash
+set -e
+case "$(pwd)" in
+  *city-with-denied-child*)
+    echo "failed to load database names: lstat .secrets: operation not permitted" >&2
+    exit 1
+    ;;
+esac
+case "$1 $2 $3 $4" in
+  "config --global --get user.name")
+    echo "Roger"; exit 0 ;;
+  "config --global --get user.email")
+    echo "roger@example.com"; exit 0 ;;
+esac
+exit 1
+`)
+	writeFakeGit(t, binDir, "", "")
+
+	script := fnSrc + "\n" +
+		"die() { printf '%s\\n' \"$*\" >&2; exit 1; }\n" +
+		"ensure_dolt_identity\n"
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Dir = poisonDir
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+t.TempDir(),
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ensure_dolt_identity from poison cwd failed: %v\nstderr:\n%s", err, stderr.String())
+	}
+}
+
 func extractShellFunction(t *testing.T, script, name string) string {
 	t.Helper()
 	// Match the function header and capture lines until the matching
