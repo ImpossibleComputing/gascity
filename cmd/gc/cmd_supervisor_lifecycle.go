@@ -879,7 +879,13 @@ func newSupervisorInstallCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "install",
 		Short: "Install the supervisor as a platform service",
 		Long: `Install the machine-wide supervisor as a platform service that
-starts on login.`,
+starts on login.
+
+On macOS the default target is a per-user LaunchAgent. Set
+GC_SUPERVISOR_LAUNCHD_DOMAIN=system to target a system LaunchDaemon under
+/Library/LaunchDaemons instead. System LaunchDaemon mode refuses secret-like
+environment variables and refuses to install alongside a per-user LaunchAgent
+that already targets the same GC_HOME.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if doSupervisorInstall(stdout, stderr) != 0 {
@@ -910,6 +916,12 @@ func doSupervisorInstall(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gc supervisor install: %s\n", msg) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	if goruntime.GOOS == "darwin" {
+		if raw, invalid := supervisorLaunchdDomainInvalid(); invalid {
+			fmt.Fprintf(stderr, "gc supervisor install: %s must be user or system, got %q\n", supervisorLaunchdDomainEnv, raw) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
 	data, err := buildSupervisorServiceData()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc supervisor install: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -935,7 +947,10 @@ func newSupervisorUninstallCmd(stdout, stderr io.Writer) *cobra.Command {
 
 On systemd, uninstall refuses to remove an active unit when the supervisor
 control socket is unavailable. Start the supervisor first so it can re-adopt
-preserved sessions, then retry uninstall.`,
+preserved sessions, then retry uninstall.
+
+On macOS, set GC_SUPERVISOR_LAUNCHD_DOMAIN=system to remove gc's system
+LaunchDaemon target instead of the default per-user LaunchAgent.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if doSupervisorUninstall(stdout, stderr) != 0 {
@@ -957,6 +972,12 @@ func doSupervisorUninstall(stdout, stderr io.Writer) int {
 		// unit after delegating), so warn rather than refuse: only
 		// gc-owned service files are touched, never the delegated unit.
 		fmt.Fprintf(stderr, "gc supervisor uninstall: warning: %s is set (delegated to unit %q); uninstall removes only gc's own service files and does not touch the delegated unit\n", supervisorSystemdUnitEnv, delegation.Unit) //nolint:errcheck // best-effort stderr
+	}
+	if goruntime.GOOS == "darwin" {
+		if raw, invalid := supervisorLaunchdDomainInvalid(); invalid {
+			fmt.Fprintf(stderr, "gc supervisor uninstall: %s must be user or system, got %q\n", supervisorLaunchdDomainEnv, raw) //nolint:errcheck // best-effort stderr
+			return 1
+		}
 	}
 	data, err := buildSupervisorServiceData()
 	if err != nil {
@@ -993,6 +1014,8 @@ type supervisorServiceData struct {
 	GCHome        string
 	XDGRuntimeDir string
 	LaunchdLabel  string
+	LaunchdSystem bool
+	UserName      string
 	SafeName      string
 	Path          string
 	ExtraEnv      []supervisorServiceEnvVar
@@ -1013,6 +1036,10 @@ func buildSupervisorServiceData() (*supervisorServiceData, error) {
 		return nil, fmt.Errorf("finding executable: %w", err)
 	}
 	homeDir, _ := os.UserHomeDir()
+	userName := ""
+	if u, err := osuser.Current(); err == nil {
+		userName = strings.TrimSpace(u.Username)
+	}
 	gcPath := resolveStableSupervisorBinaryPath(homeDir, stableSupervisorBinaryGopath(homeDir), gcExe)
 	home := supervisor.DefaultHome()
 	xdgRuntimeDir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR"))
@@ -1025,6 +1052,8 @@ func buildSupervisorServiceData() (*supervisorServiceData, error) {
 		GCHome:            home,
 		XDGRuntimeDir:     xdgRuntimeDir,
 		LaunchdLabel:      supervisorLaunchdLabel(),
+		LaunchdSystem:     supervisorLaunchdSystemDomain(),
+		UserName:          userName,
 		SafeName:          sanitizeServiceName(filepath.Base(home)),
 		Path:              searchpath.ExpandPath(homeDir, goruntime.GOOS, os.Getenv("PATH")),
 		ExtraEnv:          supervisorServiceExtraEnv(),
@@ -1330,6 +1359,10 @@ const supervisorLaunchdTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
     <key>Label</key>
     <string>{{xmlesc .LaunchdLabel}}</string>
+    {{if .LaunchdSystem}}
+    <key>UserName</key>
+    <string>{{xmlesc .UserName}}</string>
+    {{end}}
     <key>ProgramArguments</key>
     <array>
         <string>{{xmlesc .GCPath}}</string>
@@ -1446,14 +1479,48 @@ func writeSupervisorServiceFile(path string, content []byte) error {
 	return os.Chmod(path, supervisorServiceFileMode)
 }
 
+const supervisorLaunchdDomainEnv = "GC_SUPERVISOR_LAUNCHD_DOMAIN"
+
+var supervisorLaunchdSystemPlistDir = func() string { return "/Library/LaunchDaemons" }
+
+func supervisorLaunchdSystemDomain() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(supervisorLaunchdDomainEnv)), "system")
+}
+
+func supervisorLaunchdDomainInvalid() (string, bool) {
+	raw := strings.TrimSpace(os.Getenv(supervisorLaunchdDomainEnv))
+	if raw == "" || strings.EqualFold(raw, "user") || strings.EqualFold(raw, "system") {
+		return "", false
+	}
+	return raw, true
+}
+
 func supervisorLaunchdPlistPath() string {
+	return supervisorLaunchdPlistPathForDomain(supervisorLaunchdSystemDomain())
+}
+
+func supervisorLaunchdPlistPathForDomain(system bool) string {
+	if system {
+		return filepath.Join(supervisorLaunchdSystemPlistDir(), supervisorLaunchdLabel()+".plist")
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, "Library", "LaunchAgents", supervisorLaunchdLabel()+".plist")
 }
 
+func supervisorLaunchdOppositeDomainPlistPath() string {
+	return supervisorLaunchdPlistPathForDomain(!supervisorLaunchdSystemDomain())
+}
+
 func supervisorLaunchdServiceTarget(label string) string {
+	return supervisorLaunchdServiceTargetForDomain(label, supervisorLaunchdSystemDomain())
+}
+
+func supervisorLaunchdServiceTargetForDomain(label string, system bool) string {
 	if label == "" {
 		label = supervisorLaunchdLabel()
+	}
+	if system {
+		return "system/" + label
 	}
 	return "gui/" + strconv.Itoa(os.Getuid()) + "/" + label
 }
@@ -1759,8 +1826,56 @@ func warnSupervisorSystemdWarmRefreshPreservedUnit(stderr io.Writer, service str
 	fmt.Fprintf(stderr, "gc supervisor install: leaving refreshed systemd unit %s in place after warm-refresh failure; not restoring the previous unit because it may lack KillMode=process. Resolve the error, then run 'systemctl --user start %s' or rerun 'gc supervisor install'.\n", service, service) //nolint:errcheck // best-effort stderr
 }
 
+func supervisorLaunchdForbiddenSystemEnv(extra []supervisorServiceEnvVar) []string {
+	var forbidden []string
+	for _, ev := range extra {
+		if ev.Value == "" || !secretLikeSupervisorEnvName(ev.Name) {
+			continue
+		}
+		forbidden = append(forbidden, ev.Name)
+	}
+	sort.Strings(forbidden)
+	return forbidden
+}
+
+func secretLikeSupervisorEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	return isProviderCredentialEnv(name) ||
+		strings.Contains(upper, "PASSWORD") ||
+		strings.Contains(upper, "TOKEN") ||
+		strings.Contains(upper, "SECRET") ||
+		strings.Contains(upper, "API_KEY")
+}
+
+func launchdPlistTargetsGCHome(path, gcHome string) bool {
+	otherHome, ok := legacySupervisorHome(path)
+	return ok && samePath(otherHome, gcHome)
+}
+
+func supervisorLaunchdOppositeDomainConflict(data *supervisorServiceData) (string, bool) {
+	path := supervisorLaunchdOppositeDomainPlistPath()
+	if launchdPlistTargetsGCHome(path, data.GCHome) {
+		return path, true
+	}
+	return "", false
+}
+
 func installSupervisorLaunchd(data *supervisorServiceData, stdout, stderr io.Writer) int {
 	sweepStaleIsolatedSupervisorServices(stderr)
+	if data.LaunchdSystem {
+		if strings.TrimSpace(data.UserName) == "" {
+			fmt.Fprintf(stderr, "gc supervisor install: system LaunchDaemon requires a non-empty UserName so gc does not run as root\n") //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		if forbidden := supervisorLaunchdForbiddenSystemEnv(data.ExtraEnv); len(forbidden) > 0 {
+			fmt.Fprintf(stderr, "gc supervisor install: refusing to write secret-like env vars to system LaunchDaemon plist %s: %s; move them to scoped worker materialization or omit provider credentials first\n", supervisorLaunchdPlistPath(), strings.Join(forbidden, ", ")) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
+	if conflictPath, conflict := supervisorLaunchdOppositeDomainConflict(data); conflict {
+		fmt.Fprintf(stderr, "gc supervisor install: refusing duplicate launchd supervisor for GC_HOME %q; existing service file %s targets the same home. Uninstall the other launchd domain before installing this one.\n", data.GCHome, conflictPath) //nolint:errcheck // best-effort stderr
+		return 1
+	}
 	content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, data)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc supervisor install: rendering plist: %v\n", err) //nolint:errcheck // best-effort stderr
