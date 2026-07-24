@@ -173,10 +173,18 @@ func printDriftReport(w io.Writer, r driftReport) {
 }
 
 // driftReadyTimeout caps how long PollReady waits after a restart for
-// the new supervisor to come up. Five seconds matches NFR-2 in the
-// architect's brief. It also caps pollDelegatedRestartVerified's wait for
-// a delegated restart to land its replacement.
+// the new supervisor to come up on ordinary supervisor restarts. It also
+// caps pollDelegatedRestartVerified's wait for a delegated restart to land
+// its replacement.
 var driftReadyTimeout = 5 * time.Second
+
+// launchdDriftReadyTimeout is intentionally longer than driftReadyTimeout:
+// launchd-managed macOS restarts preserve sessions and can spend tens of
+// seconds re-adopting tmux/pool state before /health answers. Returning a
+// false fatal from `gc start` while launchd has already spawned the new
+// supervisor is worse operationally than waiting a little longer for this
+// attended upgrade path.
+var launchdDriftReadyTimeout = 60 * time.Second
 
 // driftVerifyProbeTimeout bounds each supervisor Status probe inside
 // pollDelegatedRestartVerified's post-restart verification poll.
@@ -371,9 +379,13 @@ func runStartDriftCheck(cityPath string, stdout, stderr io.Writer) (int, bool) {
 			}
 		} else {
 			// Wait for the new supervisor to come up.
-			if err := PollReady(newHTTPSupervisorClient(baseURL), driftReadyTimeout); err != nil {
-				fmt.Fprintln(stdout)                                                                                                                                                  //nolint:errcheck // best-effort stdout
-				fmt.Fprintf(stderr, "error: supervisor restart timed out after %s; check '%s' for details. Last known pid=%d.\n", driftReadyTimeout, supervisorStatusGuidance(), pid) //nolint:errcheck // best-effort stderr
+			readyTimeout := driftReadyTimeout
+			if launchdManaged {
+				readyTimeout = launchdDriftReadyTimeout
+			}
+			if err := PollReady(newHTTPSupervisorClient(baseURL), readyTimeout); err != nil {
+				fmt.Fprintln(stdout)                                                                                                                                             //nolint:errcheck // best-effort stdout
+				fmt.Fprintf(stderr, "error: supervisor restart timed out after %s; check '%s' for details. Last known pid=%d.\n", readyTimeout, supervisorStatusGuidance(), pid) //nolint:errcheck // best-effort stderr
 				return 1, false
 			}
 		}

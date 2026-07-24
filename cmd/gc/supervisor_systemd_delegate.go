@@ -308,6 +308,8 @@ func supervisorStatusGuidance() string {
 		return fmt.Sprintf("fix %v", err)
 	case ok:
 		return d.commandHint("status")
+	case supervisorRuntimeGOOS == "darwin":
+		return "launchctl print " + supervisorLaunchdServiceTarget(supervisorLaunchdLabel())
 	}
 	return "systemctl --user status " + supervisorSystemdServiceName()
 }
