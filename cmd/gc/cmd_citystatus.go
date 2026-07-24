@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -145,11 +146,18 @@ all agents with running status, rigs, and a summary count.`,
 	return cmd
 }
 
+func resolveStatusCity(args []string) (string, error) {
+	if len(args) == 0 {
+		return resolveCityOnlyCheap()
+	}
+	return resolveCommandCity(args)
+}
+
 // cmdCityStatus is the CLI entry point for the city status overview.
 // Routes through the supervisor API when a controller is up and falls
 // back to the local snapshot builder otherwise.
 func cmdCityStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) int {
-	cityPath, err := resolveCommandCity(args)
+	cityPath, err := resolveStatusCity(args)
 	if err != nil {
 		if jsonOutput {
 			return writeJSONError(stdout, stderr, "city_resolve_failed", fmt.Sprintf("gc status: %v", err), 1)
@@ -157,6 +165,31 @@ func cmdCityStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "gc status: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+
+	c, reason := cityStatusAPIClient(cityPath)
+	if c != nil {
+		cr, err := c.GetStatusLite()
+		if err == nil {
+			// Do not load config or open the local bead store before a healthy
+			// supervisor API response. A status command's primary contract is a
+			// bounded read; local config/store/catalog fallbacks are deliberately
+			// lower priority and can be much more expensive on large cities.
+			sp := newStatusSessionProviderForCityWithSnapshot(nil, cityPath, nil)
+			dops := newDrainOps(sp)
+			logRoute(stderr, "status", "api", "")
+			return renderCityStatusFromAPI(cityPath, cr, dops, jsonOutput, stdout)
+		}
+		if !api.ShouldFallbackForRead(err) {
+			logRoute(stderr, "status", "api", "error")
+			if jsonOutput {
+				return writeJSONError(stdout, stderr, "api_status_failed", fmt.Sprintf("gc status: %v", err), 1)
+			}
+			fmt.Fprintf(stderr, "gc status: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		reason = api.FallbackReason(err)
+	}
+	logRoute(stderr, "status", "fallback", reason)
 
 	configStderr := stderr
 	if jsonOutput {
@@ -175,7 +208,7 @@ func cmdCityStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) int
 	if jsonOutput {
 		storeStderr = io.Discard
 	}
-	store, _, code := openCityStatusStore(cityPath, storeStderr)
+	store, diagnostic, code := openCityStatusStore(cityPath, storeStderr)
 	if code != 0 {
 		if jsonOutput {
 			return writeJSONError(stdout, stderr, "store_open_failed", "gc status: opening bead store failed", code)
@@ -185,8 +218,10 @@ func cmdCityStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) int
 	statusSnapshot := loadStatusSessionSnapshot(cityPath, cfg, cliSessionStore(store, cfg, cityPath), stderr)
 	sp := newStatusSessionProviderForCityWithSnapshot(cfg, cityPath, statusSnapshot)
 	dops := newDrainOps(sp)
-	c, reason := cityStatusAPIClient(cityPath)
-	return routeCityStatus(cityPath, cfg, sp, dops, c, reason, jsonOutput, stdout, stderr)
+	if jsonOutput {
+		return doCityStatusJSONWithDiagnosticAndSnapshot(sp, cfg, cityPath, store, diagnostic, statusSnapshot, stdout, stderr)
+	}
+	return doCityStatusWithStoreAndSnapshot(sp, dops, cfg, cityPath, store, statusSnapshot, stdout, stderr)
 }
 
 // cityStatusAPIClient returns (client, "") when the API path is available,
@@ -196,6 +231,18 @@ func cmdCityStatus(args []string, jsonOutput bool, stdout, stderr io.Writer) int
 var cityStatusAPIClient = func(cityPath string) (*api.Client, string) {
 	if c := apiClient(cityPath); c != nil {
 		return c, ""
+	}
+	// A supervisor-managed city can have an alive per-city controller socket but
+	// no standalone [api] port. Generic apiClient intentionally returns nil in
+	// that case so mutation-capable commands keep their local fallback; `gc
+	// status` is read-only and should use the supervisor's city-scoped status
+	// endpoint rather than falling into an expensive local store scan.
+	if disabled, _ := classifyGCNoAPI(os.Getenv("GC_NO_API")); !disabled {
+		if apiRouteControllerAliveHook(cityPath) != 0 {
+			if c := apiRouteSupervisorClientHook(cityPath); c != nil {
+				return c, ""
+			}
+		}
 	}
 	return nil, apiClientFallbackReason(cityPath)
 }

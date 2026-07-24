@@ -64,6 +64,9 @@ func registerPackCommands(root *cobra.Command, stdout, stderr io.Writer) {
 	if isCredentialHelperInvocation(os.Args) {
 		return
 	}
+	if isCoreCommandInvocation(os.Args, root) {
+		return
+	}
 	cityPath, err := resolveCity()
 	if err != nil {
 		return
@@ -78,6 +81,40 @@ func registerPackCommands(root *cobra.Command, stdout, stderr io.Writer) {
 	}
 
 	addDiscoveredCommandsToRoot(root, cfg.PackCommands, cityPath, loadedCityName(cfg, cityPath), stdout, stderr, false)
+}
+
+// isCoreCommandInvocation reports whether argv is clearly invoking an already
+// registered built-in command. Eager pack-command discovery is only needed when
+// a pack command might be the command being invoked; doing city config + pack
+// provenance loading before cheap built-ins such as `gc status` can block the
+// command before its own bounded API/status fallback has a chance to run.
+func isCoreCommandInvocation(argv []string, root *cobra.Command) bool {
+	commands := coreCommandNames(root)
+	for i := 1; i < len(argv); i++ {
+		arg := strings.TrimSpace(argv[i])
+		if arg == "" {
+			continue
+		}
+		if arg == "--" {
+			if i+1 < len(argv) {
+				return commands[argv[i+1]]
+			}
+			return false
+		}
+		if strings.HasPrefix(arg, "--city=") || strings.HasPrefix(arg, "--rig=") || strings.HasPrefix(arg, "--json-schema=") {
+			continue
+		}
+		switch arg {
+		case "--city", "--rig", "--json-schema":
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return commands[arg]
+	}
+	return false
 }
 
 // isCredentialHelperInvocation reports whether argv invokes the hidden

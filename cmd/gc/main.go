@@ -566,10 +566,38 @@ func resolveContextFromDir() (resolvedContext, error) {
 	return resolvedContext{CityPath: cityPath, RigName: rigFromCwdDir(cityPath, cwd)}, nil
 }
 
-// resolveCity returns the city root path. Thin wrapper over resolveContext
-// for the many callers that only need the city path.
+// resolveCity returns the city root path using the full command-context
+// resolver. Many command paths rely on its rig-binding precedence even when
+// they only need the returned city path.
 func resolveCity() (string, error) {
 	return resolveCommandCity(nil)
+}
+
+// resolveCityOnlyCheap returns only the city root path without loading full
+// command context/config to infer a rig name. Use it only for bounded
+// city-level reads that must run before local config/store/provenance work.
+func resolveCityOnlyCheap() (string, error) {
+	if cityFlag != "" {
+		return resolveCityFlagValue(cityFlag)
+	}
+	if rigFlag != "" {
+		ctx, err := resolveRigToContext(rigFlag)
+		return ctx.CityPath, err
+	}
+	if gcCity, ok := resolveExplicitCityPathEnv(); ok {
+		return gcCity, nil
+	}
+	if gcRig := strings.TrimSpace(os.Getenv("GC_RIG")); gcRig != "" {
+		ctx, err := resolveRigToContext(gcRig)
+		return ctx.CityPath, err
+	}
+	if gcDirCity, ok := resolveCityPathFromGCDir(); ok {
+		return gcDirCity, nil
+	}
+	if cityPath, ok := resolveCityPathFromCwd(); ok {
+		return cityPath, nil
+	}
+	return "", fmt.Errorf("not in a city directory (no city.toml or .gc/ found)")
 }
 
 func resolveContextFromPath(path string) (resolvedContext, error) {

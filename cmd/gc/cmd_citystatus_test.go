@@ -53,6 +53,68 @@ func TestCityStatusEmptyCity(t *testing.T) {
 	}
 }
 
+func TestCmdCityStatusUsesLiteAPIBeforeLocalStore(t *testing.T) {
+	cityPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"gt\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCityFlag, oldRigFlag := cityFlag, rigFlag
+	cityFlag, rigFlag = cityPath, ""
+	t.Cleanup(func() { cityFlag, rigFlag = oldCityFlag, oldRigFlag })
+
+	var sawLite bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0/city/gt/status" {
+			t.Fatalf("path = %s, want status endpoint", r.URL.Path)
+		}
+		sawLite = r.URL.Query().Get("lite") == "true"
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"name":"gt",
+			"path":"` + cityPath + `",
+			"version":"dev",
+			"uptime_sec":1,
+			"suspended":false,
+			"agent_count":0,
+			"rig_count":0,
+			"running":0,
+			"agents":{"total":0,"running":0,"suspended":0,"quarantined":0},
+			"rigs":{"total":0,"suspended":0},
+			"work":{"open":0,"ready":0,"in_progress":0},
+			"mail":{"total":0,"unread":0},
+			"agent_details":[],
+			"rig_details":[],
+			"named_sessions":[]
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	oldClient := cityStatusAPIClient
+	cityStatusAPIClient = func(string) (*api.Client, string) {
+		return api.NewCityScopedClient(srv.URL, "gt"), ""
+	}
+	t.Cleanup(func() { cityStatusAPIClient = oldClient })
+
+	oldOpen := openCityStoreAtForStatus
+	openCityStoreAtForStatus = func(string) (beads.StoreOpenResult, error) {
+		t.Fatal("gc status opened the local store despite a healthy API status response")
+		return beads.StoreOpenResult{}, nil
+	}
+	t.Cleanup(func() { openCityStoreAtForStatus = oldOpen })
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdCityStatus(nil, true, &stdout, &stderr); code != 0 {
+		t.Fatalf("cmdCityStatus = %d; stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !sawLite {
+		t.Fatalf("status API was not called with lite=true")
+	}
+	if !strings.Contains(stdout.String(), `"city_name": "gt"`) {
+		t.Fatalf("stdout = %s, want API-rendered city status", stdout.String())
+	}
+}
+
 func TestCityStatusWithAgents(t *testing.T) {
 	sp := runtime.NewFake()
 	// Start one agent session.
