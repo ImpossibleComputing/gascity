@@ -880,16 +880,32 @@ func (c *Client) GetBead(id string) (CachedRead[beads.Bead], error) {
 	}, nil
 }
 
-// GetStatus fetches the city-wide status snapshot via
+// GetStatus fetches the full city-wide status snapshot via
 // GET /v0/city/{cityName}/status. The CachedRead.AgeSeconds field carries
 // the supervisor CachingStore age from the X-GC-Cache-Age-S response header
 // so callers can surface _cache_age_s on --json output and a staleness
 // banner on human output.
 func (c *Client) GetStatus() (CachedRead[StatusView], error) {
+	return c.getStatus(false)
+}
+
+// GetStatusLite fetches the cheap city-wide status snapshot via
+// GET /v0/city/{cityName}/status?lite=true, omitting expensive store-health,
+// session-count, and work-count blocks. CLI status uses this first so a slow
+// full status build cannot block the operator's health/read path.
+func (c *Client) GetStatusLite() (CachedRead[StatusView], error) {
+	return c.getStatus(true)
+}
+
+func (c *Client) getStatus(lite bool) (CachedRead[StatusView], error) {
 	if err := c.requireCityScope(); err != nil {
 		return CachedRead[StatusView]{}, err
 	}
-	resp, err := c.cw.GetV0CityByCityNameStatusWithResponse(context.Background(), c.cityName, &genclient.GetV0CityByCityNameStatusParams{})
+	params := &genclient.GetV0CityByCityNameStatusParams{}
+	if lite {
+		params.Lite = &lite
+	}
+	resp, err := c.cw.GetV0CityByCityNameStatusWithResponse(context.Background(), c.cityName, params)
 	if err != nil {
 		return CachedRead[StatusView]{}, &connError{err: fmt.Errorf("request failed: %w", err)}
 	}
