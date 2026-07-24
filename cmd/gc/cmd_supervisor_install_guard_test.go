@@ -361,3 +361,175 @@ func supervisorInstallGuardLaunchdPlist(gcPath string) []byte {
 </plist>
 `)
 }
+
+func TestSupervisorLaunchdSystemDomainPathTargetAndTemplate(t *testing.T) {
+	homeDir := t.TempDir()
+	gcHome := filepath.Join(t.TempDir(), "gc-home")
+	if err := os.MkdirAll(gcHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemDir := filepath.Join(t.TempDir(), "LaunchDaemons")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	t.Setenv(supervisorLaunchdDomainEnv, "system")
+	oldSystemDir := supervisorLaunchdSystemPlistDir
+	supervisorLaunchdSystemPlistDir = func() string { return systemDir }
+	t.Cleanup(func() { supervisorLaunchdSystemPlistDir = oldSystemDir })
+
+	label := supervisorLaunchdLabel()
+	if got, want := supervisorLaunchdPlistPath(), filepath.Join(systemDir, label+".plist"); got != want {
+		t.Fatalf("supervisorLaunchdPlistPath() = %q, want %q", got, want)
+	}
+	if got, want := supervisorLaunchdServiceTarget(label), "system/"+label; got != want {
+		t.Fatalf("supervisorLaunchdServiceTarget() = %q, want %q", got, want)
+	}
+
+	content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
+		GCPath:        "/tmp/gc",
+		LogPath:       filepath.Join(gcHome, "supervisor.log"),
+		GCHome:        gcHome,
+		LaunchdLabel:  label,
+		LaunchdSystem: true,
+		UserName:      "keith",
+		Path:          "/usr/bin:/bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"<key>UserName</key>", "<string>keith</string>", "<key>GC_HOME</key>", "<string>" + xmlEscape(gcHome) + "</string>"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("system LaunchDaemon plist missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestInstallSupervisorSystemLaunchdRefusesSecretEnv(t *testing.T) {
+	homeDir := t.TempDir()
+	gcHome := filepath.Join(t.TempDir(), "gc-home")
+	if err := os.MkdirAll(gcHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemDir := filepath.Join(t.TempDir(), "LaunchDaemons")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	t.Setenv(supervisorLaunchdDomainEnv, "system")
+	oldSystemDir := supervisorLaunchdSystemPlistDir
+	supervisorLaunchdSystemPlistDir = func() string { return systemDir }
+	t.Cleanup(func() { supervisorLaunchdSystemPlistDir = oldSystemDir })
+
+	oldRun := supervisorLaunchctlRun
+	var calls []string
+	supervisorLaunchctlRun = func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	t.Cleanup(func() { supervisorLaunchctlRun = oldRun })
+
+	data := &supervisorServiceData{
+		GCPath:        "/tmp/gc",
+		LogPath:       filepath.Join(gcHome, "supervisor.log"),
+		GCHome:        gcHome,
+		LaunchdLabel:  supervisorLaunchdLabel(),
+		LaunchdSystem: true,
+		UserName:      "keith",
+		Path:          "/usr/bin:/bin",
+		ExtraEnv: []supervisorServiceEnvVar{
+			{Name: "GC_DOLT_PASSWORD", Value: "secret"},
+			{Name: "OPENAI_API_KEY", Value: "sk-test"},
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	if code := installSupervisorLaunchd(data, &stdout, &stderr); code != 1 {
+		t.Fatalf("installSupervisorLaunchd code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{"system LaunchDaemon", "GC_DOLT_PASSWORD", "OPENAI_API_KEY", "scoped worker"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+	if len(calls) != 0 {
+		t.Fatalf("launchctl calls = %v, want none when system plist secret env is refused", calls)
+	}
+	if _, err := os.Stat(supervisorLaunchdPlistPath()); !os.IsNotExist(err) {
+		t.Fatalf("system plist should not be written; stat err=%v", err)
+	}
+}
+
+func TestInstallSupervisorLaunchdRefusesOppositeDomainSameGCHome(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		systemMode bool
+	}{
+		{name: "user install sees existing system daemon", systemMode: false},
+		{name: "system install sees existing user agent", systemMode: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			gcHome := filepath.Join(t.TempDir(), "gc-home")
+			if err := os.MkdirAll(gcHome, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			systemDir := filepath.Join(t.TempDir(), "LaunchDaemons")
+			t.Setenv("HOME", homeDir)
+			t.Setenv("GC_HOME", gcHome)
+			if tc.systemMode {
+				t.Setenv(supervisorLaunchdDomainEnv, "system")
+			} else {
+				t.Setenv(supervisorLaunchdDomainEnv, "user")
+			}
+			oldSystemDir := supervisorLaunchdSystemPlistDir
+			supervisorLaunchdSystemPlistDir = func() string { return systemDir }
+			t.Cleanup(func() { supervisorLaunchdSystemPlistDir = oldSystemDir })
+
+			oppositePath := supervisorLaunchdOppositeDomainPlistPath()
+			if err := os.MkdirAll(filepath.Dir(oppositePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			oppositeContent, err := renderSupervisorTemplate(supervisorLaunchdTemplate, &supervisorServiceData{
+				GCPath:        "/tmp/gc-other",
+				LogPath:       filepath.Join(gcHome, "supervisor.log"),
+				GCHome:        gcHome,
+				LaunchdLabel:  supervisorLaunchdLabel(),
+				LaunchdSystem: !tc.systemMode,
+				UserName:      "keith",
+				Path:          "/usr/bin:/bin",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(oppositePath, []byte(oppositeContent), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			oldRun := supervisorLaunchctlRun
+			var calls []string
+			supervisorLaunchctlRun = func(args ...string) error {
+				calls = append(calls, strings.Join(args, " "))
+				return nil
+			}
+			t.Cleanup(func() { supervisorLaunchctlRun = oldRun })
+
+			data := &supervisorServiceData{
+				GCPath:        "/tmp/gc-new",
+				LogPath:       filepath.Join(gcHome, "supervisor.log"),
+				GCHome:        gcHome,
+				LaunchdLabel:  supervisorLaunchdLabel(),
+				LaunchdSystem: tc.systemMode,
+				UserName:      "keith",
+				Path:          "/usr/bin:/bin",
+			}
+			var stdout, stderr bytes.Buffer
+			if code := installSupervisorLaunchd(data, &stdout, &stderr); code != 1 {
+				t.Fatalf("installSupervisorLaunchd code = %d, want 1; stderr=%q", code, stderr.String())
+			}
+			for _, want := range []string{"refusing duplicate launchd supervisor", gcHome, oppositePath} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+				}
+			}
+			if len(calls) != 0 {
+				t.Fatalf("launchctl calls = %v, want none when opposite domain conflicts", calls)
+			}
+		})
+	}
+}
