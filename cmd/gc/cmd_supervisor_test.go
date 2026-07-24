@@ -3244,6 +3244,66 @@ func TestInstallSupervisorLaunchdEnablesAndKickstartsLoadedService(t *testing.T)
 	}
 }
 
+func TestInstallSupervisorLaunchdBootstrapsWhenLegacyLoadDoesNotRegisterService(t *testing.T) {
+	homeDir := t.TempDir()
+	gcHome := filepath.Join(t.TempDir(), "isolated-home")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+
+	label := supervisorLaunchdLabel()
+	data := &supervisorServiceData{
+		GCPath:       "/tmp/gc-new",
+		LogPath:      filepath.Join(gcHome, "supervisor.log"),
+		GCHome:       gcHome,
+		LaunchdLabel: label,
+		Path:         "/usr/local/bin:/usr/bin:/bin",
+	}
+
+	oldRun := supervisorLaunchctlRun
+	var calls []string
+	var bootstrapped bool
+	supervisorLaunchctlRun = func(args ...string) error {
+		call := strings.Join(args, " ")
+		calls = append(calls, call)
+		if call == "kickstart -p "+supervisorLaunchdServiceTarget(label) && !bootstrapped {
+			return errors.New("service not found")
+		}
+		if len(args) == 3 && args[0] == "bootstrap" {
+			bootstrapped = true
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		supervisorLaunchctlRun = oldRun
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := installSupervisorLaunchd(data, &stdout, &stderr); code != 0 {
+		t.Fatalf("installSupervisorLaunchd code = %d, want 0; calls=%v stderr=%q", code, calls, stderr.String())
+	}
+
+	path := supervisorLaunchdPlistPath()
+	target := "gui/" + strconv.Itoa(os.Getuid()) + "/" + label
+	domain := "gui/" + strconv.Itoa(os.Getuid())
+	wantSequence := []string{
+		"unload " + path,
+		"load " + path,
+		"enable " + target,
+		"kickstart -p " + target,
+		"bootstrap " + domain + " " + path,
+		"enable " + target,
+		"kickstart -p " + target,
+	}
+	last := -1
+	for _, want := range wantSequence {
+		idx := slices.Index(calls[last+1:], want)
+		if idx < 0 {
+			t.Fatalf("launchctl calls = %v, want %q after index %d", calls, want, last)
+		}
+		last += idx + 1
+	}
+}
+
 func TestInstallSupervisorLaunchdIgnoresLegacyUnloadFailures(t *testing.T) {
 	homeDir := t.TempDir()
 	gcHome := filepath.Join(t.TempDir(), "isolated-home")

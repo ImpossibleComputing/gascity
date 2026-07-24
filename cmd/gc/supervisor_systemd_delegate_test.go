@@ -1657,6 +1657,9 @@ func TestSupervisorGuidanceUsesServiceNameHelper(t *testing.T) {
 	t.Setenv("GC_HOME", t.TempDir())
 	t.Setenv(supervisorSystemdUnitEnv, "")
 	t.Setenv(supervisorSystemdScopeEnv, "")
+	oldGOOS := supervisorRuntimeGOOS
+	supervisorRuntimeGOOS = "linux"
+	t.Cleanup(func() { supervisorRuntimeGOOS = oldGOOS })
 
 	service := supervisorSystemdServiceName()
 	if service == defaultSupervisorSystemdUnit {
@@ -1666,6 +1669,21 @@ func TestSupervisorGuidanceUsesServiceNameHelper(t *testing.T) {
 		t.Errorf("supervisorRestartGuidance() = %q, want %q", got, want)
 	}
 	if got, want := supervisorStatusGuidance(), "systemctl --user status "+service; got != want {
+		t.Errorf("supervisorStatusGuidance() = %q, want %q", got, want)
+	}
+}
+
+func TestSupervisorStatusGuidanceUsesLaunchctlOnDarwin(t *testing.T) {
+	t.Setenv("GC_HOME", t.TempDir())
+	t.Setenv(supervisorSystemdUnitEnv, "")
+	t.Setenv(supervisorSystemdScopeEnv, "")
+
+	oldGOOS := supervisorRuntimeGOOS
+	supervisorRuntimeGOOS = "darwin"
+	t.Cleanup(func() { supervisorRuntimeGOOS = oldGOOS })
+
+	want := "launchctl print " + supervisorLaunchdServiceTarget(supervisorLaunchdLabel())
+	if got := supervisorStatusGuidance(); got != want {
 		t.Errorf("supervisorStatusGuidance() = %q, want %q", got, want)
 	}
 }

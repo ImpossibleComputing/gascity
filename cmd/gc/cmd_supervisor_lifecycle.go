@@ -1515,6 +1515,13 @@ func supervisorLaunchdServiceTarget(label string) string {
 	return supervisorLaunchdServiceTargetForDomain(label, supervisorLaunchdSystemDomain())
 }
 
+func supervisorLaunchdServiceDomain() string {
+	if supervisorLaunchdSystemDomain() {
+		return "system"
+	}
+	return "gui/" + strconv.Itoa(os.Getuid())
+}
+
 func supervisorLaunchdServiceTargetForDomain(label string, system bool) string {
 	if label == "" {
 		label = supervisorLaunchdLabel()
@@ -1534,7 +1541,20 @@ func loadAndStartSupervisorLaunchd(path, label string) error {
 		return fmt.Errorf("enable %s: %w", target, err)
 	}
 	if err := supervisorLaunchctlRun("kickstart", "-p", target); err != nil {
-		return fmt.Errorf("kickstart -p %s: %w", target, err)
+		// On modern macOS, legacy `launchctl load` can return success while
+		// leaving the service absent from the bootstrap namespace; a following
+		// kickstart then fails with "service not found" (exit 113). Recover by
+		// explicitly bootstrapping the domain before retrying the enable +
+		// kickstart sequence.
+		if bootstrapErr := supervisorLaunchctlRun("bootstrap", supervisorLaunchdServiceDomain(), path); bootstrapErr != nil {
+			return fmt.Errorf("kickstart -p %s: %w; bootstrap %s %s: %w", target, err, supervisorLaunchdServiceDomain(), path, bootstrapErr)
+		}
+		if enableErr := supervisorLaunchctlRun("enable", target); enableErr != nil {
+			return fmt.Errorf("kickstart -p %s: %w; enable %s after bootstrap: %w", target, err, target, enableErr)
+		}
+		if kickstartErr := supervisorLaunchctlRun("kickstart", "-p", target); kickstartErr != nil {
+			return fmt.Errorf("kickstart -p %s: %w; retry after bootstrap: %w", target, err, kickstartErr)
+		}
 	}
 	return nil
 }

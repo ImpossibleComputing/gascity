@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -402,6 +403,100 @@ func TestRunStartDriftCheck_DarwinLaunchdRestartDoesNotRequireProcExe(t *testing
 	}
 	if strings.Contains(stderr.String(), "/proc/") {
 		t.Fatalf("stderr leaked /proc restart failure despite launchd management:\n%s", stderr.String())
+	}
+}
+
+// TestRunStartDriftCheck_DarwinLaunchdRestartUsesLaunchdReadyBudget pins the
+// live macOS upgrade failure from 2026-07-24: launchd had already spawned the
+// replacement supervisor, but preserve-session adoption kept /health quiet past
+// the generic 5s drift budget and `gc start` returned a false fatal. A
+// launchd-managed drift restart gets a separate, longer readiness budget.
+func TestRunStartDriftCheck_DarwinLaunchdRestartUsesLaunchdReadyBudget(t *testing.T) {
+	var restarted atomic.Bool
+	var postRestartHealthProbes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !restarted.Load() {
+			_, _ = fmt.Fprint(w, `{"status":"ok","version":"v0","build_id":"old-build-id","uptime_sec":1,"cities_total":0,"cities_running":0}`)
+			return
+		}
+		if postRestartHealthProbes.Add(1) <= 2 {
+			http.Error(w, "adopting sessions", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"status":"ok","version":"v0","build_id":"new-build-id","uptime_sec":1,"cities_total":0,"cities_running":0}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	cityPath, setCommit := driftCheckEnv(t, "old-build-id")
+	setCommit("new-build-id")
+
+	oldURL := supervisorAPIBaseURLHook
+	supervisorAPIBaseURLHook = func() (string, error) { return srv.URL, nil }
+	t.Cleanup(func() { supervisorAPIBaseURLHook = oldURL })
+
+	oldDry, oldNoAR := dryRunMode, noAutoRestartMode
+	dryRunMode, noAutoRestartMode = false, false
+	t.Cleanup(func() { dryRunMode, noAutoRestartMode = oldDry, oldNoAR })
+
+	oldGOOS := supervisorRuntimeGOOS
+	oldLaunchdActive := supervisorLaunchdActive
+	oldReadExe := readSupervisorExePathHook
+	oldHelpers := restartHelpersHook
+	oldDriftTimeout := driftReadyTimeout
+	oldLaunchdTimeout := launchdDriftReadyTimeout
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorLaunchdActive = oldLaunchdActive
+		readSupervisorExePathHook = oldReadExe
+		restartHelpersHook = oldHelpers
+		driftReadyTimeout = oldDriftTimeout
+		launchdDriftReadyTimeout = oldLaunchdTimeout
+	})
+
+	supervisorRuntimeGOOS = "darwin"
+	supervisorLaunchdActive = func(label string) bool {
+		return label == supervisorLaunchdLabel()
+	}
+	readSupervisorExePathHook = func(pid int) (string, error) {
+		return "", fmt.Errorf("readlink /proc/%d/exe: no such file or directory", pid)
+	}
+	driftReadyTimeout = 50 * time.Millisecond
+	launchdDriftReadyTimeout = 500 * time.Millisecond
+	restartHelpersHook = func() restartHelpers {
+		return restartHelpers{
+			Launchctl: func(_ ...string) error {
+				restarted.Store(true)
+				return nil
+			},
+			Systemctl: func(...string) error {
+				t.Fatal("systemctl should not handle a Darwin launchd supervisor")
+				return nil
+			},
+			Kill:     func(int) error { return nil },
+			WaitExit: func(int) error { return nil },
+			Spawn: func(string, ...string) error {
+				t.Fatal("direct spawn should not handle a Darwin launchd supervisor")
+				return nil
+			},
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	start := time.Now()
+	exitCode, cont := runStartDriftCheck(cityPath, &stdout, &stderr)
+	elapsed := time.Since(start)
+	if exitCode != 0 || !cont {
+		t.Fatalf("(exitCode, cont) = (%d, %v), want (0, true); elapsed=%s stdout=%q stderr=%q", exitCode, cont, elapsed, stdout.String(), stderr.String())
+	}
+	if elapsed < driftReadyTimeout {
+		t.Fatalf("restart returned before the generic drift timeout; test did not exercise delayed launchd readiness (elapsed=%s)", elapsed)
+	}
+	if strings.Contains(stderr.String(), "timed out after") {
+		t.Fatalf("stderr reported a false launchd timeout despite later readiness:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Restarting supervisor (launchd-managed)") || !strings.Contains(stdout.String(), " ready (") {
+		t.Fatalf("stdout missing launchd restart/ready evidence:\n%s", stdout.String())
 	}
 }
 
