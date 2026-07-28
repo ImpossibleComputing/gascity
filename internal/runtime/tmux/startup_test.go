@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
 	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
@@ -2703,6 +2704,48 @@ func TestDoStartSession_SandboxProfileWrapsLaunchCommand(t *testing.T) {
 	}
 	if !strings.Contains(create.command, "GC_SECURITY=/w/.gc/security") {
 		t.Fatalf("createSession command = %q, want GC_SECURITY sandbox parameter", create.command)
+	}
+}
+
+func TestDoStartSession_AppliesScopedCredentialEnvFileBeforeSandboxedCreate(t *testing.T) {
+	oldGOOS := sandboxExecGOOS
+	sandboxExecGOOS = "darwin"
+	t.Cleanup(func() { sandboxExecGOOS = oldGOOS })
+
+	scoped := filepath.Join(t.TempDir(), "scoped.env")
+	if err := os.WriteFile(scoped, []byte("OPENAI_API_KEY=scoped-openai\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := &fakeStartOps{}
+
+	err := doStartSession(context.Background(), ops, "sandboxed", runtime.Config{
+		WorkDir:        "/w",
+		Command:        "agent --serve",
+		SandboxProfile: "/city/.gc/security/worker-credential-deny.sb",
+		Env: map[string]string{
+			"GC_CITY_ROOT":                         "/w",
+			secretscrub.ScopedCredentialEnvFileEnv: scoped,
+		},
+	}, DefaultConfig().SetupTimeout)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	create := callsByMethod(t, ops, "createSession", 1)[0]
+	if strings.Contains(create.command, scoped) {
+		t.Fatalf("createSession command leaked scoped credential path %q: %q", scoped, create.command)
+	}
+	if got := create.env[secretscrub.ScopedCredentialEnvFileEnv]; got != "" {
+		t.Fatalf("createSession env %s = %q, want stripped before sandboxed create", secretscrub.ScopedCredentialEnvFileEnv, got)
+	}
+	if got := create.env["OPENAI_API_KEY"]; got != "scoped-openai" {
+		t.Fatalf("createSession env OPENAI_API_KEY = %q, want scoped credential loaded before sandboxed create", got)
+	}
+	if got := create.env[secretscrub.EnableDefaultScrubEnv]; got != "1" {
+		t.Fatalf("createSession env %s = %q, want default scrub enabled", secretscrub.EnableDefaultScrubEnv, got)
+	}
+	if !strings.Contains(create.command, "sandbox-exec") {
+		t.Fatalf("createSession command = %q, want sandbox wrapper", create.command)
 	}
 }
 

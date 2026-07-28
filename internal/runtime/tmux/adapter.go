@@ -19,6 +19,7 @@ import (
 	"github.com/gastownhall/gascity/internal/overlay"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/runtime/proctable"
+	"github.com/gastownhall/gascity/internal/runtime/secretscrub"
 	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
@@ -1456,6 +1457,15 @@ func sandboxExecCommand(command string, cfg runtime.Config) (string, error) {
 }
 
 func ensureFreshSession(ops startOps, name string, cfg runtime.Config) error {
+	// Load scoped credential files before creating the session. The tmux create
+	// path may launch a sandbox-wrapped command that denies the worker-facing
+	// credential directory; only the controller side should stat/read the
+	// broker-issued file, then pass the resulting narrow env values via tmux -e.
+	env, err := secretscrub.ApplyScopedCredentialEnvFile(cfg.Env)
+	if err != nil {
+		return fmt.Errorf("applying scoped credential env file before session create: %w", err)
+	}
+	cfg.Env = env
 	fullCommand, promptFile, err := buildLaunchCommand(name, cfg)
 	if err != nil {
 		return err
