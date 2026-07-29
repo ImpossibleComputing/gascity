@@ -83,6 +83,10 @@ func assertEventExecOrder(t *testing.T, orderFile, eventType, scriptBase string)
 // on bead.updated and runs the nudge-on-route script.
 func TestNudgeOnRouteOrder(t *testing.T) {
 	assertEventExecOrder(t, "nudge-on-route.toml", "bead.updated", "nudge-on-route.sh")
+	o := readOrder(t, "nudge-on-route.toml")
+	if !o.Idempotent {
+		t.Error("nudge-on-route is an idempotent wake helper and must fail open on gate contention")
+	}
 }
 
 // TestCascadeNudgeOnBlockerCloseOrder pins the cascade-nudge order's event
@@ -133,6 +137,28 @@ func TestNudgeOnRouteResolvesPoolMembers(t *testing.T) {
 	for _, want := range []string{"gc session list", "--template"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("nudge-on-route.sh must resolve pool members; missing %q", want)
+		}
+	}
+}
+
+// TestNudgeOnRouteUsesQueuedBoundedDelivery guards the controller-critical path:
+// the event order must not synchronously wait-idle on provider delivery or let a
+// single slow gc subprocess consume the whole order exec deadline.
+func TestNudgeOnRouteUsesQueuedBoundedDelivery(t *testing.T) {
+	data, err := fs.ReadFile(PackFS, "assets/scripts/nudge-on-route.sh")
+	if err != nil {
+		t.Fatalf("reading nudge-on-route.sh: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"GC_NUDGE_ON_ROUTE_DELIVERY:-queue",
+		"GC_NUDGE_ON_ROUTE_CMD_TIMEOUT:-20s",
+		"run_bounded",
+		"gc session nudge --delivery",
+		`run_bounded "$CMD_TIMEOUT_S" gc session list`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("nudge-on-route.sh must queue/bound subprocesses; missing %q", want)
 		}
 	}
 }

@@ -39,6 +39,13 @@ LOOKBACK="${GC_NUDGE_ON_ROUTE_LOOKBACK:-2m}"
 # pruned and re-nudged. Accepts a simple Ns / Nm / Nh duration.
 RETENTION="${GC_NUDGE_ON_ROUTE_RETENTION:-1h}"
 NUDGE_MESSAGE="${GC_NUDGE_ON_ROUTE_MESSAGE:-check for assigned work}"
+# This order runs inside the controller's exec deadline. Use queued delivery by
+# default so a routed worker is woken via the supervisor/poller path without
+# blocking this script on a provider WaitForIdle. Bound each gc subprocess too:
+# a single slow session-list/nudge read may skip this idempotent pass, but must
+# not consume the whole order deadline and delay later passes.
+NUDGE_DELIVERY="${GC_NUDGE_ON_ROUTE_DELIVERY:-queue}"
+CMD_TIMEOUT="${GC_NUDGE_ON_ROUTE_CMD_TIMEOUT:-20s}"
 
 PACK_STATE_DIR="${GC_PACK_STATE_DIR:-${GC_CITY_RUNTIME_DIR:-$CITY/.gc/runtime}/packs/core}"
 STATE_FILE="$PACK_STATE_DIR/nudge-on-route-state.json"
@@ -54,6 +61,39 @@ duration_to_seconds() {
     esac
 }
 
+CMD_TIMEOUT_S="$(duration_to_seconds "$CMD_TIMEOUT")"
+case "$CMD_TIMEOUT_S" in
+    ''|*[!0-9]*) CMD_TIMEOUT_S=20 ;;
+esac
+
+# Run a gc subprocess with a simple portable wall-clock cap. macOS does not ship
+# GNU timeout by default, so keep this bash-local instead of depending on a
+# platform package.
+run_bounded() {
+    _timeout_s="$1"
+    shift
+    if [ "$_timeout_s" -le 0 ]; then
+        "$@"
+        return $?
+    fi
+
+    "$@" &
+    _pid="$!"
+    (
+        sleep "$_timeout_s"
+        kill "$_pid" 2>/dev/null || true
+    ) &
+    _watchdog="$!"
+
+    set +e
+    wait "$_pid"
+    _status="$?"
+    set -e
+    kill "$_watchdog" 2>/dev/null || true
+    wait "$_watchdog" 2>/dev/null || true
+    return "$_status"
+}
+
 # Nudge the session(s) named by a routed_to target. A multi-session pool
 # routes to the pool BASE (NormalizePoolRouteTarget collapses slot -> base),
 # which is the members' `template`, not a session name — `gc session nudge`
@@ -63,13 +103,13 @@ duration_to_seconds() {
 # Returns 0 if at least one nudge succeeded, non-zero otherwise.
 nudge_routed_target() {
     _target="$1"
-    _members="$(gc session list --json --state active --template "$_target" 2>/dev/null \
+    _members="$(run_bounded "$CMD_TIMEOUT_S" gc session list --json --state active --template "$_target" 2>/dev/null \
         | jq -r '(.sessions // [])[] | .name // .id' 2>/dev/null)" || _members=""
     if [ -n "$_members" ]; then
         _any=1
         while IFS= read -r _m; do
             [ -n "$_m" ] || continue
-            if gc session nudge "$_m" "$NUDGE_MESSAGE" >/dev/null 2>&1; then
+            if run_bounded "$CMD_TIMEOUT_S" gc session nudge --delivery "$NUDGE_DELIVERY" "$_m" "$NUDGE_MESSAGE" >/dev/null 2>&1; then
                 _any=0
             fi
         done <<MEMBERS
@@ -77,7 +117,7 @@ $_members
 MEMBERS
         return "$_any"
     fi
-    gc session nudge "$_target" "$NUDGE_MESSAGE" >/dev/null 2>&1
+    run_bounded "$CMD_TIMEOUT_S" gc session nudge --delivery "$NUDGE_DELIVERY" "$_target" "$NUDGE_MESSAGE" >/dev/null 2>&1
 }
 
 # Pull recent bead.updated events. Best-effort: a read failure (API down)
