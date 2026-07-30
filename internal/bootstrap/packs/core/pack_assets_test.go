@@ -17,6 +17,7 @@ func TestCoreMaintenanceExecAssets(t *testing.T) {
 		"assets/scripts/_bd_trace.sh",
 		"assets/scripts/dolt-target.sh",
 		"assets/scripts/escalate.sh",
+		"assets/scripts/gws-auth-liveness-watchdog.sh",
 		"assets/scripts/jsonl-export.sh",
 		"assets/scripts/reaper.sh",
 		"orders/jsonl-export.toml",
