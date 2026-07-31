@@ -249,6 +249,12 @@ func (sm *SupervisorMux) humaHandleCities(_ context.Context, _ *struct{}) (*Supe
 
 func (sm *SupervisorMux) humaHandleHealth(_ context.Context, _ *struct{}) (*SupervisorHealthOutput, error) {
 	cities := sm.resolver.ListCities()
+	// ListCities is not required to return a stable order (the supervisor
+	// registry snapshot is rebuilt from maps), but /health exposes a legacy
+	// single-city packs_lock_sha256/startup projection for drift probes. Keep
+	// that projection deterministic instead of letting it flip between cities
+	// after unrelated registry snapshot rebuilds.
+	sort.Slice(cities, func(i, j int) bool { return cities[i].Name < cities[j].Name })
 	var running int
 	var startup *SupervisorStartup
 	var packsLockSHA string

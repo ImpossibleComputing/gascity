@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/packman"
 )
@@ -64,5 +65,46 @@ func TestSupervisorHealthOmitsPacksLockSHA256WhenMissing(t *testing.T) {
 	}
 	if _, present := resp["packs_lock_sha256"]; present {
 		t.Fatalf("packs_lock_sha256 present despite missing packs.lock; got: %v", resp["packs_lock_sha256"])
+	}
+}
+
+// TestSupervisorHealthPacksLockSHA256SortsCities proves the legacy
+// supervisor-scope /health packs_lock_sha256 projection is deterministic in
+// multi-city supervisors. The real city registry snapshot is rebuilt from maps,
+// so resolver order can change across samples; /health must not flip between
+// different cities' lockfiles just because the snapshot was rebuilt.
+func TestSupervisorHealthPacksLockSHA256SortsCities(t *testing.T) {
+	alphaDir := t.TempDir()
+	betaDir := t.TempDir()
+	alphaLock := []byte("schema = 1\n\n[packs.\"https://example.com/alpha.git\"]\ncommit = \"alpha\"\n")
+	betaLock := []byte("schema = 1\n\n[packs.\"https://example.com/beta.git\"]\ncommit = \"beta\"\n")
+	if err := os.WriteFile(filepath.Join(alphaDir, packman.LockfileName), alphaLock, 0o644); err != nil {
+		t.Fatalf("write alpha packs.lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(betaDir, packman.LockfileName), betaLock, 0o644); err != nil {
+		t.Fatalf("write beta packs.lock: %v", err)
+	}
+	alphaSum := sha256.Sum256(alphaLock)
+	want := hex.EncodeToString(alphaSum[:])
+
+	resolver := &fakeCityResolver{listed: []CityInfo{
+		{Name: "zeta", Path: betaDir, Running: true},
+		{Name: "alpha", Path: alphaDir, Running: true},
+	}}
+	sm := NewSupervisorMux(resolver, nil, false, "test", "", time.Now())
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	rec := httptest.NewRecorder()
+	sm.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := resp["packs_lock_sha256"].(string); got != want {
+		t.Fatalf("packs_lock_sha256 = %q, want alpha %q\nbody: %s", got, want, rec.Body.String())
 	}
 }
