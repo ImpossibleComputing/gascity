@@ -520,6 +520,63 @@ func TestMailGetRigStoreSlowReturnsTyped503(t *testing.T) {
 	assertStoreSlowProblem(t, rec)
 }
 
+func TestMailReadRigStoreSlowReturnsTyped503(t *testing.T) {
+	state := newFakeState(t)
+	release := make(chan struct{})
+	state.cityMailProv = &blockingMailProvider{release: release}
+	oldDeadline := mailReadDeadline
+	mailReadDeadline = 5 * time.Millisecond
+	t.Cleanup(func() {
+		mailReadDeadline = oldDeadline
+		close(release)
+	})
+	h := newTestCityHandler(t, state)
+
+	req := newPostRequest(cityURL(state, "/mail/msg-1/read?rig=myrig"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertStoreSlowProblem(t, rec)
+}
+
+func TestMailMarkUnreadRigStoreSlowReturnsTyped503(t *testing.T) {
+	state := newFakeState(t)
+	release := make(chan struct{})
+	state.cityMailProv = &blockingMailProvider{release: release}
+	oldDeadline := mailReadDeadline
+	mailReadDeadline = 5 * time.Millisecond
+	t.Cleanup(func() {
+		mailReadDeadline = oldDeadline
+		close(release)
+	})
+	h := newTestCityHandler(t, state)
+
+	req := newPostRequest(cityURL(state, "/mail/msg-1/mark-unread?rig=myrig"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertStoreSlowProblem(t, rec)
+}
+
+func TestMailReplyRigStoreSlowReturnsTyped503(t *testing.T) {
+	state := newFakeState(t)
+	release := make(chan struct{})
+	state.cityMailProv = &blockingMailProvider{release: release}
+	oldDeadline := mailReadDeadline
+	mailReadDeadline = 5 * time.Millisecond
+	t.Cleanup(func() {
+		mailReadDeadline = oldDeadline
+		close(release)
+	})
+	h := newTestCityHandler(t, state)
+
+	req := newPostRequest(cityURL(state, "/mail/msg-1/reply?rig=myrig"), bytes.NewBufferString(`{"from":"worker","body":"done"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertStoreSlowProblem(t, rec)
+}
+
 func TestMailListRigProviderPanicReturns500(t *testing.T) {
 	state := newFakeState(t)
 	state.cityMailProv = &panicMailProvider{}

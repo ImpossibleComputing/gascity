@@ -4767,6 +4767,163 @@ func TestRouteMailPeek_StaleBannerOver30s(t *testing.T) {
 	}
 }
 
+func okMailReadHandler(t *testing.T, marked *bool) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/city/test-city/mail/msg-1":
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"id":         "msg-1",
+				"from":       "alice",
+				"to":         "mayor",
+				"subject":    "hello",
+				"body":       "world",
+				"created_at": "2026-04-23T10:00:00Z",
+				"read":       false,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/city/test-city/mail/msg-1/read":
+			*marked = true
+			json.NewEncoder(w).Encode(map[string]any{"status": "read"}) //nolint:errcheck
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+}
+
+func TestRouteMailReadUsesAPIGetThenMarkRead(t *testing.T) {
+	cityPath := writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	marked := false
+	srv := httptest.NewServer(okMailReadHandler(t, &marked))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailRead(cityPath, []string{"msg-1"}, c, "", false, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if !marked {
+		t.Fatal("API read mutation was not called")
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "")
+	if !strings.Contains(stdout.String(), "From:     alice") || !strings.Contains(stdout.String(), "Body:     world") {
+		t.Fatalf("stdout missing rendered read message:\n%s", stdout.String())
+	}
+}
+
+func TestRouteMailReadMarkStoreSlowDoesNotFallback(t *testing.T) {
+	cityPath := writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "from": "alice", "to": "mayor", "subject": "hello", "body": "world", "created_at": "2026-04-23T10:00:00Z", "read": false}) //nolint:errcheck
+		case http.MethodPost:
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"status": http.StatusServiceUnavailable, "title": "Service Unavailable", "detail": "store_slow: mail read timed out after 8s"}) //nolint:errcheck
+		}
+	}))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailRead(cityPath, []string{"msg-1"}, c, "", false, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "error")
+	if strings.Contains(stderr.String(), "route=fallback") {
+		t.Fatalf("store_slow read fell back to local store:\n%s", stderr.String())
+	}
+}
+
+func TestRouteMailMarkReadUsesAPI(t *testing.T) {
+	writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/test-city/mail/msg-1/read" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "read"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailMarkRead([]string{"msg-1"}, c, "", false, &stdout, &stderr)
+	if code != 0 || !called {
+		t.Fatalf("exit=%d called=%v stderr=%q stdout=%q", code, called, stderr.String(), stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "")
+	if !strings.Contains(stdout.String(), "Marked msg-1 as read") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRouteMailMarkUnreadUsesAPI(t *testing.T) {
+	writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/test-city/mail/msg-1/mark-unread" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "unread"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailMarkUnread([]string{"msg-1"}, c, "", false, &stdout, &stderr)
+	if code != 0 || !called {
+		t.Fatalf("exit=%d called=%v stderr=%q stdout=%q", code, called, stderr.String(), stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "")
+	if !strings.Contains(stdout.String(), "Marked msg-1 as unread") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRouteMailReplyUsesAPIWithoutNotify(t *testing.T) {
+	writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/test-city/mail/msg-1/reply" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "msg-2", "from": "mayor", "to": "alice", "subject": "Re: hello", "body": "done", "created_at": "2026-04-23T10:01:00Z"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailReply("msg-1", "mayor", "Re: hello", "done", c, "", false, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "")
+	if gotBody["from"] != "mayor" || gotBody["body"] != "done" {
+		t.Fatalf("body=%#v", gotBody)
+	}
+	if !strings.Contains(stdout.String(), "Replied to msg-1") || !strings.Contains(stdout.String(), "msg-2") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
 func TestRouteMailCount_StaleBannerOver30s(t *testing.T) {
 	t.Setenv("GC_DEBUG", "0")
 	cityPath := writeMailTestCity(t)

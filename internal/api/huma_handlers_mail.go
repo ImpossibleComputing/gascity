@@ -595,26 +595,43 @@ func (s *Server) humaHandleMailThread(ctx context.Context, input *MailThreadInpu
 	}, nil
 }
 
+type mailMarkResult struct {
+	Rig   string
+	Found bool
+}
+
 // humaHandleMailRead is the Huma-typed handler for POST /v0/mail/{id}/read.
 func (s *Server) humaHandleMailRead(ctx context.Context, input *MailReadInput) (*OKResponse, error) {
+	if err := cacheLiveOr503(s.state.CityBeadStore()); err != nil {
+		return nil, err
+	}
 	id := input.ID
 	rig := input.Rig
-	mp, resolvedRig, err := s.findMailProviderForMessage(id, rig)
+	result, err := withMailReadDeadline(ctx, func() (mailMarkResult, error) {
+		mp, resolvedRig, err := s.findMailProviderForMessage(id, rig)
+		if err != nil {
+			return mailMarkResult{}, err
+		}
+		if mp == nil {
+			return mailMarkResult{}, nil
+		}
+		if err := mp.MarkRead(id); err != nil {
+			telemetry.RecordMailOp(ctx, "mark_read", err)
+			return mailMarkResult{}, err
+		}
+		telemetry.RecordMailOp(ctx, "mark_read", nil)
+		if err := waitForMailReadState(ctx, mp, id, true); err != nil {
+			return mailMarkResult{}, err
+		}
+		return mailMarkResult{Rig: resolvedRig, Found: true}, nil
+	})
 	if err != nil {
-		return nil, huma.Error500InternalServerError(err.Error())
+		return nil, mailReadAPIError(err)
 	}
-	if mp == nil {
+	if !result.Found {
 		return nil, huma.Error404NotFound("message " + id + " not found")
 	}
-	if err := mp.MarkRead(id); err != nil {
-		telemetry.RecordMailOp(ctx, "mark_read", err)
-		return nil, huma.Error500InternalServerError(err.Error())
-	}
-	telemetry.RecordMailOp(ctx, "mark_read", nil)
-	if err := waitForMailReadState(ctx, mp, id, true); err != nil {
-		return nil, huma.Error500InternalServerError(err.Error())
-	}
-	s.recordMailEvent(events.MailMarkedRead, "api", id, resolvedRig, nil)
+	s.recordMailEvent(events.MailMarkedRead, "api", id, result.Rig, nil)
 	resp := &OKResponse{}
 	resp.Body.Status = "read"
 	return resp, nil
@@ -622,24 +639,36 @@ func (s *Server) humaHandleMailRead(ctx context.Context, input *MailReadInput) (
 
 // humaHandleMailMarkUnread is the Huma-typed handler for POST /v0/mail/{id}/mark-unread.
 func (s *Server) humaHandleMailMarkUnread(ctx context.Context, input *MailMarkUnreadInput) (*OKResponse, error) {
+	if err := cacheLiveOr503(s.state.CityBeadStore()); err != nil {
+		return nil, err
+	}
 	id := input.ID
 	rig := input.Rig
-	mp, resolvedRig, err := s.findMailProviderForMessage(id, rig)
+	result, err := withMailReadDeadline(ctx, func() (mailMarkResult, error) {
+		mp, resolvedRig, err := s.findMailProviderForMessage(id, rig)
+		if err != nil {
+			return mailMarkResult{}, err
+		}
+		if mp == nil {
+			return mailMarkResult{}, nil
+		}
+		if err := mp.MarkUnread(id); err != nil {
+			telemetry.RecordMailOp(ctx, "mark_unread", err)
+			return mailMarkResult{}, err
+		}
+		telemetry.RecordMailOp(ctx, "mark_unread", nil)
+		if err := waitForMailReadState(ctx, mp, id, false); err != nil {
+			return mailMarkResult{}, err
+		}
+		return mailMarkResult{Rig: resolvedRig, Found: true}, nil
+	})
 	if err != nil {
-		return nil, huma.Error500InternalServerError(err.Error())
+		return nil, mailReadAPIError(err)
 	}
-	if mp == nil {
+	if !result.Found {
 		return nil, huma.Error404NotFound("message " + id + " not found")
 	}
-	if err := mp.MarkUnread(id); err != nil {
-		telemetry.RecordMailOp(ctx, "mark_unread", err)
-		return nil, huma.Error500InternalServerError(err.Error())
-	}
-	telemetry.RecordMailOp(ctx, "mark_unread", nil)
-	if err := waitForMailReadState(ctx, mp, id, false); err != nil {
-		return nil, huma.Error500InternalServerError(err.Error())
-	}
-	s.recordMailEvent(events.MailMarkedUnread, "api", id, resolvedRig, nil)
+	s.recordMailEvent(events.MailMarkedUnread, "api", id, result.Rig, nil)
 	resp := &OKResponse{}
 	resp.Body.Status = "unread"
 	return resp, nil
@@ -702,28 +731,39 @@ func (s *Server) humaHandleMailArchive(ctx context.Context, input *MailArchiveIn
 
 // humaHandleMailReply is the Huma-typed handler for POST /v0/mail/{id}/reply.
 func (s *Server) humaHandleMailReply(ctx context.Context, input *MailReplyInput) (*IndexOutput[mail.Message], error) {
+	if err := cacheLiveOr503(s.state.CityBeadStore()); err != nil {
+		return nil, err
+	}
 	id := input.ID
 	rig := input.Rig
 
-	mp, resolvedRig, mpErr := s.findMailProviderForMessage(id, rig)
-	if mpErr != nil {
-		return nil, huma.Error500InternalServerError(mpErr.Error())
+	result, err := withMailReadDeadline(ctx, func() (mailGetResult, error) {
+		mp, resolvedRig, mpErr := s.findMailProviderForMessage(id, rig)
+		if mpErr != nil {
+			return mailGetResult{}, mpErr
+		}
+		if mp == nil {
+			return mailGetResult{}, nil
+		}
+		msg, err := mp.Reply(id, input.Body.From, input.Body.Subject, input.Body.Body)
+		telemetry.RecordMailOp(ctx, "reply", err)
+		if err != nil {
+			return mailGetResult{}, err
+		}
+		msg.Rig = resolvedRig
+		return mailGetResult{Message: msg, Rig: resolvedRig, Found: true}, nil
+	})
+	if err != nil {
+		return nil, mailReadAPIError(err)
 	}
-	if mp == nil {
+	if !result.Found {
 		return nil, huma.Error404NotFound("message " + id + " not found")
 	}
-
-	msg, err := mp.Reply(id, input.Body.From, input.Body.Subject, input.Body.Body)
-	telemetry.RecordMailOp(ctx, "reply", err)
-	if err != nil {
-		return nil, huma.Error500InternalServerError(err.Error())
-	}
-	msg.Rig = resolvedRig
-	s.recordMailEvent(events.MailReplied, msg.From, msg.ID, resolvedRig, &msg)
+	s.recordMailEvent(events.MailReplied, result.Message.From, result.Message.ID, result.Rig, &result.Message)
 
 	return &IndexOutput[mail.Message]{
 		Index: s.latestIndex(),
-		Body:  msg,
+		Body:  result.Message,
 	}, nil
 }
 
