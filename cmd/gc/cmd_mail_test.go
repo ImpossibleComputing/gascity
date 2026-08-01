@@ -4924,6 +4924,7 @@ func TestRouteMailReplyUsesAPIWithoutNotify(t *testing.T) {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
 }
+
 func TestRouteMailCount_StaleBannerOver30s(t *testing.T) {
 	t.Setenv("GC_DEBUG", "0")
 	cityPath := writeMailTestCity(t)

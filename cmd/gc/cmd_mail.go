@@ -2110,37 +2110,40 @@ var mailReadAPIClient = func(cityPath string) (*api.Client, string) {
 func routeMailRead(_ string, args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
 	const cmdName = "mail read"
 	id := args[0]
-	if c != nil {
-		cr, err := c.GetMail(id, "")
-		if err == nil {
-			if err := c.MarkMailRead(id, ""); err == nil {
-				logRoute(stderr, cmdName, "api", "")
-				cr.Body.Read = true
-				if jsonOut {
-					if err := writeCLIJSONLine(stdout, mailMessageJSONResult{SchemaVersion: "1", Message: cr.Body}); err != nil {
-						fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck
-						return 1
-					}
-					return 0
-				}
-				printMessage(cr.Body, stdout)
-				return 0
-			} else if !api.ShouldFallback(err) {
-				logRoute(stderr, cmdName, "api", "error")
-				fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck // best-effort stderr
-				return 1
-			} else {
-				logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
-			}
-		} else if !api.ShouldFallbackForRead(err) {
-			logRoute(stderr, cmdName, "api", "error")
-			fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		} else {
-			logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
-		}
-	} else {
+	if c == nil {
 		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailReadFallback(args, jsonOut, stdout, stderr)
+	}
+
+	cr, err := c.GetMail(id, "")
+	switch {
+	case err == nil:
+		markErr := c.MarkMailRead(id, "")
+		if markErr == nil {
+			logRoute(stderr, cmdName, "api", "")
+			cr.Body.Read = true
+			if jsonOut {
+				if err := writeCLIJSONLine(stdout, mailMessageJSONResult{SchemaVersion: "1", Message: cr.Body}); err != nil {
+					fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck
+					return 1
+				}
+				return 0
+			}
+			printMessage(cr.Body, stdout)
+			return 0
+		}
+		if !api.ShouldFallback(markErr) {
+			logRoute(stderr, cmdName, "api", "error")
+			fmt.Fprintf(stderr, "gc mail read: %v\n", markErr) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(markErr))
+	case !api.ShouldFallbackForRead(err):
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	default:
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
 	}
 	return doMailReadFallback(args, jsonOut, stdout, stderr)
 }
@@ -2484,20 +2487,22 @@ var mailMarkReadAPIClient = func(cityPath string) (*api.Client, string) {
 func routeMailMarkRead(args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
 	const cmdName = "mail mark-read"
 	id := args[0]
-	if c != nil {
-		if err := c.MarkMailRead(id, ""); err == nil {
-			logRoute(stderr, cmdName, "api", "")
-			return renderMailMarkReadResult(id, jsonOut, stdout, stderr)
-		} else if !api.ShouldFallback(err) {
-			logRoute(stderr, cmdName, "api", "error")
-			fmt.Fprintf(stderr, "gc mail mark-read: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		} else {
-			logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
-		}
-	} else {
+	if c == nil {
 		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailMarkReadFallback(args, jsonOut, stdout, stderr)
 	}
+
+	err := c.MarkMailRead(id, "")
+	if err == nil {
+		logRoute(stderr, cmdName, "api", "")
+		return renderMailMarkReadResult(id, jsonOut, stdout, stderr)
+	}
+	if !api.ShouldFallback(err) {
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail mark-read: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
 	return doMailMarkReadFallback(args, jsonOut, stdout, stderr)
 }
 
@@ -2572,20 +2577,22 @@ var mailMarkUnreadAPIClient = func(cityPath string) (*api.Client, string) {
 func routeMailMarkUnread(args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
 	const cmdName = "mail mark-unread"
 	id := args[0]
-	if c != nil {
-		if err := c.MarkMailUnread(id, ""); err == nil {
-			logRoute(stderr, cmdName, "api", "")
-			return renderMailMarkUnreadResult(id, jsonOut, stdout, stderr)
-		} else if !api.ShouldFallback(err) {
-			logRoute(stderr, cmdName, "api", "error")
-			fmt.Fprintf(stderr, "gc mail mark-unread: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		} else {
-			logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
-		}
-	} else {
+	if c == nil {
 		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailMarkUnreadFallback(args, jsonOut, stdout, stderr)
 	}
+
+	err := c.MarkMailUnread(id, "")
+	if err == nil {
+		logRoute(stderr, cmdName, "api", "")
+		return renderMailMarkUnreadResult(id, jsonOut, stdout, stderr)
+	}
+	if !api.ShouldFallback(err) {
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail mark-unread: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
 	return doMailMarkUnreadFallback(args, jsonOut, stdout, stderr)
 }
 

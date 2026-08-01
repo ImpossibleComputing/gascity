@@ -1492,6 +1492,7 @@ func TestClientReplyMail(t *testing.T) {
 		t.Fatalf("body = %#v", gotBody)
 	}
 }
+
 func TestClientCountMail(t *testing.T) {
 	var gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
