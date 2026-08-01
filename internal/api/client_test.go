@@ -1411,6 +1411,88 @@ func TestClientGetMail_ConnErrorFallback(t *testing.T) {
 	}
 }
 
+func TestClientMarkMailRead(t *testing.T) {
+	var gotMethod, gotPath, gotQuery, gotHeader string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotHeader = r.Header.Get("X-GC-Request")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "read"}) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	c := NewCityScopedClient(ts.URL, "alpha")
+	if err := c.MarkMailRead("msg-1", "rig-a"); err != nil {
+		t.Fatalf("MarkMailRead: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v0/city/alpha/mail/msg-1/read" || !strings.Contains(gotQuery, "rig=rig-a") {
+		t.Fatalf("request = %s %s?%s", gotMethod, gotPath, gotQuery)
+	}
+	if gotHeader == "" {
+		t.Fatal("missing X-GC-Request header")
+	}
+}
+
+func TestClientMarkMailUnread(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "unread"}) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	c := NewCityScopedClient(ts.URL, "alpha")
+	if err := c.MarkMailUnread("msg-1", "rig-a"); err != nil {
+		t.Fatalf("MarkMailUnread: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v0/city/alpha/mail/msg-1/mark-unread" || !strings.Contains(gotQuery, "rig=rig-a") {
+		t.Fatalf("request = %s %s?%s", gotMethod, gotPath, gotQuery)
+	}
+}
+
+func TestClientReplyMail(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/city/alpha/mail/msg-1/reply" || !strings.Contains(r.URL.RawQuery, "rig=rig-a") {
+			t.Fatalf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if r.Header.Get("X-GC-Request") == "" {
+			t.Fatal("missing X-GC-Request header")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"id":         "msg-2",
+			"from":       "bob",
+			"to":         "alice",
+			"subject":    "Re: hi",
+			"body":       "done",
+			"created_at": "2026-04-23T10:01:00Z",
+		})
+	}))
+	defer ts.Close()
+
+	c := NewCityScopedClient(ts.URL, "alpha")
+	got, err := c.ReplyMail("msg-1", "bob", "Re: hi", "done", "rig-a")
+	if err != nil {
+		t.Fatalf("ReplyMail: %v", err)
+	}
+	if got.ID != "msg-2" || got.To != "alice" {
+		t.Fatalf("reply = %+v", got)
+	}
+	if gotBody["from"] != "bob" || gotBody["subject"] != "Re: hi" || gotBody["body"] != "done" {
+		t.Fatalf("body = %#v", gotBody)
+	}
+}
+
 func TestClientCountMail(t *testing.T) {
 	var gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

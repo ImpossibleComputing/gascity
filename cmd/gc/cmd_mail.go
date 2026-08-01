@@ -2081,6 +2081,75 @@ func doMailInboxTargetWithJSON(mp mail.Provider, target resolvedMailTarget, json
 }
 
 func cmdMailReadWithJSON(args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "gc mail read: missing message ID") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		return doMailReadFallback(args, jsonOut, stdout, stderr)
+	}
+	c, reason := mailReadAPIClient(cityPath)
+	return routeMailRead(cityPath, args, c, reason, jsonOut, stdout, stderr)
+}
+
+// mailReadAPIClient returns (client, "") when the API path is available,
+// or (nil, reason) when the caller should fall back. Indirected through a var
+// so tests can inject a client pointed at httptest.Server.
+var mailReadAPIClient = func(cityPath string) (*api.Client, string) {
+	if c := apiClient(cityPath); c != nil {
+		return c, ""
+	}
+	return nil, apiClientFallbackReason(cityPath)
+}
+
+// routeMailRead dispatches `mail read` through the supervisor API when a
+// controller is up. It first fetches the message body, then marks it read via
+// the API mutation; if the API reports store_slow or a non-fallbackable write
+// error, it does not fall back to the same contended local store.
+func routeMailRead(_ string, args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+	const cmdName = "mail read"
+	id := args[0]
+	if c == nil {
+		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailReadFallback(args, jsonOut, stdout, stderr)
+	}
+
+	cr, err := c.GetMail(id, "")
+	switch {
+	case err == nil:
+		markErr := c.MarkMailRead(id, "")
+		if markErr == nil {
+			logRoute(stderr, cmdName, "api", "")
+			cr.Body.Read = true
+			if jsonOut {
+				if err := writeCLIJSONLine(stdout, mailMessageJSONResult{SchemaVersion: "1", Message: cr.Body}); err != nil {
+					fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck
+					return 1
+				}
+				return 0
+			}
+			printMessage(cr.Body, stdout)
+			return 0
+		}
+		if !api.ShouldFallback(markErr) {
+			logRoute(stderr, cmdName, "api", "error")
+			fmt.Fprintf(stderr, "gc mail read: %v\n", markErr) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(markErr))
+	case !api.ShouldFallbackForRead(err):
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail read: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	default:
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
+	}
+	return doMailReadFallback(args, jsonOut, stdout, stderr)
+}
+
+// doMailReadFallback is the direct-bd path for `gc mail read`.
+func doMailReadFallback(args []string, jsonOut bool, stdout, stderr io.Writer) int {
 	mp, code := openCityMailProvider(stderr, "gc mail read")
 	if mp == nil {
 		return code
@@ -2244,7 +2313,53 @@ func cmdMailReplyJSON(args []string, subject, message string, notify bool, jsonO
 		fmt.Fprintln(stderr, "gc mail reply: missing message ID") //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	body := message
+	if body == "" && len(args) > 1 {
+		body = strings.Join(args[1:], " ")
+	}
 
+	// --notify has a local side effect (gc nudge) that the mail API does not
+	// perform; preserve the existing direct path for that mode. The common reply
+	// path can stay out of the contended local store and let the supervisor's
+	// provider/cache own the write.
+	if !notify {
+		cityPath, err := resolveCity()
+		if err == nil {
+			c, reason := mailReplyAPIClient(cityPath)
+			return routeMailReply(args[0], defaultMailIdentity(), subject, body, c, reason, jsonOut, stdout, stderr)
+		}
+	}
+	return doMailReplyFallbackJSON(args, subject, body, notify, jsonOut, stdout, stderr)
+}
+
+var mailReplyAPIClient = func(cityPath string) (*api.Client, string) {
+	if c := apiClient(cityPath); c != nil {
+		return c, ""
+	}
+	return nil, apiClientFallbackReason(cityPath)
+}
+
+func routeMailReply(id, sender, subject, body string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+	const cmdName = "mail reply"
+	if c != nil {
+		reply, err := c.ReplyMail(id, sender, subject, body, "")
+		if err == nil {
+			logRoute(stderr, cmdName, "api", "")
+			return renderMailReplyResult(id, reply, false, jsonOut, stdout, stderr)
+		}
+		if !api.ShouldFallback(err) {
+			logRoute(stderr, cmdName, "api", "error")
+			fmt.Fprintf(stderr, "gc mail reply: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
+	} else {
+		logRoute(stderr, cmdName, "fallback", nilReason)
+	}
+	return doMailReplyFallbackJSON([]string{id}, subject, body, false, jsonOut, stdout, stderr)
+}
+
+func doMailReplyFallbackJSON(args []string, subject, body string, notify bool, jsonOut bool, stdout, stderr io.Writer) int {
 	mp, code := openCityMailProvider(stderr, "gc mail reply")
 	if mp == nil {
 		return code
@@ -2295,12 +2410,6 @@ func cmdMailReplyJSON(args []string, subject, message string, notify bool, jsonO
 		}
 	}
 
-	// Determine body from remaining args if -m not set.
-	body := message
-	if body == "" && len(args) > 1 {
-		body = strings.Join(args[1:], " ")
-	}
-
 	var nf nudgeFunc
 	if notify && store != nil {
 		nf = newMailNudgeFunc(sender)
@@ -2330,10 +2439,6 @@ func doMailReplyJSON(mp mail.Provider, rec events.Recorder, id, sender, subject,
 		Message: reply.To,
 		Payload: mailEventPayload(&reply),
 	})
-	if !jsonOut {
-		fmt.Fprintf(stdout, "Replied to %s — sent message %s to %s\n", id, reply.ID, reply.To) //nolint:errcheck // best-effort stdout
-	}
-
 	notified := false
 	if nudgeFn != nil && reply.To != "human" {
 		if err := nudgeFn(reply.To); err != nil {
@@ -2342,11 +2447,16 @@ func doMailReplyJSON(mp mail.Provider, rec events.Recorder, id, sender, subject,
 			notified = true
 		}
 	}
-	if jsonOut {
-		summary := summarizeMailMessage(reply)
-		return writeCLIJSONLineOrExit(stdout, stderr, "gc mail reply", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.reply", Action: "reply", ID: reply.ID, Message: &summary, Messages: []mailMessageSummary{summary}, Count: intRef(1), Notified: notified})
+	return renderMailReplyResult(id, reply, notified, jsonOut, stdout, stderr)
+}
+
+func renderMailReplyResult(originalID string, reply mail.Message, notified bool, jsonOut bool, stdout, stderr io.Writer) int {
+	if !jsonOut {
+		fmt.Fprintf(stdout, "Replied to %s — sent message %s to %s\n", originalID, reply.ID, reply.To) //nolint:errcheck // best-effort stdout
+		return 0
 	}
-	return 0
+	summary := summarizeMailMessage(reply)
+	return writeCLIJSONLineOrExit(stdout, stderr, "gc mail reply", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.reply", Action: "reply", ID: reply.ID, Message: &summary, Messages: []mailMessageSummary{summary}, Count: intRef(1), Notified: notified})
 }
 
 // cmdMailMarkRead marks a message as read.
@@ -2355,6 +2465,48 @@ func cmdMailMarkRead(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdMailMarkReadJSON(args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "gc mail mark-read: missing message ID") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		return doMailMarkReadFallback(args, jsonOut, stdout, stderr)
+	}
+	c, reason := mailMarkReadAPIClient(cityPath)
+	return routeMailMarkRead(args, c, reason, jsonOut, stdout, stderr)
+}
+
+var mailMarkReadAPIClient = func(cityPath string) (*api.Client, string) {
+	if c := apiClient(cityPath); c != nil {
+		return c, ""
+	}
+	return nil, apiClientFallbackReason(cityPath)
+}
+
+func routeMailMarkRead(args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+	const cmdName = "mail mark-read"
+	id := args[0]
+	if c == nil {
+		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailMarkReadFallback(args, jsonOut, stdout, stderr)
+	}
+
+	err := c.MarkMailRead(id, "")
+	if err == nil {
+		logRoute(stderr, cmdName, "api", "")
+		return renderMailMarkReadResult(id, jsonOut, stdout, stderr)
+	}
+	if !api.ShouldFallback(err) {
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail mark-read: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
+	return doMailMarkReadFallback(args, jsonOut, stdout, stderr)
+}
+
+func doMailMarkReadFallback(args []string, jsonOut bool, stdout, stderr io.Writer) int {
 	mp, code := openCityMailProvider(stderr, "gc mail mark-read")
 	if mp == nil {
 		return code
@@ -2386,6 +2538,10 @@ func doMailMarkReadJSON(mp mail.Provider, rec events.Recorder, args []string, js
 		Subject: id,
 		Payload: mailEventPayload(nil),
 	})
+	return renderMailMarkReadResult(id, jsonOut, stdout, stderr)
+}
+
+func renderMailMarkReadResult(id string, jsonOut bool, stdout, stderr io.Writer) int {
 	if jsonOut {
 		return writeCLIJSONLineOrExit(stdout, stderr, "gc mail mark-read", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.mark-read", Action: "mark-read", ID: id, IDs: []string{id}, Count: intRef(1)})
 	}
@@ -2399,6 +2555,48 @@ func cmdMailMarkUnread(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdMailMarkUnreadJSON(args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		fmt.Fprintln(stderr, "gc mail mark-unread: missing message ID") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	cityPath, err := resolveCity()
+	if err != nil {
+		return doMailMarkUnreadFallback(args, jsonOut, stdout, stderr)
+	}
+	c, reason := mailMarkUnreadAPIClient(cityPath)
+	return routeMailMarkUnread(args, c, reason, jsonOut, stdout, stderr)
+}
+
+var mailMarkUnreadAPIClient = func(cityPath string) (*api.Client, string) {
+	if c := apiClient(cityPath); c != nil {
+		return c, ""
+	}
+	return nil, apiClientFallbackReason(cityPath)
+}
+
+func routeMailMarkUnread(args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+	const cmdName = "mail mark-unread"
+	id := args[0]
+	if c == nil {
+		logRoute(stderr, cmdName, "fallback", nilReason)
+		return doMailMarkUnreadFallback(args, jsonOut, stdout, stderr)
+	}
+
+	err := c.MarkMailUnread(id, "")
+	if err == nil {
+		logRoute(stderr, cmdName, "api", "")
+		return renderMailMarkUnreadResult(id, jsonOut, stdout, stderr)
+	}
+	if !api.ShouldFallback(err) {
+		logRoute(stderr, cmdName, "api", "error")
+		fmt.Fprintf(stderr, "gc mail mark-unread: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
+	return doMailMarkUnreadFallback(args, jsonOut, stdout, stderr)
+}
+
+func doMailMarkUnreadFallback(args []string, jsonOut bool, stdout, stderr io.Writer) int {
 	mp, code := openCityMailProvider(stderr, "gc mail mark-unread")
 	if mp == nil {
 		return code
@@ -2430,6 +2628,10 @@ func doMailMarkUnreadJSON(mp mail.Provider, rec events.Recorder, args []string, 
 		Subject: id,
 		Payload: mailEventPayload(nil),
 	})
+	return renderMailMarkUnreadResult(id, jsonOut, stdout, stderr)
+}
+
+func renderMailMarkUnreadResult(id string, jsonOut bool, stdout, stderr io.Writer) int {
 	if jsonOut {
 		return writeCLIJSONLineOrExit(stdout, stderr, "gc mail mark-unread", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.mark-unread", Action: "mark-unread", ID: id, IDs: []string{id}, Count: intRef(1)})
 	}

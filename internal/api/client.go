@@ -1040,6 +1040,72 @@ func (c *Client) GetService(name string) (workspacesvc.Status, error) {
 
 // --- Mutation methods ---
 
+// MarkMailRead marks a message read via POST /v0/city/{cityName}/mail/{id}/read.
+// rig is an optional hint for O(1) provider lookup when the caller already
+// knows which rig owns the message.
+func (c *Client) MarkMailRead(id, rig string) error {
+	if err := c.requireCityScope(); err != nil {
+		return err
+	}
+	params := &genclient.PostV0CityByCityNameMailByIdReadParams{XGCRequest: "true"}
+	if rig != "" {
+		params.Rig = &rig
+	}
+	resp, err := c.cw.PostV0CityByCityNameMailByIdReadWithResponse(context.Background(), c.cityName, id, params)
+	return checkMutation(resp, err)
+}
+
+// MarkMailUnread marks a message unread via
+// POST /v0/city/{cityName}/mail/{id}/mark-unread. rig is an optional provider
+// hint for O(1) lookup.
+func (c *Client) MarkMailUnread(id, rig string) error {
+	if err := c.requireCityScope(); err != nil {
+		return err
+	}
+	params := &genclient.PostV0CityByCityNameMailByIdMarkUnreadParams{XGCRequest: "true"}
+	if rig != "" {
+		params.Rig = &rig
+	}
+	resp, err := c.cw.PostV0CityByCityNameMailByIdMarkUnreadWithResponse(context.Background(), c.cityName, id, params)
+	return checkMutation(resp, err)
+}
+
+// ReplyMail creates a reply via POST /v0/city/{cityName}/mail/{id}/reply.
+// rig is an optional provider hint for O(1) lookup.
+func (c *Client) ReplyMail(id, from, subject, body, rig string) (mail.Message, error) {
+	if err := c.requireCityScope(); err != nil {
+		return mail.Message{}, err
+	}
+	params := &genclient.ReplyMailParams{XGCRequest: "true"}
+	if rig != "" {
+		params.Rig = &rig
+	}
+	req := genclient.ReplyMailJSONRequestBody{}
+	if from != "" {
+		req.From = &from
+	}
+	if subject != "" {
+		req.Subject = &subject
+	}
+	if body != "" {
+		req.Body = &body
+	}
+	resp, err := c.cw.ReplyMailWithResponse(context.Background(), c.cityName, id, params, req)
+	if err != nil {
+		return mail.Message{}, &connError{err: fmt.Errorf("request failed: %w", err)}
+	}
+	if resp == nil {
+		return mail.Message{}, &connError{err: fmt.Errorf("nil response")}
+	}
+	if err := apiErrorFromResponse(resp.StatusCode(), resp.ApplicationproblemJSONDefault); err != nil {
+		return mail.Message{}, err
+	}
+	if resp.JSON201 == nil {
+		return mail.Message{}, fmt.Errorf("API returned %d with no body", resp.StatusCode())
+	}
+	return mailMessageFromGen(*resp.JSON201), nil
+}
+
 // RestartService restarts a service via POST /v0/service/{name}/restart.
 func (c *Client) RestartService(name string) error {
 	if err := c.requireCityScope(); err != nil {
