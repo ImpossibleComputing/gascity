@@ -99,9 +99,14 @@ type LoadOptions struct {
 	// AllowMissingProviderReferences leaves provider-reference catalog errors
 	// non-fatal for repair tools that need to inspect broken configs.
 	AllowMissingProviderReferences bool
-	deferRigPatches                bool
-	deferredRigPatches             *[]deferredRigPatches
-	allowLegacyOrderLayouts        bool
+	// SkipRevisionSnapshot skips the expensive pack/content snapshot used for
+	// long-running config reload drift checks. Short-lived CLI commands that only
+	// need the resolved config should set this to avoid walking large pack trees
+	// before routing through the supervisor API.
+	SkipRevisionSnapshot    bool
+	deferRigPatches         bool
+	deferredRigPatches      *[]deferredRigPatches
+	allowLegacyOrderLayouts bool
 }
 
 // LoadWithIncludes loads a city.toml and merges all included fragments.
@@ -775,8 +780,12 @@ func LoadWithIncludesOptions(fs fsys.FS, path string, opts LoadOptions, extraInc
 
 	// Capture revision inputs after all config and pack discovery so callers
 	// can compare the loaded snapshot to future reloads without re-reading
-	// mutable files from disk.
-	prov.captureRevisionSnapshot(fs, root, cityRoot)
+	// mutable files from disk. Short-lived CLI commands opt out because they do
+	// not use the snapshot and the recursive pack walk can dominate/hang command
+	// startup before the command reaches the supervisor API route.
+	if !opts.SkipRevisionSnapshot {
+		prov.captureRevisionSnapshot(fs, root, cityRoot)
+	}
 
 	return root, prov, nil
 }

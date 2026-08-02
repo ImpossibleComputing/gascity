@@ -55,11 +55,9 @@ func TestStandaloneControllerClient(t *testing.T) {
 }
 
 // TestAPIClientRouting covers apiClient's routing: the standalone endpoint when
-// the socket is alive and an [api] port is configured, nil (the caller's local
-// fallback) when alive without a standalone port, the supervisor client when the
-// socket is down, and nil under the GC_NO_API escape hatch. The supervisor
-// fall-through for a managed city with no [api] port is scoped to maintenance —
-// see TestMaintenanceAPIClientRoutesToSupervisor. (gascity ga-tp7)
+// the socket is alive and an [api] port is configured, the supervisor client
+// when an alive supervisor-managed city omits a standalone port, the supervisor
+// client when the socket is down, and nil under the GC_NO_API escape hatch.
 func TestAPIClientRouting(t *testing.T) {
 	sentinel := api.NewClient("http://supervisor.sentinel:1")
 
@@ -70,14 +68,12 @@ func TestAPIClientRouting(t *testing.T) {
 	origAlive, origSup := apiRouteControllerAliveHook, apiRouteSupervisorClientHook
 	t.Cleanup(func() { restore(origAlive, origSup) })
 
-	t.Run("controller-alive-no-api-port-returns-nil", func(t *testing.T) {
-		// General commands have a local fallback, so apiClient returns nil here
-		// (no global supervisor fall-through).
+	t.Run("controller-alive-no-api-port-uses-supervisor", func(t *testing.T) {
 		t.Setenv("GC_NO_API", "")
 		restore(func(string) int { return 4242 }, func(string) *api.Client { return sentinel })
 		dir := writeCityTOMLForRoute(t, t.TempDir(), "name = \"t\"\n")
-		if got := apiClient(dir); got != nil {
-			t.Fatalf("apiClient = %p, want nil (general commands use local fallback)", got)
+		if got := apiClient(dir); got != sentinel {
+			t.Fatalf("apiClient = %p, want supervisor sentinel %p", got, sentinel)
 		}
 	})
 
@@ -113,11 +109,8 @@ func TestAPIClientRouting(t *testing.T) {
 	})
 }
 
-// TestMaintenanceAPIClientRoutesToSupervisor proves the maintenance-scoped
-// fall-through: when the controller socket is alive but the supervisor-managed
-// city omits a standalone [api] port, maintenanceAPIClient routes to the
-// supervisor-managed client (maintenance has no local fallback), where general
-// commands' apiClient returns nil. (gascity ga-tp7)
+// TestMaintenanceAPIClientRoutesToSupervisor keeps the maintenance wrapper
+// pinned to the same supervisor fall-through and GC_NO_API behavior as apiClient.
 func TestMaintenanceAPIClientRoutesToSupervisor(t *testing.T) {
 	sentinel := api.NewClient("http://supervisor.sentinel:1")
 	origAlive, origSup := apiRouteControllerAliveHook, apiRouteSupervisorClientHook

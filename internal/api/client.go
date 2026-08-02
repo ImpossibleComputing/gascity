@@ -1040,6 +1040,44 @@ func (c *Client) GetService(name string) (workspacesvc.Status, error) {
 
 // --- Mutation methods ---
 
+// SendMail creates a message via POST /v0/city/{cityName}/mail. The server
+// owns recipient/session resolution and records the mail event, so CLI callers
+// can avoid the local session-store fallback when the supervisor API is
+// available.
+func (c *Client) SendMail(from, to, subject, body, rig string) (mail.Message, error) {
+	if err := c.requireCityScope(); err != nil {
+		return mail.Message{}, err
+	}
+	params := &genclient.SendMailParams{XGCRequest: "true"}
+	req := genclient.SendMailJSONRequestBody{
+		Subject: subject,
+		To:      to,
+	}
+	if from != "" {
+		req.From = &from
+	}
+	if body != "" {
+		req.Body = &body
+	}
+	if rig != "" {
+		req.Rig = &rig
+	}
+	resp, err := c.cw.SendMailWithResponse(context.Background(), c.cityName, params, req)
+	if err != nil {
+		return mail.Message{}, &connError{err: fmt.Errorf("request failed: %w", err)}
+	}
+	if resp == nil {
+		return mail.Message{}, &connError{err: fmt.Errorf("nil response")}
+	}
+	if err := apiErrorFromResponse(resp.StatusCode(), resp.ApplicationproblemJSONDefault); err != nil {
+		return mail.Message{}, err
+	}
+	if resp.JSON201 == nil {
+		return mail.Message{}, fmt.Errorf("API returned %d with no body", resp.StatusCode())
+	}
+	return mailMessageFromGen(*resp.JSON201), nil
+}
+
 // MarkMailRead marks a message read via POST /v0/city/{cityName}/mail/{id}/read.
 // rig is an optional hint for O(1) provider lookup when the caller already
 // knows which rig owns the message.

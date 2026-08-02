@@ -1763,6 +1763,82 @@ The recipient defaults to $GC_SESSION_ID, $GC_ALIAS, $GC_AGENT, or "human".`,
 	return cmd
 }
 
+func prepareMailSendArgs(args []string, all bool, to, subject, message string) ([]string, bool) {
+	prepared := append([]string(nil), args...)
+	if to != "" && !all {
+		prepared = append([]string{to}, prepared...)
+	}
+	if subject == "" && message == "" {
+		return prepared, true
+	}
+	if all {
+		allBody := message
+		if allBody == "" && len(prepared) > 0 {
+			allBody = prepared[0]
+		}
+		return []string{subject, allBody}, true
+	}
+	if len(prepared) < 1 {
+		return prepared, false
+	}
+	body := message
+	if body == "" && len(prepared) > 1 {
+		body = strings.Join(prepared[1:], " ")
+	}
+	return []string{prepared[0], subject, body}, true
+}
+
+func mailSendSubjectForAPI(subject, body string) string {
+	if subject != "" {
+		return subject
+	}
+	if body == "" {
+		return "(no subject)"
+	}
+	line := strings.SplitN(body, "\n", 2)[0]
+	if len(line) > 80 {
+		return line[:77] + "..."
+	}
+	return line
+}
+
+func renderMailSendSuccess(m mail.Message, to string, jsonOut bool, notified bool, stdout, stderr io.Writer) int {
+	if !jsonOut {
+		fmt.Fprintf(stdout, "Sent message %s to %s\n", m.ID, to) //nolint:errcheck // best-effort stdout
+		return 0
+	}
+	summary := summarizeMailMessage(m)
+	return writeCLIJSONLineOrExit(stdout, stderr, "gc mail send", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.send", Action: "send", ID: m.ID, Message: &summary, Messages: []mailMessageSummary{summary}, Count: intRef(1), Notified: notified})
+}
+
+func routeMailSendViaAPI(c *api.Client, sender string, args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintln(stderr, "gc mail send: usage: gc mail send <to> <body>  OR  gc mail send <to> -s <subject> [-m <body>]") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	to := args[0]
+	var subject, body string
+	if len(args) >= 3 {
+		subject = args[1]
+		body = args[2]
+	} else {
+		body = strings.Join(args[1:], " ")
+	}
+	apiSubject := mailSendSubjectForAPI(subject, body)
+	m, err := c.SendMail(sender, to, apiSubject, body, "")
+	if err != nil {
+		if !api.ShouldFallback(err) {
+			logRoute(stderr, "mail send", "api", "error")
+			fmt.Fprintf(stderr, "gc mail send: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		logRoute(stderr, "mail send", "fallback", api.FallbackReason(err))
+		return -1
+	}
+	logRoute(stderr, "mail send", "api", "")
+	return renderMailSendSuccess(m, to, jsonOut, false, stdout, stderr)
+}
+
 // cmdMailSend is the CLI entry point for sending mail. It opens the provider,
 // resolves session mailbox identities, and delegates to doMailSend.
 // The to parameter is the --to flag value (empty if not set).
@@ -1771,6 +1847,25 @@ func cmdMailSend(args []string, notify bool, all bool, from string, to string, s
 }
 
 func cmdMailSendJSON(args []string, notify bool, all bool, from string, to string, subject string, message string, jsonOut bool, stdout, stderr io.Writer) int {
+	preparedArgs, ok := prepareMailSendArgs(args, all, to, subject, message)
+	if !ok {
+		fmt.Fprintln(stderr, "gc mail send: missing recipient") //nolint:errcheck // best-effort stderr
+		return 1
+	}
+
+	resolvedCityPath, cityErr := resolveCity()
+	if cityErr == nil && !all && !notify {
+		if c := apiClient(resolvedCityPath); c != nil {
+			sender := from
+			if sender == "" {
+				sender = defaultMailIdentity()
+			}
+			if code := routeMailSendViaAPI(c, sender, preparedArgs, jsonOut, stdout, stderr); code >= 0 {
+				return code
+			}
+		}
+	}
+
 	mp, code := openCityMailProvider(stderr, "gc mail send")
 	if mp == nil {
 		return code
@@ -1781,7 +1876,8 @@ func cmdMailSendJSON(args []string, notify bool, all bool, from string, to strin
 		validRecipients map[string]bool
 		cfg             *config.City
 	)
-	cityPath, err := resolveCity()
+	cityPath := resolvedCityPath
+	err := cityErr
 	if err == nil {
 		cfg, _ = loadCityConfig(cityPath, stderr)
 		store, err = openStoreAtForCity(cityPath, cityPath)
@@ -1829,31 +1925,7 @@ func cmdMailSendJSON(args []string, notify bool, all bool, from string, to strin
 		nf = newMailNudgeFunc(sender)
 	}
 
-	// When --to is set, prepend it to args so doMailSend sees [to, body].
-	if to != "" && !all {
-		args = append([]string{to}, args...)
-	}
-
-	// When -s/-m flags provide subject/body, use them.
-	if subject != "" || message != "" {
-		if all {
-			allBody := message
-			if allBody == "" && len(args) > 0 {
-				allBody = args[0]
-			}
-			args = []string{subject, allBody}
-		} else {
-			if len(args) < 1 {
-				fmt.Fprintln(stderr, "gc mail send: missing recipient") //nolint:errcheck // best-effort stderr
-				return 1
-			}
-			body := message
-			if body == "" && len(args) > 1 {
-				body = strings.Join(args[1:], " ")
-			}
-			args = []string{args[0], subject, body}
-		}
-	}
+	args = preparedArgs
 	if !all && len(args) > 0 && store != nil {
 		canonicalTo, err := resolveMailRecipientIdentityCached(cityPath, cfg, store, args[0], idCache)
 		if err != nil {
@@ -1931,8 +2003,7 @@ func doMailSendJSON(mp mail.Provider, rec events.Recorder, validRecipients map[s
 		}
 	}
 	if jsonOut {
-		summary := summarizeMailMessage(m)
-		return writeCLIJSONLineOrExit(stdout, stderr, "gc mail send", mailActionResult{SchemaVersion: "1", OK: true, Command: "mail.send", Action: "send", ID: m.ID, Message: &summary, Messages: []mailMessageSummary{summary}, Count: intRef(1), Notified: notified})
+		return renderMailSendSuccess(m, to, true, notified, stdout, stderr)
 	}
 	return 0
 }
