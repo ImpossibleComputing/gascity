@@ -3035,6 +3035,89 @@ func TestCmdNudgePollSurvivesTransientObserveErrors(t *testing.T) {
 	}
 }
 
+func TestNormalizeNudgePollIntervalClampsNonPositive(t *testing.T) {
+	if got := normalizeNudgePollInterval(0); got != defaultNudgePollInterval {
+		t.Fatalf("normalizeNudgePollInterval(0) = %s, want %s", got, defaultNudgePollInterval)
+	}
+	if got := normalizeNudgePollInterval(-time.Second); got != defaultNudgePollInterval {
+		t.Fatalf("normalizeNudgePollInterval(-1s) = %s, want %s", got, defaultNudgePollInterval)
+	}
+	if got := normalizeNudgePollInterval(37 * time.Millisecond); got != 37*time.Millisecond {
+		t.Fatalf("normalizeNudgePollInterval(37ms) = %s, want 37ms", got)
+	}
+}
+
+func TestCmdNudgePollSleepsAfterDeliveryAttempt(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	writeNamedSessionCityTOML(t, cityDir)
+	t.Setenv("GC_CITY", cityDir)
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	created, err := store.Create(beads.Bead{
+		Title:  "Session: worker",
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+			"state":        string(session.StateActive),
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create session: %v", err)
+	}
+
+	observeCalls := 0
+	origObserve := nudgeObserveTarget
+	nudgeObserveTarget = func(_ nudgeTarget, _ beads.Store, _ runtime.Provider) (worker.LiveObservation, error) {
+		observeCalls++
+		if observeCalls == 1 {
+			idleSince := time.Now().Add(-10 * time.Second)
+			return worker.LiveObservation{Running: true, LastActivity: &idleSince}, nil
+		}
+		return worker.LiveObservation{Running: false}, nil
+	}
+	defer func() { nudgeObserveTarget = origObserve }()
+
+	deliverCalls := 0
+	origDeliver := nudgeTryDeliverQueuedNudgesByPoller
+	nudgeTryDeliverQueuedNudgesByPoller = func(_ nudgeTarget, _, _ beads.Store, _ runtime.Provider, _ time.Duration, _ worker.LiveObservation) (bool, error) {
+		deliverCalls++
+		return true, nil
+	}
+	defer func() { nudgeTryDeliverQueuedNudgesByPoller = origDeliver }()
+
+	var slept []time.Duration
+	origSleep := nudgePollSleep
+	nudgePollSleep = func(d time.Duration) { slept = append(slept, d) }
+	defer func() { nudgePollSleep = origSleep }()
+
+	var stdout, stderr bytes.Buffer
+	interval := 17 * time.Millisecond
+	code := cmdNudgePoll([]string{created.ID}, "worker-session", interval, 0, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgePoll = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if deliverCalls != 1 {
+		t.Fatalf("deliver calls = %d, want 1", deliverCalls)
+	}
+	if observeCalls != 2 {
+		t.Fatalf("observe calls = %d, want 2", observeCalls)
+	}
+	if len(slept) != 1 || slept[0] != interval {
+		t.Fatalf("sleep calls = %v, want one sleep of %s after delivery attempt", slept, interval)
+	}
+}
+
 func TestCmdNudgeDrainStampsLastNudgeDeliveredAt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
