@@ -90,11 +90,13 @@ var errNudgeSessionFenceMismatch = errors.New("queued nudge session fence mismat
 var (
 	// Test seams for cmd_nudge_test.go. Tests that replace these package
 	// variables must stay serial; do not use t.Parallel in those tests.
-	nudgeCityUsesManagedReconciler           = cityUsesManagedReconciler
-	nudgePokeController                      = pokeController
-	nudgeObserveTarget                       = workerObserveNudgeTarget
-	nudgeWithdrawQueuedWaitNudges            = withdrawQueuedWaitNudges
-	nudgeWarningWriter             io.Writer = os.Stderr
+	nudgeCityUsesManagedReconciler                = cityUsesManagedReconciler
+	nudgePokeController                           = pokeController
+	nudgeObserveTarget                            = workerObserveNudgeTarget
+	nudgeTryDeliverQueuedNudgesByPoller           = tryDeliverQueuedNudgesByPoller
+	nudgeWithdrawQueuedWaitNudges                 = withdrawQueuedWaitNudges
+	nudgePollSleep                                = time.Sleep
+	nudgeWarningWriter                  io.Writer = os.Stderr
 )
 
 type nudgeDeliveryMode string
@@ -601,6 +603,7 @@ func configureNudgePollRuntime(stderr io.Writer) func() {
 }
 
 func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.Duration, _ io.Writer, stderr io.Writer) int {
+	interval = normalizeNudgePollInterval(interval)
 	targetID := os.Getenv("GC_ALIAS")
 	if targetID == "" {
 		targetID = os.Getenv("GC_SESSION_ID")
@@ -673,7 +676,7 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 1
@@ -684,21 +687,29 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 				if missingSince.IsZero() {
 					missingSince = now
 				}
-				time.Sleep(interval)
+				nudgePollSleep(interval)
 				continue
 			}
 			return 0
 		}
 		missingSince = time.Time{}
-		delivered, pollErr := tryDeliverQueuedNudgesByPoller(target, store.Store, cliSessionStore(store.Store, target.cfg, target.cityPath), sp, quiescence, obs)
+		_, pollErr := nudgeTryDeliverQueuedNudgesByPoller(target, store.Store, cliSessionStore(store.Store, target.cfg, target.cityPath), sp, quiescence, obs)
 		if pollErr != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", pollErr) //nolint:errcheck
 		}
-		if delivered {
-			continue
-		}
-		time.Sleep(interval)
+		// Sleep between every scan, including after a delivery attempt. A
+		// successful Nudge with slow/failed bookkeeping must not turn the
+		// sidecar into a CPU-hot retry loop; the next pass is still bounded by
+		// the configured poll interval.
+		nudgePollSleep(interval)
 	}
+}
+
+func normalizeNudgePollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return defaultNudgePollInterval
+	}
+	return interval
 }
 
 func shouldKeepNudgePollerAlive(target nudgeTarget, missingSince, now time.Time) bool {
