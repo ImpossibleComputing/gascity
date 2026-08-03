@@ -55,6 +55,12 @@ const (
 	// A controller wake can legitimately take a couple of minutes when the
 	// session has to rematerialize a worktree and complete startup dialog.
 	defaultNudgePollStartGrace = 5 * time.Minute
+	// defaultNudgePollMaxDeliverPerPass bounds how much queued delivery work a
+	// long-lived per-session poller may claim before it returns to the outer
+	// poll loop sleep. Without this cap, one backlog flush can make a poller
+	// claim, format, deliver, and ack hundreds of reminders in a single scan,
+	// keeping the process CPU-hot even though it sleeps between scans.
+	defaultNudgePollMaxDeliverPerPass = 8
 
 	// defaultNudgePollMemLimitMB is the soft Go runtime memory limit
 	// (debug.SetMemoryLimit) installed for the long-lived `gc nudge poll`
@@ -1307,7 +1313,7 @@ func tryDeliverQueuedNudgesByPoller(target nudgeTarget, store, sessStore beads.S
 	if !pollerSessionIdleEnough(target, sp, quiescence, obs) {
 		return false, nil
 	}
-	items, err := claimDueQueuedNudgesForTarget(target.cityPath, target, time.Now())
+	items, err := claimDueQueuedNudgesForTargetLimit(target.cityPath, target, time.Now(), defaultNudgePollMaxDeliverPerPass)
 	if err != nil || len(items) == 0 {
 		return false, err
 	}
@@ -1751,12 +1757,20 @@ func queuedNudgeClaimableForTarget(target nudgeTarget, item queuedNudge) bool {
 }
 
 func claimDueQueuedNudgesForTarget(cityPath string, target nudgeTarget, now time.Time) ([]queuedNudge, error) {
-	return claimDueQueuedNudgesMatching(cityPath, now, func(item queuedNudge) bool {
+	return claimDueQueuedNudgesForTargetLimit(cityPath, target, now, 0)
+}
+
+func claimDueQueuedNudgesForTargetLimit(cityPath string, target nudgeTarget, now time.Time, limit int) ([]queuedNudge, error) {
+	return claimDueQueuedNudgesMatchingLimit(cityPath, now, func(item queuedNudge) bool {
 		return queuedNudgeClaimableForTarget(target, item)
-	})
+	}, limit)
 }
 
 func claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(queuedNudge) bool) ([]queuedNudge, error) {
+	return claimDueQueuedNudgesMatchingLimit(cityPath, now, match, 0)
+}
+
+func claimDueQueuedNudgesMatchingLimit(cityPath string, now time.Time, match func(queuedNudge) bool, limit int) ([]queuedNudge, error) {
 	store := openNudgeBeadStore(cityPath)
 	defer closeBeadStoreHandle(store.Store) //nolint:errcheck // best-effort
 	var front *nudgequeue.Store
@@ -1782,6 +1796,10 @@ func claimDueQueuedNudgesMatching(cityPath string, now time.Time, match func(que
 				continue
 			}
 			if !item.DeliverAfter.IsZero() && item.DeliverAfter.After(now) {
+				pending = append(pending, item)
+				continue
+			}
+			if limit > 0 && len(claimed) >= limit {
 				pending = append(pending, item)
 				continue
 			}

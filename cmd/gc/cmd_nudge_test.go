@@ -2492,6 +2492,83 @@ func TestTryDeliverQueuedNudgesByPollerDeliversAndAcks(t *testing.T) {
 	}
 }
 
+func TestTryDeliverQueuedNudgesByPollerCapsBacklogBatch(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now().Add(-1 * time.Minute)
+	total := defaultNudgePollMaxDeliverPerPass + 3
+	for i := 0; i < total; i++ {
+		item := newQueuedNudgeWithOptions("worker", fmt.Sprintf("queued reminder %02d", i), "session", now.Add(time.Duration(i)*time.Millisecond), queuedNudgeOptions{
+			ID: fmt.Sprintf("n-%02d", i),
+		})
+		if err := enqueueQueuedNudge(dir, item); err != nil {
+			t.Fatalf("enqueueQueuedNudge(%s): %v", item.ID, err)
+		}
+	}
+
+	store := openNudgeBeadStore(dir)
+	fake := runtime.NewFake()
+	mgr := newSessionManagerWithConfig(dir, store, fake, nil)
+	info, err := mgr.Create(context.Background(), "worker", "Worker", "codex", dir, "codex", nil, session.ProviderResume{}, runtime.Config{WorkDir: dir})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.Start(context.Background(), info.ID, "", runtime.Config{WorkDir: dir}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	idleSince := time.Now().Add(-10 * time.Second)
+	fake.Activity = map[string]time.Time{info.SessionName: idleSince}
+
+	target := nudgeTarget{
+		cityPath:    dir,
+		agent:       config.Agent{Name: "worker"},
+		sessionID:   info.ID,
+		resolved:    &config.ResolvedProvider{Name: "codex"},
+		sessionName: info.SessionName,
+	}
+	obs := worker.LiveObservation{Running: true, LastActivity: &idleSince}
+
+	delivered, err := tryDeliverQueuedNudgesByPoller(target, store, store, fake, 3*time.Second, obs)
+	if err != nil {
+		t.Fatalf("tryDeliverQueuedNudgesByPoller: %v", err)
+	}
+	if !delivered {
+		t.Fatal("delivered = false, want true")
+	}
+
+	var nudgeCalls []runtime.Call
+	for _, call := range fake.Calls {
+		if call.Method == "Nudge" {
+			nudgeCalls = append(nudgeCalls, call)
+		}
+	}
+	if len(nudgeCalls) != 1 {
+		t.Fatalf("nudge calls = %d, want 1", len(nudgeCalls))
+	}
+	for i := 0; i < defaultNudgePollMaxDeliverPerPass; i++ {
+		if !strings.Contains(nudgeCalls[0].Message, fmt.Sprintf("queued reminder %02d", i)) {
+			t.Fatalf("nudge message missing capped item %02d: %q", i, nudgeCalls[0].Message)
+		}
+	}
+	if strings.Contains(nudgeCalls[0].Message, fmt.Sprintf("queued reminder %02d", defaultNudgePollMaxDeliverPerPass)) {
+		t.Fatalf("nudge message includes item beyond cap: %q", nudgeCalls[0].Message)
+	}
+
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if len(pending) != total-defaultNudgePollMaxDeliverPerPass {
+		t.Fatalf("pending = %d, want %d", len(pending), total-defaultNudgePollMaxDeliverPerPass)
+	}
+	if len(inFlight) != 0 {
+		t.Fatalf("inFlight = %d, want 0 after capped batch ack", len(inFlight))
+	}
+	if len(dead) != 0 {
+		t.Fatalf("dead = %d, want 0", len(dead))
+	}
+}
+
 func TestTryDeliverQueuedNudgesByPollerDeliversActivitylessTimedOnlySession(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
@@ -3405,6 +3482,43 @@ func TestClaimDueQueuedNudgesForTargetLeavesSiblingFencePending(t *testing.T) {
 	}
 	if len(inFlight) != 2 {
 		t.Fatalf("inFlight = %d, want 2", len(inFlight))
+	}
+	if len(dead) != 0 {
+		t.Fatalf("dead = %d, want 0", len(dead))
+	}
+}
+
+func TestClaimDueQueuedNudgesForTargetLimitLeavesExcessPending(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now().Add(-time.Minute)
+	for i := 0; i < 5; i++ {
+		item := newQueuedNudgeWithOptions("worker", fmt.Sprintf("reminder %d", i), "session", now.Add(time.Duration(i)*time.Millisecond), queuedNudgeOptions{
+			ID: fmt.Sprintf("n%d", i),
+		})
+		if err := enqueueQueuedNudge(dir, item); err != nil {
+			t.Fatalf("enqueueQueuedNudge(%s): %v", item.ID, err)
+		}
+	}
+
+	target := nudgeTarget{agent: config.Agent{Name: "worker"}}
+	claimed, err := claimDueQueuedNudgesForTargetLimit(dir, target, time.Now(), 2)
+	if err != nil {
+		t.Fatalf("claimDueQueuedNudgesForTargetLimit: %v", err)
+	}
+	if got := queuedNudgeIDs(claimed); len(got) != 2 || got[0] != "n0" || got[1] != "n1" {
+		t.Fatalf("claimed IDs = %#v, want [n0 n1]", got)
+	}
+
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if got := queuedNudgeIDs(pending); len(got) != 3 || got[0] != "n2" || got[1] != "n3" || got[2] != "n4" {
+		t.Fatalf("pending IDs = %#v, want [n2 n3 n4]", got)
+	}
+	if got := queuedNudgeIDs(inFlight); len(got) != 2 || got[0] != "n0" || got[1] != "n1" {
+		t.Fatalf("in-flight IDs = %#v, want [n0 n1]", got)
 	}
 	if len(dead) != 0 {
 		t.Fatalf("dead = %d, want 0", len(dead))
