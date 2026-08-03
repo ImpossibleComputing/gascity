@@ -653,6 +653,15 @@ func TestWorkerComputeSSHUsesExplicitBrokerMaterial(t *testing.T) {
 	identity := filepath.Join(tmp, "worker_ed25519")
 	cert := filepath.Join(tmp, "worker_ed25519-cert.pub")
 	knownHosts := filepath.Join(tmp, "known_hosts")
+	if err := os.WriteFile(identity, []byte("private-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cert, []byte("cert"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(knownHosts, []byte("10.0.0.251 ssh-ed25519 AAAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got := runGuard(t, guard, []string{"HOME=" + filepath.Join(tmp, "home")},
 		"--real", fake,
@@ -682,6 +691,65 @@ func TestWorkerComputeSSHUsesExplicitBrokerMaterial(t *testing.T) {
 	}
 	if strings.Contains(got.stdout, ".ssh") || strings.Contains(got.stderr, ".ssh") {
 		t.Fatalf("ssh wrapper mentioned ambient ~/.ssh path: stdout=%q stderr=%q", got.stdout, got.stderr)
+	}
+}
+
+func TestWorkerComputeSSHRejectsMissingBrokerMaterial(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "called")
+	fake := writeFakeTool(t, marker)
+	identity := filepath.Join(tmp, "missing_ed25519")
+	knownHosts := filepath.Join(tmp, "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("10.0.0.251 ssh-ed25519 AAAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runGuard(t, guard, []string{"HOME=" + filepath.Join(tmp, "home")},
+		"--real", fake,
+		"--identity", identity,
+		"--known-hosts", knownHosts,
+		"--", "worker@10.0.0.251",
+	)
+	if got.code != 78 {
+		t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "identity file does not exist") {
+		t.Fatalf("deny stderr missing missing-identity message: %q", got.stderr)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fake ssh marker exists after denied request; err=%v", err)
+	}
+}
+
+func TestWorkerComputeSSHRejectsLooseIdentityFile(t *testing.T) {
+	guard := writeCoreAsset(t, "assets/scripts/worker-compute-ssh.sh")
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "called")
+	fake := writeFakeTool(t, marker)
+	identity := filepath.Join(tmp, "worker_ed25519")
+	knownHosts := filepath.Join(tmp, "known_hosts")
+	if err := os.WriteFile(identity, []byte("private-key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(knownHosts, []byte("10.0.0.251 ssh-ed25519 AAAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runGuard(t, guard, []string{"HOME=" + filepath.Join(tmp, "home")},
+		"--real", fake,
+		"--identity", identity,
+		"--known-hosts", knownHosts,
+		"--", "worker@10.0.0.251",
+	)
+	if got.code != 78 {
+		t.Fatalf("guard exit = %d, want 78; stdout=%q stderr=%q", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "identity file must not be group/world accessible") {
+		t.Fatalf("deny stderr missing loose-identity message: %q", got.stderr)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("fake ssh marker exists after denied request; err=%v", err)
 	}
 }
 
