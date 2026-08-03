@@ -4811,6 +4811,13 @@ func TestRouteMailReadUsesAPIGetThenMarkRead(t *testing.T) {
 	if !strings.Contains(stdout.String(), "From:     alice") || !strings.Contains(stdout.String(), "Body:     world") {
 		t.Fatalf("stdout missing rendered read message:\n%s", stdout.String())
 	}
+	eventsOut, err := events.ReadFiltered(filepath.Join(cityPath, ".gc", "events.jsonl"), events.Filter{Type: events.MailRead})
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if len(eventsOut) != 1 || eventsOut[0].Subject != "msg-1" {
+		t.Fatalf("mail.read events = %#v, want one event for msg-1", eventsOut)
+	}
 }
 
 func TestRouteMailReadMarkStoreSlowDoesNotFallback(t *testing.T) {

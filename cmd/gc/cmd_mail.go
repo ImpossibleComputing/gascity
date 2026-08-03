@@ -2178,7 +2178,7 @@ var mailReadAPIClient = func(cityPath string) (*api.Client, string) {
 // controller is up. It first fetches the message body, then marks it read via
 // the API mutation; if the API reports store_slow or a non-fallbackable write
 // error, it does not fall back to the same contended local store.
-func routeMailRead(_ string, args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+func routeMailRead(cityPath string, args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
 	const cmdName = "mail read"
 	id := args[0]
 	if c == nil {
@@ -2192,6 +2192,12 @@ func routeMailRead(_ string, args []string, c *api.Client, nilReason string, jso
 		markErr := c.MarkMailRead(id, "")
 		if markErr == nil {
 			logRoute(stderr, cmdName, "api", "")
+			openCityRecorderAt(cityPath, stderr).Record(events.Event{
+				Type:    events.MailRead,
+				Actor:   eventActor(),
+				Subject: id,
+				Payload: mailEventPayload(nil),
+			})
 			cr.Body.Read = true
 			if jsonOut {
 				if err := writeCLIJSONLine(stdout, mailMessageJSONResult{SchemaVersion: "1", Message: cr.Body}); err != nil {
