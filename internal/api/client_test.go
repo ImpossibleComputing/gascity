@@ -940,6 +940,38 @@ func TestClientListRigs_ConnErrorFallback(t *testing.T) {
 	}
 }
 
+func TestClientSendMail(t *testing.T) {
+	var gotMethod, gotPath, gotQuery string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "msg-1", "from": "heimdall", "to": "mayor", "subject": "Status", "body": "done", "created_at": "2026-04-23T10:00:00Z"}) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := NewCityScopedClient(srv.URL, "alpha")
+	msg, err := client.SendMail("heimdall", "mayor", "Status", "done", "")
+	if err != nil {
+		t.Fatalf("SendMail: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v0/city/alpha/mail" || gotQuery != "" {
+		t.Fatalf("request = %s %s?%s", gotMethod, gotPath, gotQuery)
+	}
+	if gotBody["from"] != "heimdall" || gotBody["to"] != "mayor" || gotBody["subject"] != "Status" || gotBody["body"] != "done" {
+		t.Fatalf("body = %#v", gotBody)
+	}
+	if msg.ID != "msg-1" || msg.From != "heimdall" || msg.To != "mayor" || msg.Subject != "Status" || msg.Body != "done" {
+		t.Fatalf("message = %#v", msg)
+	}
+}
+
 func TestClientListSessions(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v0/city/alpha/sessions" {

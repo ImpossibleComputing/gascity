@@ -25,6 +25,14 @@ func (e *mailReadTimeoutError) Error() string {
 	return fmt.Sprintf("%s: mail read timed out after %s", StoreSlowErrorCode, e.d)
 }
 
+type mailSendTimeoutError struct {
+	d time.Duration
+}
+
+func (e *mailSendTimeoutError) Error() string {
+	return fmt.Sprintf("%s: mail send timed out after %s", StoreSlowErrorCode, e.d)
+}
+
 type mailReadResult[T any] struct {
 	value T
 	err   error
@@ -52,6 +60,18 @@ type mailProviderReadResult[T any] struct {
 // running until the store call returns; its result is discarded through the
 // buffered channel.
 func withMailReadDeadline[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	return withMailOpDeadline(ctx, "read", fn, func(d time.Duration) error {
+		return &mailReadTimeoutError{d: d}
+	})
+}
+
+func withMailSendDeadline(ctx context.Context, fn func() (mail.Message, error)) (mail.Message, error) {
+	return withMailOpDeadline(ctx, "send", fn, func(d time.Duration) error {
+		return &mailSendTimeoutError{d: d}
+	})
+}
+
+func withMailOpDeadline[T any](ctx context.Context, op string, fn func() (T, error), timeoutErr func(time.Duration) error) (T, error) {
 	var zero T
 	deadline := mailReadDeadline
 	if deadline <= 0 {
@@ -61,7 +81,7 @@ func withMailReadDeadline[T any](ctx context.Context, fn func() (T, error)) (T, 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				ch <- mailReadResult[T]{err: fmt.Errorf("mail provider read panicked: %v", recovered)}
+				ch <- mailReadResult[T]{err: fmt.Errorf("mail provider %s panicked: %v", op, recovered)}
 			}
 		}()
 		value, err := fn()
@@ -75,7 +95,7 @@ func withMailReadDeadline[T any](ctx context.Context, fn func() (T, error)) (T, 
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	case <-timer.C:
-		return zero, &mailReadTimeoutError{d: deadline}
+		return zero, timeoutErr(deadline)
 	}
 }
 
@@ -157,9 +177,13 @@ func orderedMailProviderReadResults[T any](names []string, results map[string]ma
 }
 
 func mailReadAPIError(err error) error {
-	var timeoutErr *mailReadTimeoutError
-	if errors.As(err, &timeoutErr) {
-		return huma.Error503ServiceUnavailable(timeoutErr.Error())
+	var readTimeoutErr *mailReadTimeoutError
+	if errors.As(err, &readTimeoutErr) {
+		return huma.Error503ServiceUnavailable(readTimeoutErr.Error())
+	}
+	var sendTimeoutErr *mailSendTimeoutError
+	if errors.As(err, &sendTimeoutErr) {
+		return huma.Error503ServiceUnavailable(sendTimeoutErr.Error())
 	}
 	return huma.Error500InternalServerError(err.Error())
 }
@@ -460,11 +484,13 @@ func (s *Server) humaHandleMailSend(ctx context.Context, input *MailSendInput) (
 		}
 	}
 
-	msg, err := mp.Send(input.Body.From, resolved, input.Body.Subject, input.Body.Body)
+	msg, err := withMailSendDeadline(ctx, func() (mail.Message, error) {
+		return mp.Send(input.Body.From, resolved, input.Body.Subject, input.Body.Body)
+	})
 	telemetry.RecordMailOp(ctx, "send", err)
 	if err != nil {
 		s.idem.unreserve(idemKey)
-		return nil, huma.Error500InternalServerError(err.Error())
+		return nil, mailReadAPIError(err)
 	}
 	msg.Rig = input.Body.Rig
 	s.idem.storeResponse(idemKey, bodyHash, msg)

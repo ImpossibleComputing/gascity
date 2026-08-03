@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -198,6 +199,35 @@ func TestDoAgentResumePackDerivedError(t *testing.T) {
 	}
 	if !strings.Contains(errMsg, "[[patches]]") {
 		t.Errorf("stderr should mention patches: %s", errMsg)
+	}
+}
+
+func TestLoadCityConfigFSSkipsRevisionSnapshotPackWalk(t *testing.T) {
+	fs := fsys.NewFake()
+	fs.Dirs["/city"] = true
+	fs.Dirs["/city/packs"] = true
+	fs.Dirs["/city/packs/heavy"] = true
+	fs.Files["/city/city.toml"] = []byte(`[workspace]
+name = "test-city"
+includes = ["packs/heavy"]
+`)
+	fs.Files["/city/packs/heavy/pack.toml"] = []byte(`[pack]
+name = "heavy"
+schema = 1
+
+[[agent]]
+name = "worker"
+scope = "city"
+`)
+	fs.Files["/city/packs/heavy/large-payload.txt"] = []byte("payload only revision hashing should touch")
+
+	if _, err := loadCityConfigFS(fs, "/city/city.toml", io.Discard); err != nil {
+		t.Fatalf("loadCityConfigFS: %v", err)
+	}
+	for _, call := range fs.Calls {
+		if call.Path == "/city/packs/heavy/large-payload.txt" {
+			t.Fatalf("loadCityConfigFS touched %s via %s; short-lived CLI loads should skip revision snapshot pack walks", call.Path, call.Method)
+		}
 	}
 }
 

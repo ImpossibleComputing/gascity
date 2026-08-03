@@ -40,7 +40,7 @@ func loadCityConfigFS(fs fsys.FS, tomlPath string, warningWriter ...io.Writer) (
 	if err := ensureBuiltinPacksForConfigLoad(fs, tomlPath, resolveLoadCityConfigWarningWriter(warningWriter...)); err != nil {
 		return nil, err
 	}
-	cfg, prov, err := config.LoadWithIncludes(fs, tomlPath)
+	cfg, prov, err := config.LoadWithIncludesOptions(fs, tomlPath, config.LoadOptions{SkipRevisionSnapshot: true})
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func loadCityConfigFS(fs fsys.FS, tomlPath string, warningWriter ...io.Writer) (
 // briefly reflect stale builtin-pack content after an upgrade until a normal
 // gc command refreshes the generated packs.
 func loadCityConfigWithoutBuiltinPackRefreshFS(fs fsys.FS, tomlPath string, warningWriter ...io.Writer) (*config.City, error) {
-	cfg, prov, err := config.LoadWithIncludes(fs, tomlPath)
+	cfg, prov, err := config.LoadWithIncludesOptions(fs, tomlPath, config.LoadOptions{SkipRevisionSnapshot: true})
 	if err != nil {
 		return nil, err
 	}

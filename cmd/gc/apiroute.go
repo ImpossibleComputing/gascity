@@ -33,12 +33,11 @@ var (
 // A standalone controller (gc controller / gc serve) and a supervisor-managed
 // city both answer the per-city controller socket — the supervisor hosts that
 // controller in-process. When the socket is alive, apiClient routes to the
-// standalone HTTP endpoint if the city configures an [api] port, otherwise
-// returns nil so the caller uses its local fallback; when the socket is not
-// alive it returns the supervisor-managed client. Maintenance commands have no
-// local fallback, so they use maintenanceAPIClient, which additionally routes a
-// supervisor-managed city (alive socket, no standalone [api] port) to the
-// supervisor client rather than reporting controller-down. (gascity ga-tp7)
+// standalone HTTP endpoint if the city configures an [api] port; otherwise it
+// falls through to the supervisor-managed city-scoped client. That keeps read
+// and narrow mutation paths off the local store/session-resolution path when
+// the supervisor API is healthy but the CLI fallback is wedged. When the socket
+// is not alive, it also tries the supervisor-managed client.
 func apiClient(cityPath string) *api.Client {
 	// Operator escape hatch: GC_NO_API=1|true|yes → always fall back.
 	// Unknown values warn to stderr and fail open (fall through to normal path).
@@ -48,11 +47,13 @@ func apiClient(cityPath string) *api.Client {
 		fmt.Fprintln(os.Stderr, "warning: "+warn) //nolint:errcheck // best-effort stderr
 	}
 	if apiRouteControllerAliveHook(cityPath) != 0 {
-		// Alive socket: use the standalone HTTP endpoint when configured, else
-		// return nil so the caller takes its local fallback. A supervisor-managed
-		// city (no standalone [api] port) reaches the supervisor client only via
-		// maintenanceAPIClient, which has no local fallback.
-		return standaloneControllerClient(cityPath)
+		// Alive socket: prefer the standalone HTTP endpoint when configured.
+		// Supervisor-managed cities intentionally omit a standalone [api] port;
+		// fall through to the supervisor's city-scoped API instead of forcing
+		// callers onto the local store fallback.
+		if c := standaloneControllerClient(cityPath); c != nil {
+			return c
+		}
 	}
 	return apiRouteSupervisorClientHook(cityPath)
 }

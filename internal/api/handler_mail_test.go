@@ -98,6 +98,11 @@ type blockingMailProvider struct {
 	release <-chan struct{}
 }
 
+func (p *blockingMailProvider) Send(string, string, string, string) (mail.Message, error) {
+	<-p.release
+	return mail.Message{}, nil
+}
+
 func (p *blockingMailProvider) Inbox(string) ([]mail.Message, error) {
 	<-p.release
 	return nil, nil
@@ -461,6 +466,25 @@ func TestMailCount(t *testing.T) {
 	if resp["unread"] != 2 {
 		t.Errorf("unread = %d, want 2", resp["unread"])
 	}
+}
+
+func TestMailSendStoreSlowReturnsTyped503(t *testing.T) {
+	state := newFakeState(t)
+	release := make(chan struct{})
+	state.cityMailProv = &blockingMailProvider{release: release}
+	oldDeadline := mailReadDeadline
+	mailReadDeadline = 5 * time.Millisecond
+	t.Cleanup(func() {
+		mailReadDeadline = oldDeadline
+		close(release)
+	})
+	h := newTestCityHandler(t, state)
+
+	req := newPostRequest(cityURL(state, "/mail"), bytes.NewBufferString(`{"from":"heimdall","to":"human","subject":"status","body":"done"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assertStoreSlowProblem(t, rec)
 }
 
 func TestMailListRigStoreSlowReturnsTyped503(t *testing.T) {
@@ -870,6 +894,26 @@ func TestMailThreadAllRigsStoreSlowAllFailedReturnsTyped503(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	assertStoreSlowProblem(t, rec)
+}
+
+func TestClientSendMailStoreSlowReturnsTyped503BeforeClientTimeout(t *testing.T) {
+	state := newFakeState(t)
+	release := make(chan struct{})
+	state.cityMailProv = &blockingMailProvider{release: release}
+	oldDeadline := mailReadDeadline
+	mailReadDeadline = 5 * time.Millisecond
+	t.Cleanup(func() {
+		mailReadDeadline = oldDeadline
+		close(release)
+	})
+	ts := httptest.NewServer(newTestCityHandler(t, state))
+	t.Cleanup(ts.Close)
+	c := newTestCityScopedClientWithTimeout(t, ts.URL, state.CityName(), 250*time.Millisecond)
+
+	_, err := c.SendMail("heimdall", "human", "status", "done", "")
+	if !IsStoreSlowError(err) {
+		t.Fatalf("IsStoreSlowError = false for store_slow send response: %v", err)
+	}
 }
 
 func TestClientMailListAllRigsMultipleStoreSlowReturnsTyped503BeforeClientTimeout(t *testing.T) {
