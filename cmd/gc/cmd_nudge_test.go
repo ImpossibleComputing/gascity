@@ -3525,6 +3525,90 @@ func TestClaimDueQueuedNudgesForTargetLimitLeavesExcessPending(t *testing.T) {
 	}
 }
 
+func TestClaimDueQueuedNudgesMatchingLimitStopsScanningAfterCap(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now().Add(-time.Minute)
+	err := withNudgeQueueState(dir, func(state *nudgeQueueState) error {
+		for i := 0; i < 10; i++ {
+			state.Pending = append(state.Pending, newQueuedNudgeWithOptions("worker", fmt.Sprintf("reminder %d", i), "session", now.Add(time.Duration(i)*time.Millisecond), queuedNudgeOptions{
+				ID: fmt.Sprintf("n%d", i),
+			}))
+		}
+		sortQueuedNudges(state)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+
+	matchCalls := 0
+	claimed, err := claimDueQueuedNudgesMatchingLimit(dir, time.Now(), func(item queuedNudge) bool {
+		matchCalls++
+		return item.Agent == "worker"
+	}, 2)
+	if err != nil {
+		t.Fatalf("claimDueQueuedNudgesMatchingLimit: %v", err)
+	}
+	if got := queuedNudgeIDs(claimed); len(got) != 2 || got[0] != "n0" || got[1] != "n1" {
+		t.Fatalf("claimed IDs = %#v, want [n0 n1]", got)
+	}
+	if matchCalls != 2 {
+		t.Fatalf("match calls = %d, want 2 so capped poller claim does not scan the whole backlog", matchCalls)
+	}
+	pending, inFlight, dead, err := listQueuedNudges(dir, "worker", time.Now())
+	if err != nil {
+		t.Fatalf("listQueuedNudges: %v", err)
+	}
+	if got := queuedNudgeIDs(pending); len(got) != 8 || got[0] != "n2" || got[7] != "n9" {
+		t.Fatalf("pending IDs = %#v, want n2..n9", got)
+	}
+	if got := queuedNudgeIDs(inFlight); len(got) != 2 || got[0] != "n0" || got[1] != "n1" {
+		t.Fatalf("in-flight IDs = %#v, want [n0 n1]", got)
+	}
+	if len(dead) != 0 {
+		t.Fatalf("dead = %d, want 0", len(dead))
+	}
+}
+
+func TestAckInFlightQueuedNudgesDoesNotScanOrMaintainPending(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now()
+	expired := newQueuedNudgeWithOptions("worker", "expired pending", "session", now.Add(-2*time.Hour), queuedNudgeOptions{ID: "expired-pending"})
+	expired.ExpiresAt = now.Add(-time.Hour)
+	claimed := newQueuedNudgeWithOptions("worker", "claimed delivered", "session", now.Add(-time.Minute), queuedNudgeOptions{ID: "claimed"})
+	claimed.ClaimedAt = now.Add(-time.Second).UTC()
+	claimed.LeaseUntil = now.Add(time.Minute).UTC()
+	err := withNudgeQueueState(dir, func(state *nudgeQueueState) error {
+		state.Pending = append(state.Pending, expired)
+		state.InFlight = append(state.InFlight, claimed)
+		sortQueuedNudges(state)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+
+	if err := ackInFlightQueuedNudges(dir, []string{claimed.ID}); err != nil {
+		t.Fatalf("ackInFlightQueuedNudges: %v", err)
+	}
+
+	state, err := nudgequeue.LoadState(dir)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if got := queuedNudgeIDs(state.Pending); len(got) != 1 || got[0] != expired.ID {
+		t.Fatalf("pending IDs = %#v, want only expired pending item left untouched", got)
+	}
+	if len(state.InFlight) != 0 {
+		t.Fatalf("in-flight = %d, want 0 after ack", len(state.InFlight))
+	}
+	if len(state.Dead) != 0 {
+		t.Fatalf("dead = %d, want 0 because in-flight ack skips pending maintenance", len(state.Dead))
+	}
+}
+
 func TestClaimDueQueuedNudgesForTargetClaimsHistoricalAlias(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	dir := t.TempDir()
