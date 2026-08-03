@@ -12,9 +12,9 @@ usage() {
 usage: worker-compute-ssh.sh --real <ssh> --identity <path> --known-hosts <path> [--certificate <path>] -- [ssh args...]
 
 Launch ssh for sandboxed compute access without touching ~/.ssh. Identity,
-certificate, and known_hosts paths must be absolute, explicit, and outside
-~/.ssh. The wrapper rejects user-supplied ssh config/identity/known-host
-override flags.
+certificate, and known_hosts paths must be absolute, explicit, existing files
+outside ~/.ssh. Private identity material must not be group/world accessible.
+The wrapper rejects user-supplied ssh config/identity/known-host override flags.
 USAGE
 }
 
@@ -72,13 +72,59 @@ require_not_home_ssh() {
   fi
 }
 
+require_existing_plain_file() {
+  local label="$1" path="$2"
+  if [ ! -e "$path" ]; then
+    echo "compute ssh guard deny: $label file does not exist" >&2
+    exit 78
+  fi
+  if [ -L "$path" ]; then
+    echo "compute ssh guard deny: $label file must not be a symlink" >&2
+    exit 78
+  fi
+  if [ ! -f "$path" ]; then
+    echo "compute ssh guard deny: $label must be a regular file" >&2
+    exit 78
+  fi
+  if [ ! -r "$path" ]; then
+    echo "compute ssh guard deny: $label file is not readable" >&2
+    exit 78
+  fi
+}
+
+file_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+}
+
+require_private_identity_mode() {
+  local path="$1" mode=""
+  mode="$(file_mode "$path" | tail -n 1)" || {
+    echo "compute ssh guard deny: identity file mode unavailable" >&2
+    exit 78
+  }
+  case "$mode" in
+    *[!0-7]*|'')
+      echo "compute ssh guard deny: identity file mode unavailable" >&2
+      exit 78
+      ;;
+  esac
+  if [ $(( 8#$mode & 077 )) -ne 0 ]; then
+    echo "compute ssh guard deny: identity file must not be group/world accessible" >&2
+    exit 78
+  fi
+}
+
 require_absolute_path "identity" "$identity"
 require_absolute_path "known_hosts" "$known_hosts"
 require_not_home_ssh "identity" "$identity"
 require_not_home_ssh "known_hosts" "$known_hosts"
+require_existing_plain_file "identity" "$identity"
+require_existing_plain_file "known_hosts" "$known_hosts"
+require_private_identity_mode "$identity"
 if [ -n "$certificate" ]; then
   require_absolute_path "certificate" "$certificate"
   require_not_home_ssh "certificate" "$certificate"
+  require_existing_plain_file "certificate" "$certificate"
 fi
 
 # Deny caller-supplied options that could re-enable ambient ~/.ssh material,
