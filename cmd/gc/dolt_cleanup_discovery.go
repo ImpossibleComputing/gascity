@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,13 @@ const procEnumerationTimeout = 5 * time.Second
 // needs a much larger budget than the per-PID procEnumerationTimeout.
 const psEnumerationTimeout = 30 * time.Second
 
+type nativeProcessEntry struct {
+	PID           int
+	RSSBytes      int64
+	StartIdentity string
+	Argv          []string
+}
+
 // discoverDoltProcesses finds live `dolt sql-server` processes and reports
 // their argv and listening ports. Linux uses /proc for argv, ports, RSS, and
 // start ticks. Hosts without /proc (including Darwin/macOS) fall back to ps for
@@ -90,11 +98,15 @@ func discoverDoltProcesses() ([]DoltProcInfo, error) {
 }
 
 func discoverDoltProcessesFromPS() ([]DoltProcInfo, error) {
+	pidPorts := portsByPID()
+	if entries, ok, err := nativeProcessEntries(); ok && err == nil {
+		return doltProcessInfosFromNativeEntries(entries, pidPorts), nil
+	}
+
 	lines, err := psLStartCommandLines()
 	if err != nil {
 		return nil, err
 	}
-	pidPorts := portsByPID()
 	var out []DoltProcInfo
 	for _, line := range lines {
 		proc, ok := parseDoltPSLine(line, pidPorts)
@@ -107,6 +119,26 @@ func discoverDoltProcessesFromPS() ([]DoltProcInfo, error) {
 		out = append(out, proc)
 	}
 	return out, nil
+}
+
+func doltProcessInfosFromNativeEntries(entries []nativeProcessEntry, pidPorts map[int][]int) []DoltProcInfo {
+	var out []DoltProcInfo
+	for _, entry := range entries {
+		if entry.PID <= 0 || !looksLikeDoltSQLServer(entry.Argv) {
+			continue
+		}
+		proc := DoltProcInfo{
+			PID:             entry.PID,
+			Argv:            append([]string(nil), entry.Argv...),
+			Ports:           append([]int(nil), pidPorts[entry.PID]...),
+			RSSBytes:        entry.RSSBytes,
+			StartIdentity:   entry.StartIdentity,
+			CWDState:        procPathStateUnknown,
+			ConfigPathState: doltConfigPathState(entry.Argv),
+		}
+		out = append(out, proc)
+	}
+	return out
 }
 
 // cwdStateFromLink classifies a /proc/<pid>/cwd readlink target, given the
@@ -265,6 +297,10 @@ func discoverActiveTestRoots(homeDir, tempDir string) []string {
 }
 
 func discoverActiveTestRootsFromPS(homeDir, tempDir string) []string {
+	if entries, ok, err := nativeProcessEntries(); ok && err == nil {
+		return activeTestRootsFromNativeEntries(entries, homeDir, tempDir)
+	}
+
 	lines, err := psLStartCommandLines()
 	if err != nil {
 		return nil
@@ -277,6 +313,28 @@ func discoverActiveTestRootsFromPS(homeDir, tempDir string) []string {
 			continue
 		}
 		for _, arg := range argv {
+			root, ok := activeTestRootFromPath(arg, homeDir, tempDir)
+			if !ok {
+				continue
+			}
+			if _, exists := seen[root]; exists {
+				continue
+			}
+			seen[root] = struct{}{}
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+func activeTestRootsFromNativeEntries(entries []nativeProcessEntry, homeDir, tempDir string) []string {
+	seen := map[string]struct{}{}
+	var roots []string
+	for _, entry := range entries {
+		if looksLikeDoltSQLServer(entry.Argv) {
+			continue
+		}
+		for _, arg := range entry.Argv {
 			root, ok := activeTestRootFromPath(arg, homeDir, tempDir)
 			if !ok {
 				continue
@@ -404,6 +462,10 @@ func readDoltSQLServerArgv(pid int) ([]string, bool) {
 }
 
 func psLStartCommandLines() ([]string, error) {
+	if entries, ok, err := nativeProcessEntries(); ok && err == nil {
+		return psLinesFromNativeEntries(entries), nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), psEnumerationTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ps", "-ax", "-o", "pid=,rss=,lstart=,command=")
@@ -418,6 +480,22 @@ func psLStartCommandLines() ([]string, error) {
 		}
 	}
 	return lines, nil
+}
+
+func psLinesFromNativeEntries(entries []nativeProcessEntry) []string {
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.PID <= 0 || len(entry.Argv) == 0 {
+			continue
+		}
+		rssKB := entry.RSSBytes / 1024
+		start := strings.TrimSpace(entry.StartIdentity)
+		if start == "" {
+			start = "Mon Jan 02 00:00:00 0000"
+		}
+		lines = append(lines, fmt.Sprintf("%d %d %s %s", entry.PID, rssKB, start, strings.Join(entry.Argv, " ")))
+	}
+	return lines
 }
 
 func parseDoltPSLine(line string, pidPorts map[int][]int) (DoltProcInfo, bool) {

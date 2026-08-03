@@ -545,6 +545,9 @@ func managedPIDFromPSByDataDir(dataDir string) int {
 }
 
 func doltPSLines() []string {
+	if entries, ok, err := nativeProcessEntries(); ok && err == nil {
+		return pidArgLinesFromNativeEntries(entries)
+	}
 	out, err := exec.Command("ps", "ax", "-o", "pid,args").Output()
 	if err != nil {
 		return nil
@@ -553,6 +556,17 @@ func doltPSLines() []string {
 	lines := make([]string, 0, 16)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
+	}
+	return lines
+}
+
+func pidArgLinesFromNativeEntries(entries []nativeProcessEntry) []string {
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.PID <= 0 || len(entry.Argv) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d %s", entry.PID, strings.Join(entry.Argv, " ")))
 	}
 	return lines
 }

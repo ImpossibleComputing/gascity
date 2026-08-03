@@ -311,3 +311,57 @@ func TestDoltConfigPathState(t *testing.T) {
 		})
 	}
 }
+
+func TestDoltProcessInfosFromNativeEntries_SkipsPSAndPreservesDoltArgv(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "dolt-config.yaml")
+	if err := os.WriteFile(cfg, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries := []nativeProcessEntry{
+		{PID: 41, Argv: []string{"/usr/local/bin/dolt", "version"}},
+		{PID: 42, RSSBytes: 2048, StartIdentity: "Mon Jan 02 03:04:05 2026", Argv: []string{"/usr/local/bin/dolt", "sql-server", "--config", cfg}},
+	}
+
+	got := doltProcessInfosFromNativeEntries(entries, map[int][]int{42: {3306}})
+	if len(got) != 1 {
+		t.Fatalf("native dolt procs len = %d, want 1: %#v", len(got), got)
+	}
+	if got[0].PID != 42 || got[0].RSSBytes != 2048 || got[0].StartIdentity != "Mon Jan 02 03:04:05 2026" {
+		t.Fatalf("native proc fields = %#v", got[0])
+	}
+	if !reflect.DeepEqual(got[0].Argv, []string{"/usr/local/bin/dolt", "sql-server", "--config", cfg}) {
+		t.Fatalf("argv = %#v", got[0].Argv)
+	}
+	if !reflect.DeepEqual(got[0].Ports, []int{3306}) {
+		t.Fatalf("ports = %#v", got[0].Ports)
+	}
+	if got[0].ConfigPathState != procPathStateLive {
+		t.Fatalf("ConfigPathState = %q, want live", got[0].ConfigPathState)
+	}
+	if got[0].CWDState != procPathStateUnknown {
+		t.Fatalf("CWDState = %q, want unknown on native non-proc enumeration", got[0].CWDState)
+	}
+}
+
+func TestActiveTestRootsFromNativeEntries_SkipsDoltServers(t *testing.T) {
+	tmp := t.TempDir()
+	testRoot := filepath.Join(tmp, "TestCleanup", "001")
+	entries := []nativeProcessEntry{
+		{PID: 42, Argv: []string{"dolt", "sql-server", "--config", filepath.Join(testRoot, "dolt-config.yaml")}},
+		{PID: 43, Argv: []string{"go", "test", filepath.Join(testRoot, "case.txt")}},
+	}
+
+	got := activeTestRootsFromNativeEntries(entries, t.TempDir(), tmp)
+	want := []string{filepath.Join(tmp, "TestCleanup")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active roots = %#v, want %#v", got, want)
+	}
+}
+
+func TestPidArgLinesFromNativeEntries(t *testing.T) {
+	got := pidArgLinesFromNativeEntries([]nativeProcessEntry{{PID: 42, Argv: []string{"dolt", "sql-server", "--config", "/tmp/cfg.yaml"}}})
+	want := []string{"42 dolt sql-server --config /tmp/cfg.yaml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pid/arg lines = %#v, want %#v", got, want)
+	}
+}
