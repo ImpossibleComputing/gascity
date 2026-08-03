@@ -57,6 +57,13 @@ type State struct {
 
 // SortState orders items deterministically inside each queue bucket.
 func SortState(state *State) {
+	SortPending(state)
+	SortInFlight(state)
+	SortDead(state)
+}
+
+// SortPending orders pending items deterministically.
+func SortPending(state *State) {
 	sort.SliceStable(state.Pending, func(i, j int) bool {
 		if !state.Pending[i].DeliverAfter.Equal(state.Pending[j].DeliverAfter) {
 			return state.Pending[i].DeliverAfter.Before(state.Pending[j].DeliverAfter)
@@ -66,6 +73,10 @@ func SortState(state *State) {
 		}
 		return state.Pending[i].ID < state.Pending[j].ID
 	})
+}
+
+// SortInFlight orders in-flight items deterministically.
+func SortInFlight(state *State) {
 	sort.SliceStable(state.InFlight, func(i, j int) bool {
 		if !state.InFlight[i].LeaseUntil.Equal(state.InFlight[j].LeaseUntil) {
 			return state.InFlight[i].LeaseUntil.Before(state.InFlight[j].LeaseUntil)
@@ -75,6 +86,10 @@ func SortState(state *State) {
 		}
 		return state.InFlight[i].ID < state.InFlight[j].ID
 	})
+}
+
+// SortDead orders dead-lettered items deterministically.
+func SortDead(state *State) {
 	sort.SliceStable(state.Dead, func(i, j int) bool {
 		if !state.Dead[i].DeadAt.Equal(state.Dead[j].DeadAt) {
 			return state.Dead[i].DeadAt.Before(state.Dead[j].DeadAt)

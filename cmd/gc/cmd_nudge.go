@@ -1404,7 +1404,7 @@ func tryDeliverQueuedNudgesByPoller(target nudgeTarget, store, sessStore beads.S
 	}
 	telemetry.RecordNudge(context.Background(), target.agentKey(), nil)
 	stampLastNudgeDeliveredAt(deliverySessFront, target.sessionID, time.Now())
-	return true, errors.Join(bookkeepErr, ackQueuedNudges(target.cityPath, queuedNudgeIDs(items)))
+	return true, errors.Join(bookkeepErr, ackInFlightQueuedNudges(target.cityPath, queuedNudgeIDs(items)))
 }
 
 func stampLastNudgeDeliveredAt(sessFront *session.Store, sessionID string, t time.Time) {
@@ -1790,16 +1790,16 @@ func claimDueQueuedNudgesMatchingLimit(cityPath string, now time.Time, match fun
 			return err
 		}
 		pending := state.Pending[:0]
-		for _, item := range state.Pending {
+		for i, item := range state.Pending {
+			if limit > 0 && len(claimed) >= limit {
+				pending = append(pending, state.Pending[i:]...)
+				break
+			}
 			if !match(item) {
 				pending = append(pending, item)
 				continue
 			}
 			if !item.DeliverAfter.IsZero() && item.DeliverAfter.After(now) {
-				pending = append(pending, item)
-				continue
-			}
-			if limit > 0 && len(claimed) >= limit {
 				pending = append(pending, item)
 				continue
 			}
@@ -1809,7 +1809,7 @@ func claimDueQueuedNudgesMatchingLimit(cityPath string, now time.Time, match fun
 			claimed = append(claimed, item)
 		}
 		state.Pending = pending
-		sortQueuedNudges(state)
+		sortInFlightQueuedNudges(state)
 		return nil
 	})
 	return claimed, err
@@ -2058,6 +2058,45 @@ func ackQueuedNudges(cityPath string, ids []string) error {
 	return ackQueuedNudgesWithOutcome(cityPath, ids, "injected", "", "provider-nudge-return")
 }
 
+func ackInFlightQueuedNudges(cityPath string, ids []string) error {
+	return ackInFlightQueuedNudgesWithOutcome(cityPath, ids, "injected", "", "provider-nudge-return")
+}
+
+func ackInFlightQueuedNudgesWithOutcome(cityPath string, ids []string, outcome, reason, commitBoundary string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	store := openNudgeBeadStore(cityPath)
+	defer closeBeadStoreHandle(store.Store) //nolint:errcheck // best-effort
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	var terminal []queuedNudge
+	err := withNudgeQueueState(cityPath, func(state *nudgeQueueState) error {
+		now := time.Now()
+		inFlight := state.InFlight[:0]
+		for _, item := range state.InFlight {
+			if want[item.ID] {
+				terminal = append(terminal, item)
+				continue
+			}
+			inFlight = append(inFlight, item)
+		}
+		state.InFlight = inFlight
+		for _, item := range terminal {
+			if err := markQueuedNudgeTerminal(store, item, outcome, reason, commitBoundary, now); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func ackQueuedNudgesWithOutcome(cityPath string, ids []string, outcome, reason, commitBoundary string) error {
 	if len(ids) == 0 {
 		return nil
@@ -2296,6 +2335,7 @@ func noMaintenanceDeadline() time.Time {
 
 func pruneExpiredQueuedNudges(state *nudgeQueueState, front *nudgequeue.Store, now, deadline time.Time) error {
 	filtered := state.Pending[:0]
+	mutated := false
 	for i, item := range state.Pending {
 		if time.Now().After(deadline) {
 			filtered = append(filtered, state.Pending[i:]...)
@@ -2310,17 +2350,21 @@ func pruneExpiredQueuedNudges(state *nudgeQueueState, front *nudgequeue.Store, n
 			// Best-effort: remove expired item from pending even if bead update fails.
 			// A failed bead update here would trap the item in pending forever.
 			_ = front.Terminalize(item, "expired", item.LastError, "", now)
+			mutated = true
 			continue
 		}
 		filtered = append(filtered, item)
 	}
 	state.Pending = filtered
-	sortQueuedNudges(state)
+	if mutated {
+		sortQueuedNudges(state)
+	}
 	return nil
 }
 
 func recoverExpiredInFlightNudges(state *nudgeQueueState, front *nudgequeue.Store, now, deadline time.Time) error {
 	filtered := state.InFlight[:0]
+	mutated := false
 	for i, item := range state.InFlight {
 		if time.Now().After(deadline) {
 			filtered = append(filtered, state.InFlight[i:]...)
@@ -2334,6 +2378,7 @@ func recoverExpiredInFlightNudges(state *nudgeQueueState, front *nudgequeue.Stor
 			state.Dead = append(state.Dead, item)
 			// Best-effort: remove expired item from in-flight even if bead update fails.
 			_ = front.Terminalize(item, "expired", item.LastError, "", now)
+			mutated = true
 			continue
 		}
 		if item.LeaseUntil.IsZero() || !item.LeaseUntil.After(now) {
@@ -2341,12 +2386,15 @@ func recoverExpiredInFlightNudges(state *nudgeQueueState, front *nudgequeue.Stor
 			item.LeaseUntil = time.Time{}
 			item.DeliverAfter = now.UTC()
 			state.Pending = append(state.Pending, item)
+			mutated = true
 			continue
 		}
 		filtered = append(filtered, item)
 	}
 	state.InFlight = filtered
-	sortQueuedNudges(state)
+	if mutated {
+		sortQueuedNudges(state)
+	}
 	return nil
 }
 
@@ -2427,6 +2475,10 @@ func queuedNudgeExists(state *nudgeQueueState, id string) bool {
 
 func sortQueuedNudges(state *nudgeQueueState) {
 	nudgequeue.SortState(state)
+}
+
+func sortInFlightQueuedNudges(state *nudgeQueueState) {
+	nudgequeue.SortInFlight(state)
 }
 
 func withNudgeQueueState(cityPath string, fn func(*nudgeQueueState) error) error {
