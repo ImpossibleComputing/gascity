@@ -4064,6 +4064,12 @@ gc supervisor
 Install the machine-wide supervisor as a platform service that
 starts on login.
 
+On macOS the default target is a per-user LaunchAgent. Set
+GC_SUPERVISOR_LAUNCHD_DOMAIN=system to target a system LaunchDaemon under
+/Library/LaunchDaemons instead. System LaunchDaemon mode refuses secret-like
+environment variables and refuses to install alongside a per-user LaunchAgent
+that already targets the same GC_HOME.
+
 ```
 gc supervisor install [flags]
 ```
@@ -4186,6 +4192,9 @@ Remove the platform service and stop the machine-wide supervisor.
 On systemd, uninstall refuses to remove an active unit when the supervisor
 control socket is unavailable. Start the supervisor first so it can re-adopt
 preserved sessions, then retry uninstall.
+
+On macOS, set GC_SUPERVISOR_LAUNCHD_DOMAIN=system to remove gc's system
+LaunchDaemon target instead of the default per-user LaunchAgent.
 
 ```
 gc supervisor uninstall

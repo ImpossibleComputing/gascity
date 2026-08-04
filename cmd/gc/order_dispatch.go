@@ -618,6 +618,17 @@ func (m *memoryOrderDispatcher) dispatch(ctx context.Context, cityPath string, n
 			}
 		}
 
+		if a.CoalesceOpen {
+			hasOpenCoalesced, err := m.hasOpenCoalescibleOrderWorkInStores(storesForGate, scoped)
+			if err != nil {
+				logDispatchError(m.stderr, "gc: order dispatch: checking coalescible open work for %s: %v", scoped, err)
+				continue
+			}
+			if hasOpenCoalesced {
+				continue
+			}
+		}
+
 		// Skip dispatch if previous work hasn't been processed yet.
 		// Bound the wisp-aware open-work gate (#2921) with our per-order
 		// timeout so a slow store can't starve later orders.
@@ -1935,6 +1946,40 @@ func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrict(stores []beads.Store, 
 		if hasOpen {
 			return true, nil
 		}
+	}
+	return false, nil
+}
+
+func (m *memoryOrderDispatcher) hasOpenCoalescibleOrderWorkInStores(stores []beads.Store, scopedName string) (bool, error) {
+	for _, store := range stores {
+		if store == nil {
+			continue
+		}
+		hasOpen, err := hasOpenCoalescibleOrderWork(store, scopedName)
+		if err != nil {
+			return false, err
+		}
+		if hasOpen {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasOpenCoalescibleOrderWork(store beads.Store, scopedName string) (bool, error) {
+	results, err := beads.HandlesFor(store).Live.List(beads.ListQuery{
+		Label:    "order-run:" + scopedName,
+		Sort:     beads.SortCreatedDesc,
+		TierMode: beads.TierBoth,
+	})
+	if err != nil {
+		return false, fmt.Errorf("listing coalescible order work beads: %w", err)
+	}
+	for _, b := range results {
+		if b.Status == "closed" || beadLabelsContain(b.Labels, labelOrderTracking) {
+			continue
+		}
+		return true, nil
 	}
 	return false, nil
 }

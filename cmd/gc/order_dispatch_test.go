@@ -9125,6 +9125,52 @@ func TestOrderDispatchSingleFlightLockSeesNoHistoryTracker(t *testing.T) {
 	}
 }
 
+func TestOrderDispatchCoalesceOpenSuppressesLegacyOpenWork(t *testing.T) {
+	store := beads.NewMemStore()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+	// Legacy/older order work can carry the order-run label without current
+	// gc.kind=wisp/workflow metadata. The strict single-flight gate deliberately
+	// ignores that ambiguous shape, but a coalescing maintenance order should
+	// still collapse onto the already-open run instead of piling up another dog.
+	if _, err := store.Create(beads.Bead{
+		Title:  "legacy stale-db dog still ready",
+		Type:   "task",
+		Status: "open",
+		Labels: []string{"order-run:mol-dog-stale-db"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ran := false
+	fakeExec := func(context.Context, string, string, []string) ([]byte, error) {
+		ran = true
+		return []byte("ok\n"), nil
+	}
+	aa := []orders.Order{{
+		Name:         "mol-dog-stale-db",
+		Trigger:      "cooldown",
+		Interval:     "1m",
+		Exec:         "true",
+		CoalesceOpen: true,
+	}}
+	ad := buildOrderDispatcherFromListExec(aa, store, nil, fakeExec, nil)
+	if ad == nil {
+		t.Fatal("expected non-nil dispatcher")
+	}
+
+	ad.dispatch(context.Background(), t.TempDir(), now)
+	ad.drain(context.Background())
+
+	if ran {
+		t.Fatal("coalescing order dispatched despite open prior order-run work")
+	}
+	all := trackingBeads(t, store, "order-run:mol-dog-stale-db")
+	if len(all) != 1 {
+		t.Fatalf("order-run beads = %d, want only the pre-existing open work", len(all))
+	}
+}
+
 func TestOrderDispatchSingleFlightLockSeesBackingOnlyCachedTracker(t *testing.T) {
 	backing := beads.NewMemStore()
 	store := beads.NewCachingStoreForTest(backing, nil)

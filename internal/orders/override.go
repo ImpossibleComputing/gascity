@@ -18,18 +18,19 @@ const RigWildcard = "*"
 // Mirrors config.OrderOverride but lives in the orders package
 // to avoid a circular dependency.
 type Override struct {
-	Name       string
-	Rig        string
-	Enabled    *bool
-	Trigger    *string
-	Interval   *string
-	Schedule   *string
-	Check      *string
-	On         *string
-	Pool       *string
-	Timeout    *string
-	Idempotent *bool
-	Env        map[string]string
+	Name         string
+	Rig          string
+	Enabled      *bool
+	Trigger      *string
+	Interval     *string
+	Schedule     *string
+	Check        *string
+	On           *string
+	Pool         *string
+	Timeout      *string
+	Idempotent   *bool
+	CoalesceOpen *bool
+	Env          map[string]string
 }
 
 // ApplyOverrides applies each override to the matching order in aa.
@@ -154,6 +155,9 @@ func applyOverride(a *Order, ov *Override) {
 	}
 	if ov.Idempotent != nil {
 		a.Idempotent = *ov.Idempotent
+	}
+	if ov.CoalesceOpen != nil {
+		a.CoalesceOpen = *ov.CoalesceOpen
 	}
 	if len(ov.Env) > 0 {
 		if a.Env == nil {
