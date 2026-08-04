@@ -2030,6 +2030,10 @@
           "type": "boolean",
           "description": "Idempotent overrides whether the order's dispatch is safe to repeat.\nIdempotent orders fail open when the open-work gate times out (#2893)."
         },
+        "coalesce_open": {
+          "type": "boolean",
+          "description": "CoalesceOpen overrides whether dispatch should collapse onto any existing\nopen non-tracking order-run work for this order."
+        },
         "env": {
           "additionalProperties": {
             "type": "string"

@@ -60,6 +60,12 @@ type Order struct {
 	// (gastownhall/gascity#2893). Non-idempotent orders (the
 	// default, false) keep failing CLOSED on gate timeout.
 	Idempotent bool `toml:"idempotent,omitempty"`
+	// CoalesceOpen makes auto-dispatch skip this order when any open non-tracking
+	// order-run bead already exists for its scoped name, even if the older work
+	// bead is not recognizable as a current molecule/workflow/wisp root. Use for
+	// periodic sweep/maintenance orders where stale queued work should collapse to
+	// one pending run rather than accumulate after pool downtime.
+	CoalesceOpen bool `toml:"coalesce_open,omitempty"`
 	// Env is a map of environment variables exported into an exec
 	// order's child process. Use the `[order.env]` TOML table to
 	// override thresholds (e.g. GC_DOCTOR_LATENCY_WARN_S) without
@@ -100,23 +106,24 @@ func (a *Order) ScopedName() string {
 }
 
 type orderDecode struct {
-	Description string                `toml:"description,omitempty"`
-	Formula     string                `toml:"formula,omitempty"`
-	Exec        string                `toml:"exec,omitempty"`
-	Scope       string                `toml:"scope,omitempty"`
-	Trigger     string                `toml:"trigger,omitempty"`
-	Gate        string                `toml:"gate,omitempty"`
-	Interval    string                `toml:"interval,omitempty"`
-	Schedule    string                `toml:"schedule,omitempty"`
-	Check       string                `toml:"check,omitempty"`
-	On          string                `toml:"on,omitempty"`
-	Pool        string                `toml:"pool,omitempty"`
-	Timeout     string                `toml:"timeout,omitempty"`
-	Enabled     *bool                 `toml:"enabled,omitempty"`
-	Idempotent  bool                  `toml:"idempotent,omitempty"`
-	Env         map[string]string     `toml:"env,omitempty"`
-	Params      map[string]OrderParam `toml:"params,omitempty"`
-	SkipAliases []string              `toml:"skip_aliases,omitempty"`
+	Description  string                `toml:"description,omitempty"`
+	Formula      string                `toml:"formula,omitempty"`
+	Exec         string                `toml:"exec,omitempty"`
+	Scope        string                `toml:"scope,omitempty"`
+	Trigger      string                `toml:"trigger,omitempty"`
+	Gate         string                `toml:"gate,omitempty"`
+	Interval     string                `toml:"interval,omitempty"`
+	Schedule     string                `toml:"schedule,omitempty"`
+	Check        string                `toml:"check,omitempty"`
+	On           string                `toml:"on,omitempty"`
+	Pool         string                `toml:"pool,omitempty"`
+	Timeout      string                `toml:"timeout,omitempty"`
+	Enabled      *bool                 `toml:"enabled,omitempty"`
+	Idempotent   bool                  `toml:"idempotent,omitempty"`
+	CoalesceOpen bool                  `toml:"coalesce_open,omitempty"`
+	Env          map[string]string     `toml:"env,omitempty"`
+	Params       map[string]OrderParam `toml:"params,omitempty"`
+	SkipAliases  []string              `toml:"skip_aliases,omitempty"`
 }
 
 func (d orderDecode) normalized() Order {
@@ -125,22 +132,23 @@ func (d orderDecode) normalized() Order {
 		trigger = d.Gate
 	}
 	return Order{
-		Description: d.Description,
-		Formula:     d.Formula,
-		Exec:        d.Exec,
-		Scope:       d.Scope,
-		Trigger:     trigger,
-		Interval:    d.Interval,
-		Schedule:    d.Schedule,
-		Check:       d.Check,
-		On:          d.On,
-		Pool:        d.Pool,
-		Timeout:     d.Timeout,
-		Enabled:     d.Enabled,
-		Idempotent:  d.Idempotent,
-		Env:         d.Env,
-		Params:      d.Params,
-		skipAliases: d.SkipAliases,
+		Description:  d.Description,
+		Formula:      d.Formula,
+		Exec:         d.Exec,
+		Scope:        d.Scope,
+		Trigger:      trigger,
+		Interval:     d.Interval,
+		Schedule:     d.Schedule,
+		Check:        d.Check,
+		On:           d.On,
+		Pool:         d.Pool,
+		Timeout:      d.Timeout,
+		Enabled:      d.Enabled,
+		Idempotent:   d.Idempotent,
+		CoalesceOpen: d.CoalesceOpen,
+		Env:          d.Env,
+		Params:       d.Params,
+		skipAliases:  d.SkipAliases,
 	}
 }
 

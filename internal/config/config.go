@@ -2001,6 +2001,9 @@ type OrderOverride struct {
 	// Idempotent overrides whether the order's dispatch is safe to repeat.
 	// Idempotent orders fail open when the open-work gate times out (#2893).
 	Idempotent *bool `toml:"idempotent,omitempty"`
+	// CoalesceOpen overrides whether dispatch should collapse onto any existing
+	// open non-tracking order-run work for this order.
+	CoalesceOpen *bool `toml:"coalesce_open,omitempty"`
 	// Env adds or overrides environment variables exported into an exec
 	// order's child process.
 	Env map[string]string `toml:"env,omitempty"`

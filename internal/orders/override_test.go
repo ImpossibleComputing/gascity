@@ -21,6 +21,18 @@ func TestApplyOverridesIdempotent(t *testing.T) {
 	}
 }
 
+func TestApplyOverridesCoalesceOpen(t *testing.T) {
+	t.Parallel()
+
+	aa := []Order{{Name: "mol-dog-stale-db"}}
+	if err := ApplyOverrides(aa, []Override{{Name: "mol-dog-stale-db", CoalesceOpen: boolPtr(true)}}); err != nil {
+		t.Fatalf("ApplyOverrides: %v", err)
+	}
+	if !aa[0].CoalesceOpen {
+		t.Error("override coalesce_open=true was not applied to the order")
+	}
+}
+
 func TestApplyOverrides(t *testing.T) {
 	t.Parallel()
 

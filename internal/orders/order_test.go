@@ -561,3 +561,20 @@ func TestValidateRequiredParams(t *testing.T) {
 		t.Fatal("ValidateRequiredParams with whitespace-only pr = nil, want error")
 	}
 }
+
+func TestParseCoalesceOpen(t *testing.T) {
+	got, err := Parse([]byte(`
+[order]
+formula = "mol-dog-stale-db"
+trigger = "cron"
+schedule = "0 */4 * * *"
+pool = "dog"
+coalesce_open = true
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !got.CoalesceOpen {
+		t.Fatal("CoalesceOpen = false, want true")
+	}
+}

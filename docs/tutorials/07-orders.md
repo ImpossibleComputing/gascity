@@ -313,7 +313,7 @@ schedule = "0 6 * * *"
 ```
 
 Overrides match by order name and can change `enabled`, `trigger`, `interval`,
-`schedule`, `check`, `on`, `pool`, `timeout`, `idempotent`, and `env`. An
+`schedule`, `check`, `on`, `pool`, `timeout`, `idempotent`, `coalesce_open`, and `env`. An
 override targeting a nonexistent order is an error, not a silent no-op — `gc
 order` commands fail; `gc start` logs the error and continues with the unmatched
 override skipped.
@@ -385,7 +385,11 @@ The open-work check runs against the store with a bounded timeout; if the store
 is so contended that the check times out, the order is skipped — it fails
 closed. Orders whose dispatch is safe to repeat (sweeps and feeders where a
 duplicate run is a no-op) can set `idempotent = true` to fail open instead:
-on a gate timeout they dispatch anyway rather than starve.
+on a gate timeout they dispatch anyway rather than starve. Periodic
+maintenance orders where stale queued work should collapse to one pending run
+can set `coalesce_open = true`; that skips dispatch when any open non-tracking
+`order-run:<name>` bead already exists, including older work that lacks the
+current wisp/workflow metadata shape.
 
 ## Rig-scoped orders
 
