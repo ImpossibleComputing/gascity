@@ -482,6 +482,20 @@ func requestSupervisorShutdown(stderr io.Writer, rec events.Recorder, shutdownCt
 	return repeatedDestructive
 }
 
+func recordSupervisorPreserveShutdownRequested(stderr io.Writer, mode supervisorShutdownMode) {
+	if mode == supervisorShutdownPreserveSessions {
+		if err := supervisor.WritePreserveShutdownRequestedMarker(supervisor.DefaultHome()); err != nil {
+			fmt.Fprintf(stderr, "gc supervisor: %v\n", err) //nolint:errcheck
+		}
+		return
+	}
+	if mode == supervisorShutdownDestructive {
+		if err := supervisor.ClearPreserveShutdownRequestedMarker(supervisor.DefaultHome()); err != nil {
+			fmt.Fprintf(stderr, "gc supervisor: %v\n", err) //nolint:errcheck
+		}
+	}
+}
+
 // emitSupervisorStarted records the supervisor.started event with
 // restart-cause attribution and mirrors it on the OTel log path.
 // previousExit is one of the supervisor.PreviousExit* classifications
@@ -1298,6 +1312,7 @@ func runSupervisor(stdout, stderr io.Writer) int {
 	}
 	emitSupervisorStarted(stderr, registry.SupervisorEventRecorder(), previousExit, previousExitDetail)
 	requestShutdown := func(mode supervisorShutdownMode, trigger shutdownTrigger) bool {
+		recordSupervisorPreserveShutdownRequested(stderr, mode)
 		return requestSupervisorShutdown(stderr, registry.SupervisorEventRecorder(), shutdownCtl, cancel, mode, trigger)
 	}
 

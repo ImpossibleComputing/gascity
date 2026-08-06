@@ -5132,6 +5132,36 @@ func TestRequestSupervisorShutdownRecordsBreadcrumbAndEvent(t *testing.T) {
 	}
 }
 
+func TestRecordSupervisorPreserveShutdownRequestedWritesOnlyForPreserveMode(t *testing.T) {
+	gcHome := filepath.Join(t.TempDir(), ".gc")
+	t.Setenv("GC_HOME", gcHome)
+
+	var stderr bytes.Buffer
+	recordSupervisorPreserveShutdownRequested(&stderr, supervisorShutdownDestructive)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr for destructive mode = %q, want empty", got)
+	}
+	if _, err := os.Stat(supervisor.PreserveShutdownRequestedMarkerPath(gcHome)); !os.IsNotExist(err) {
+		t.Fatalf("preserve request marker after destructive mode stat err = %v, want not-exist", err)
+	}
+
+	recordSupervisorPreserveShutdownRequested(&stderr, supervisorShutdownPreserveSessions)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr for preserve mode = %q, want empty", got)
+	}
+	if _, err := os.Stat(supervisor.PreserveShutdownRequestedMarkerPath(gcHome)); err != nil {
+		t.Fatalf("preserve request marker after preserve mode: %v", err)
+	}
+
+	recordSupervisorPreserveShutdownRequested(&stderr, supervisorShutdownDestructive)
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr after destructive clear = %q, want empty", got)
+	}
+	if _, err := os.Stat(supervisor.PreserveShutdownRequestedMarkerPath(gcHome)); !os.IsNotExist(err) {
+		t.Fatalf("preserve request marker after destructive clear stat err = %v, want not-exist", err)
+	}
+}
+
 func TestRequestSupervisorShutdownWithoutRecorderStillLogsAndCancels(t *testing.T) {
 	var stderr bytes.Buffer
 	ctl := newSupervisorShutdownController()
