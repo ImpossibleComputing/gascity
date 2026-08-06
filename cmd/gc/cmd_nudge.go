@@ -61,6 +61,12 @@ const (
 	// claim, format, deliver, and ack hundreds of reminders in a single scan,
 	// keeping the process CPU-hot even though it sleeps between scans.
 	defaultNudgePollMaxDeliverPerPass = 8
+	// defaultNudgePollIdleLivenessInterval bounds how often an idle legacy
+	// per-session poller probes runtime/tmux liveness when its target has no
+	// due queued work. Queued work still triggers observation on the next
+	// normal poll tick; this only removes the empty-queue tmux probes that
+	// multiply across large fleets.
+	defaultNudgePollIdleLivenessInterval = 30 * time.Second
 
 	// defaultNudgePollMemLimitMB is the soft Go runtime memory limit
 	// (debug.SetMemoryLimit) installed for the long-lived `gc nudge poll`
@@ -102,6 +108,7 @@ var (
 	nudgeTryDeliverQueuedNudgesByPoller           = tryDeliverQueuedNudgesByPoller
 	nudgeWithdrawQueuedWaitNudges                 = withdrawQueuedWaitNudges
 	nudgePollSleep                                = time.Sleep
+	nudgePollIdleLivenessInterval                 = defaultNudgePollIdleLivenessInterval
 	nudgeWarningWriter                  io.Writer = os.Stderr
 )
 
@@ -658,6 +665,7 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 	sessStore := cliSessionStore(store.Store, target.cfg, target.cityPath)
 	var missingSince time.Time
 	var lastFreeOS time.Time
+	var lastIdleLivenessCheck time.Time
 	for {
 		// Each tick that observes a changed beads.json re-parses the whole-file
 		// store, leaving several hundred MB of transient garbage. The soft
@@ -668,7 +676,16 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 			debug.FreeOSMemory()
 			lastFreeOS = now
 		}
+		now := time.Now()
+		hasDueWork, dueErr := nudgePollerHasDueQueuedWork(target, now)
+		if dueErr == nil && !hasDueWork && !lastIdleLivenessCheck.IsZero() && now.Sub(lastIdleLivenessCheck) < nudgePollIdleLivenessInterval {
+			nudgePollSleep(interval)
+			continue
+		}
 		obs, err := nudgeObserveTarget(target, sessStore, sp)
+		if dueErr == nil && !hasDueWork {
+			lastIdleLivenessCheck = now
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", err) //nolint:errcheck
 			// Transient observation failures (store hiccup, runtime probe
@@ -699,6 +716,10 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 			return 0
 		}
 		missingSince = time.Time{}
+		if dueErr == nil && !hasDueWork {
+			nudgePollSleep(interval)
+			continue
+		}
 		_, pollErr := nudgeTryDeliverQueuedNudgesByPoller(target, store.Store, cliSessionStore(store.Store, target.cfg, target.cityPath), sp, quiescence, obs)
 		if pollErr != nil {
 			fmt.Fprintf(stderr, "gc nudge poll: %v\n", pollErr) //nolint:errcheck
@@ -709,6 +730,30 @@ func cmdNudgePoll(args []string, sessionName string, interval, quiescence time.D
 		// the configured poll interval.
 		nudgePollSleep(interval)
 	}
+}
+
+func nudgePollerHasDueQueuedWork(target nudgeTarget, now time.Time) (bool, error) {
+	state, err := nudgequeue.LoadState(target.cityPath)
+	if err != nil {
+		return true, err
+	}
+	for _, item := range state.Pending {
+		if !queuedNudgeClaimableForTarget(target, item) {
+			continue
+		}
+		if item.DeliverAfter.IsZero() || !item.DeliverAfter.After(now) {
+			return true, nil
+		}
+	}
+	for _, item := range state.InFlight {
+		if !queuedNudgeClaimableForTarget(target, item) {
+			continue
+		}
+		if item.LeaseUntil.IsZero() || !item.LeaseUntil.After(now) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func normalizeNudgePollInterval(interval time.Duration) time.Duration {
