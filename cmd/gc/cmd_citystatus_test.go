@@ -1381,4 +1381,29 @@ func TestCityStatusPartialRuntimeProbeDoesNotRenderAuthoritativeStopped(t *testi
 	if strings.Contains(out, "worker                  stopped") || strings.Contains(out, "worker\tstopped") {
 		t.Fatalf("stdout = %q, must not render timeout fallback as authoritative stopped", out)
 	}
+	if strings.Contains(out, "0/1 agents running") {
+		t.Fatalf("stdout = %q, must not render timeout fallback as authoritative zero-running summary", out)
+	}
+	if !strings.Contains(out, "0/1 agents observed running (partial status; unobserved rows unknown)") {
+		t.Fatalf("stdout = %q, want partial summary to mark unobserved rows unknown", out)
+	}
+}
+
+func TestCityStatusPartialJSONDoesNotEmitNoAgentsRunningSignal(t *testing.T) {
+	status := cityStatusJSONFromSnapshot(cityStatusSnapshot{
+		Controller: ControllerJSON{Running: true},
+		Partial:    true,
+		Summary:    StatusSummaryJSON{TotalAgents: 1, RunningAgents: 0},
+	}, StatusSummaryJSON{TotalAgents: 1, RunningAgents: 0})
+
+	if !status.Health.Degraded {
+		t.Fatal("health degraded = false, want true for partial runtime status")
+	}
+	signals := strings.Join(status.Health.Signals, "\n")
+	if strings.Contains(signals, "no_agents_running") {
+		t.Fatalf("signals = %v, must not assert no_agents_running on a partial runtime probe", status.Health.Signals)
+	}
+	if !strings.Contains(signals, "agent_status_partial") {
+		t.Fatalf("signals = %v, want agent_status_partial", status.Health.Signals)
+	}
 }

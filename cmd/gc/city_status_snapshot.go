@@ -455,7 +455,9 @@ func cityStatusJSONFromSnapshot(snapshot cityStatusSnapshot, summary StatusSumma
 	if !snapshot.Controller.Running {
 		signals = append(signals, "controller_not_running")
 	}
-	if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
+	if snapshot.Partial {
+		signals = append(signals, "agent_status_partial")
+	} else if snapshot.Summary.TotalAgents > 0 && snapshot.Summary.RunningAgents == 0 {
 		signals = append(signals, "no_agents_running")
 	}
 	degraded := len(signals) > 0
@@ -516,8 +518,8 @@ func renderCityStatusText(snapshot cityStatusSnapshot, dops drainOps, stdout io.
 				fmt.Fprintf(stdout, "  %-24s%s\n", row.Agent.QualifiedName, status) //nolint:errcheck // best-effort stdout
 			}
 		}
-		fmt.Fprintln(stdout)                                                                                        //nolint:errcheck // best-effort stdout
-		fmt.Fprintf(stdout, "%d/%d agents running\n", snapshot.Summary.RunningAgents, snapshot.Summary.TotalAgents) //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout)                                       //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, cityStatusAgentSummaryLine(snapshot)) //nolint:errcheck // best-effort stdout
 	}
 
 	if len(snapshot.NamedSessions) > 0 {
@@ -541,4 +543,11 @@ func renderCityStatusText(snapshot cityStatusSnapshot, dops drainOps, stdout io.
 	}
 
 	renderStoreHealthBlock(stdout, snapshot.Summary.StoreHealth)
+}
+
+func cityStatusAgentSummaryLine(snapshot cityStatusSnapshot) string {
+	if snapshot.Partial {
+		return fmt.Sprintf("%d/%d agents observed running (partial status; unobserved rows unknown)", snapshot.Summary.RunningAgents, snapshot.Summary.TotalAgents)
+	}
+	return fmt.Sprintf("%d/%d agents running", snapshot.Summary.RunningAgents, snapshot.Summary.TotalAgents)
 }
