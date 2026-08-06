@@ -3,6 +3,7 @@ package supervisor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,49 @@ func TestConsumePreviousExitCleanConsumesHandoffToken(t *testing.T) {
 
 	// The token is single-use: a second start without a fresh clean
 	// shutdown must not report clean again.
+	if got, detail := ConsumePreviousExit(home, true); got != PreviousExitCrash || detail != nil {
+		t.Fatalf("second ConsumePreviousExit = %q, %v, want %q, nil", got, detail, PreviousExitCrash)
+	}
+}
+
+func TestConsumePreviousExitCleanConsumesStalePreserveRequestMarker(t *testing.T) {
+	home := t.TempDir()
+	if err := WritePreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("WritePreserveShutdownRequestedMarker: %v", err)
+	}
+	if err := WriteShutdownMarker(home); err != nil {
+		t.Fatalf("WriteShutdownMarker: %v", err)
+	}
+
+	got, detail := ConsumePreviousExit(home, true)
+	if got != PreviousExitClean || detail != nil {
+		t.Fatalf("ConsumePreviousExit = %q, %v, want %q, nil", got, detail, PreviousExitClean)
+	}
+	if _, err := os.Stat(PreserveShutdownRequestedMarkerPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("preserve request marker still present after clean consume (stat err = %v)", err)
+	}
+}
+
+func TestConsumePreviousExitUnknownForInterruptedPreserveShutdown(t *testing.T) {
+	home := t.TempDir()
+	if err := WritePreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("WritePreserveShutdownRequestedMarker: %v", err)
+	}
+
+	got, detail := ConsumePreviousExit(home, true)
+	if got != PreviousExitUnknown {
+		t.Fatalf("ConsumePreviousExit = %q, want %q", got, PreviousExitUnknown)
+	}
+	if detail == nil || !strings.Contains(detail.Error(), "preserve shutdown was requested") {
+		t.Fatalf("ConsumePreviousExit detail = %v, want interrupted preserve detail", detail)
+	}
+	if _, err := os.Stat(PreserveShutdownRequestedMarkerPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("preserve request marker still present after consume (stat err = %v)", err)
+	}
+
+	// The marker is single-use: once surfaced as ambiguous evidence, a
+	// later start with prior-instance evidence and no fresh token must
+	// still report crash rather than keeping a stale unknown armed forever.
 	if got, detail := ConsumePreviousExit(home, true); got != PreviousExitCrash || detail != nil {
 		t.Fatalf("second ConsumePreviousExit = %q, %v, want %q, nil", got, detail, PreviousExitCrash)
 	}
@@ -66,5 +110,31 @@ func TestWriteShutdownMarkerCreatesHomeDir(t *testing.T) {
 	}
 	if _, err := os.Stat(ShutdownMarkerPath(home)); err != nil {
 		t.Fatalf("stat handoff token: %v", err)
+	}
+}
+
+func TestWritePreserveShutdownRequestedMarkerCreatesHomeDir(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "nested", ".gc")
+	if err := WritePreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("WritePreserveShutdownRequestedMarker: %v", err)
+	}
+	if _, err := os.Stat(PreserveShutdownRequestedMarkerPath(home)); err != nil {
+		t.Fatalf("stat preserve shutdown request marker: %v", err)
+	}
+}
+
+func TestClearPreserveShutdownRequestedMarkerAllowsMissingMarker(t *testing.T) {
+	home := t.TempDir()
+	if err := ClearPreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("ClearPreserveShutdownRequestedMarker missing marker: %v", err)
+	}
+	if err := WritePreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("WritePreserveShutdownRequestedMarker: %v", err)
+	}
+	if err := ClearPreserveShutdownRequestedMarker(home); err != nil {
+		t.Fatalf("ClearPreserveShutdownRequestedMarker: %v", err)
+	}
+	if _, err := os.Stat(PreserveShutdownRequestedMarkerPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("preserve request marker after clear stat err = %v, want not-exist", err)
 	}
 }
