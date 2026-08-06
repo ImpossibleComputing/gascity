@@ -3124,6 +3124,68 @@ func TestNormalizeNudgePollIntervalClampsNonPositive(t *testing.T) {
 	}
 }
 
+func TestNudgePollerHasDueQueuedWork(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	dir := t.TempDir()
+	now := time.Now()
+	target := nudgeTarget{
+		cityPath: dir,
+		agent:    config.Agent{Name: "worker"},
+	}
+	if got, err := nudgePollerHasDueQueuedWork(target, now); err != nil || got {
+		t.Fatalf("empty queue due work = %v, err=%v; want false, nil", got, err)
+	}
+
+	future := newQueuedNudgeWithOptions("worker", "later", "session", now.Add(time.Hour), queuedNudgeOptions{ID: "future"})
+	if err := enqueueQueuedNudge(dir, future); err != nil {
+		t.Fatalf("enqueue future: %v", err)
+	}
+	if got, err := nudgePollerHasDueQueuedWork(target, now); err != nil || got {
+		t.Fatalf("future-only queue due work = %v, err=%v; want false, nil", got, err)
+	}
+
+	due := newQueuedNudgeWithOptions("worker", "now", "session", now.Add(-time.Minute), queuedNudgeOptions{ID: "due"})
+	if err := enqueueQueuedNudge(dir, due); err != nil {
+		t.Fatalf("enqueue due: %v", err)
+	}
+	if got, err := nudgePollerHasDueQueuedWork(target, now); err != nil || !got {
+		t.Fatalf("due pending work = %v, err=%v; want true, nil", got, err)
+	}
+
+	fencedTarget := nudgeTarget{
+		cityPath:  dir,
+		agent:     config.Agent{Name: "worker"},
+		sessionID: "other-session",
+	}
+	fenced := newQueuedNudgeWithOptions("worker", "fenced", "session", now.Add(-time.Minute), queuedNudgeOptions{
+		ID:        "fenced",
+		SessionID: "worker-session",
+	})
+	fencedDir := t.TempDir()
+	if err := enqueueQueuedNudge(fencedDir, fenced); err != nil {
+		t.Fatalf("enqueue fenced: %v", err)
+	}
+	fencedTarget.cityPath = fencedDir
+	if got, err := nudgePollerHasDueQueuedWork(fencedTarget, now); err != nil || got {
+		t.Fatalf("wrong-session fenced work = %v, err=%v; want false, nil", got, err)
+	}
+
+	inFlightDir := t.TempDir()
+	expiredLease := newQueuedNudgeWithOptions("worker", "expired lease", "session", now.Add(-time.Minute), queuedNudgeOptions{ID: "expired-lease"})
+	if err := withNudgeQueueState(inFlightDir, func(state *nudgeQueueState) error {
+		expiredLease.ClaimedAt = now.Add(-2 * time.Minute)
+		expiredLease.LeaseUntil = now.Add(-time.Minute)
+		state.InFlight = append(state.InFlight, expiredLease)
+		return nil
+	}); err != nil {
+		t.Fatalf("seed in-flight queue: %v", err)
+	}
+	target.cityPath = inFlightDir
+	if got, err := nudgePollerHasDueQueuedWork(target, now); err != nil || !got {
+		t.Fatalf("expired in-flight work = %v, err=%v; want true, nil", got, err)
+	}
+}
+
 func TestCmdNudgePollSleepsAfterDeliveryAttempt(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
@@ -3152,6 +3214,12 @@ func TestCmdNudgePollSleepsAfterDeliveryAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Create session: %v", err)
 	}
+	item := newQueuedNudgeWithOptions("worker", "resume your patrol wisp", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
+		SessionID: created.ID,
+	})
+	if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {
+		t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+	}
 
 	observeCalls := 0
 	origObserve := nudgeObserveTarget
@@ -3169,6 +3237,9 @@ func TestCmdNudgePollSleepsAfterDeliveryAttempt(t *testing.T) {
 	origDeliver := nudgeTryDeliverQueuedNudgesByPoller
 	nudgeTryDeliverQueuedNudgesByPoller = func(_ nudgeTarget, _, _ beads.Store, _ runtime.Provider, _ time.Duration, _ worker.LiveObservation) (bool, error) {
 		deliverCalls++
+		if err := ackQueuedNudges(cityDir, []string{item.ID}); err != nil {
+			t.Errorf("ackQueuedNudges: %v", err)
+		}
 		return true, nil
 	}
 	defer func() { nudgeTryDeliverQueuedNudgesByPoller = origDeliver }()
@@ -3192,6 +3263,96 @@ func TestCmdNudgePollSleepsAfterDeliveryAttempt(t *testing.T) {
 	}
 	if len(slept) != 1 || slept[0] != interval {
 		t.Fatalf("sleep calls = %v, want one sleep of %s after delivery attempt", slept, interval)
+	}
+}
+
+func TestCmdNudgePollSkipsRuntimeObservationUntilQueuedWorkArrives(t *testing.T) {
+	clearGCEnv(t)
+	disableManagedDoltRecoveryForTest(t)
+	t.Setenv("GC_BEADS", "file")
+
+	cityDir := t.TempDir()
+	writeNamedSessionCityTOML(t, cityDir)
+	t.Setenv("GC_CITY", cityDir)
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	created, err := store.Create(beads.Bead{
+		Title:  "Session: worker",
+		Type:   session.BeadType,
+		Status: "open",
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"session_name": "worker-session",
+			"agent_name":   "worker",
+			"template":     "worker",
+			"state":        string(session.StateActive),
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create session: %v", err)
+	}
+	item := newQueuedNudgeWithOptions("worker", "resume your patrol wisp", "session", time.Now().Add(-time.Minute), queuedNudgeOptions{
+		SessionID: created.ID,
+	})
+
+	origIdleLiveness := nudgePollIdleLivenessInterval
+	nudgePollIdleLivenessInterval = time.Hour
+	defer func() { nudgePollIdleLivenessInterval = origIdleLiveness }()
+
+	delivered := false
+	observeCalls := 0
+	origObserve := nudgeObserveTarget
+	nudgeObserveTarget = func(_ nudgeTarget, _ beads.Store, _ runtime.Provider) (worker.LiveObservation, error) {
+		observeCalls++
+		if delivered {
+			return worker.LiveObservation{Running: false}, nil
+		}
+		idleSince := time.Now().Add(-10 * time.Second)
+		return worker.LiveObservation{Running: true, LastActivity: &idleSince}, nil
+	}
+	defer func() { nudgeObserveTarget = origObserve }()
+
+	deliverCalls := 0
+	origDeliver := nudgeTryDeliverQueuedNudgesByPoller
+	nudgeTryDeliverQueuedNudgesByPoller = func(_ nudgeTarget, _, _ beads.Store, _ runtime.Provider, _ time.Duration, _ worker.LiveObservation) (bool, error) {
+		deliverCalls++
+		delivered = true
+		if err := ackQueuedNudges(cityDir, []string{item.ID}); err != nil {
+			t.Errorf("ackQueuedNudges: %v", err)
+		}
+		nudgePollIdleLivenessInterval = 0
+		return true, nil
+	}
+	defer func() { nudgeTryDeliverQueuedNudgesByPoller = origDeliver }()
+
+	sleepCalls := 0
+	origSleep := nudgePollSleep
+	nudgePollSleep = func(time.Duration) {
+		sleepCalls++
+		if sleepCalls == 2 {
+			if err := enqueueQueuedNudgeWithStore(cityDir, beads.NudgesStore{Store: store}, item); err != nil {
+				t.Fatalf("enqueueQueuedNudgeWithStore: %v", err)
+			}
+		}
+	}
+	defer func() { nudgePollSleep = origSleep }()
+
+	var stdout, stderr bytes.Buffer
+	code := cmdNudgePoll([]string{created.ID}, "worker-session", time.Millisecond, 0, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("cmdNudgePoll = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	if observeCalls != 3 {
+		t.Fatalf("observe calls = %d, want 3 (initial liveness, due-work delivery, final missing-session exit)", observeCalls)
+	}
+	if deliverCalls != 1 {
+		t.Fatalf("deliver calls = %d, want 1", deliverCalls)
+	}
+	if sleepCalls < 3 {
+		t.Fatalf("sleep calls = %d, want at least 3 including one idle skipped observation", sleepCalls)
 	}
 }
 
