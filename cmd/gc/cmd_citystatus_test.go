@@ -464,6 +464,38 @@ func TestSnapshotFromStatusViewIncludesBeadsDiagnostic(t *testing.T) {
 	}
 }
 
+func TestSnapshotFromStatusViewPreservesPartialHealth(t *testing.T) {
+	view := api.StatusView{
+		CityName:      "bright-lights",
+		CityPath:      "/home/user/bright-lights",
+		Partial:       true,
+		PartialErrors: []string{"runtime status probe incomplete; non-running agent rows are unknown"},
+		Summary: api.StatusSummaryView{
+			TotalAgents:   32,
+			RunningAgents: 1,
+		},
+	}
+
+	snapshot := snapshotFromStatusView(view.CityPath, view)
+	status := cityStatusJSONFromSnapshot(snapshot, snapshot.Summary)
+	if !status.Partial {
+		t.Fatal("Partial = false, want API partial status preserved")
+	}
+	if len(status.PartialErrors) != 1 || !strings.Contains(status.PartialErrors[0], "runtime status probe incomplete") {
+		t.Fatalf("PartialErrors = %#v, want API partial diagnostic preserved", status.PartialErrors)
+	}
+	if !status.Health.Degraded {
+		t.Fatal("health.degraded = false, want true for API partial status even when running_agents > 0")
+	}
+	signals := strings.Join(status.Health.Signals, "\n")
+	if !strings.Contains(signals, "agent_status_partial") {
+		t.Fatalf("signals = %#v, want agent_status_partial", status.Health.Signals)
+	}
+	if strings.Contains(signals, "no_agents_running") {
+		t.Fatalf("signals = %#v, must not assert no_agents_running when API status is partial", status.Health.Signals)
+	}
+}
+
 func TestCityStatusJSONWithAgents(t *testing.T) {
 	sp := runtime.NewFake()
 	// Start one agent session (default session name = agent name, no city prefix).
