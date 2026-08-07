@@ -317,11 +317,13 @@ func renderCityStatusFromAPI(cityPath string, cr api.CachedRead[api.StatusView],
 // helpers produce identical output on the API path.
 func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapshot {
 	snapshot := cityStatusSnapshot{
-		CityName:   v.CityName,
-		CityPath:   v.CityPath,
-		Suspended:  v.Suspended,
-		Controller: controllerStatusForCity(cityPath),
-		Beads:      v.Beads,
+		CityName:      v.CityName,
+		CityPath:      v.CityPath,
+		Suspended:     v.Suspended,
+		Controller:    controllerStatusForCity(cityPath),
+		Beads:         v.Beads,
+		Partial:       v.Partial,
+		PartialErrors: append([]string(nil), v.PartialErrors...),
 		Summary: StatusSummaryJSON{
 			TotalAgents:       v.Summary.TotalAgents,
 			RunningAgents:     v.Summary.RunningAgents,
