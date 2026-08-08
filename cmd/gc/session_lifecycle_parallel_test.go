@@ -3760,6 +3760,143 @@ func TestCommitStartResult_RollbackPendingErrorClearsInFlightLeaseWhenCloseFails
 	}
 }
 
+func TestCommitStartResult_TransientExecDeniedPreservesPinRetryIntent(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 8, 8, 11, 32, 0, 0, time.UTC)}
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-mayor",
+		Title:  "mayor",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":        "mayor",
+			"template":            "mayor",
+			"generation":          "8",
+			"instance_token":      "tok-mayor",
+			"pin_awake":           "true",
+			"wake_attempts":       "2",
+			"session_key":         "sid-mayor",
+			"started_config_hash": "cfg-mayor",
+			"last_woke_at":        clk.Now().Format(time.RFC3339),
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &session,
+				tp: TemplateParams{
+					Command:      "mayor",
+					SessionName:  "mayor",
+					TemplateName: "mayor",
+				},
+			},
+		},
+		err:      errors.New("fork/exec /opt/homebrew/bin/codex: operation not permitted"),
+		outcome:  TraceOutcomeProviderError,
+		started:  clk.Now(),
+		finished: clk.Now(),
+	}
+
+	if commitStartResult(result, sessionFrontDoor(store), clk, events.Discard, 0, ioDiscard{}, ioDiscard{}) {
+		t.Fatal("transient exec-denied start failure should not count as committed")
+	}
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "open" {
+		t.Fatalf("status = %q, want open so pin_awake can retry", updated.Status)
+	}
+	if got := updated.Metadata["state"]; got != string(sessionpkg.StateStartPending) {
+		t.Fatalf("state = %q, want start-pending retry intent", got)
+	}
+	if got := updated.Metadata["state_reason"]; got != "transient-start-exec-denied" {
+		t.Fatalf("state_reason = %q, want transient-start-exec-denied", got)
+	}
+	if got := updated.Metadata["last_woke_at"]; got != "" {
+		t.Fatalf("last_woke_at = %q, want cleared so the attempt is not in-flight", got)
+	}
+	if got := updated.Metadata["wake_attempts"]; got != "2" {
+		t.Fatalf("wake_attempts = %q, want unchanged for transient launcher denial", got)
+	}
+	if got := updated.Metadata["session_key"]; got != "sid-mayor" {
+		t.Fatalf("session_key = %q, want preserved because no provider conversation was attempted", got)
+	}
+	if got := updated.Metadata["started_config_hash"]; got != "cfg-mayor" {
+		t.Fatalf("started_config_hash = %q, want preserved because no provider conversation was attempted", got)
+	}
+}
+
+func TestCommitStartResult_TransientExecDeniedDoesNotClosePendingCreate(t *testing.T) {
+	store := beads.NewMemStore()
+	clk := &clock.Fake{Time: time.Date(2026, 8, 8, 11, 33, 0, 0, time.UTC)}
+	session, err := store.Create(beads.Bead{
+		ID:     "gc-worker",
+		Title:  "worker",
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Metadata: creatingMeta(map[string]string{
+			"session_name":              "worker",
+			"template":                  "worker",
+			"generation":                "3",
+			"instance_token":            "tok-worker",
+			"pending_create_claim":      "true",
+			"pending_create_started_at": clk.Now().Format(time.RFC3339),
+			"last_woke_at":              clk.Now().Format(time.RFC3339),
+			"wake_attempts":             "1",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := startResult{
+		prepared: preparedStart{
+			candidate: startCandidate{
+				session: &session,
+				tp: TemplateParams{
+					Command:      "worker",
+					SessionName:  "worker",
+					TemplateName: "worker",
+				},
+			},
+		},
+		err:             fmt.Errorf("startup failed: fork/exec /usr/bin/tmux: operation not permitted"),
+		outcome:         TraceOutcomeProviderError,
+		started:         clk.Now(),
+		finished:        clk.Now(),
+		rollbackPending: true,
+	}
+
+	if commitStartResult(result, sessionFrontDoor(store), clk, events.Discard, 0, ioDiscard{}, ioDiscard{}) {
+		t.Fatal("transient exec-denied pending create should not count as committed")
+	}
+	updated, err := store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "open" {
+		t.Fatalf("status = %q, want open; transient launcher denial must not close failed-create", updated.Status)
+	}
+	if got := updated.Metadata["state"]; got != string(sessionpkg.StateStartPending) {
+		t.Fatalf("state = %q, want start-pending retry intent", got)
+	}
+	if got := updated.Metadata["pending_create_claim"]; got != "true" {
+		t.Fatalf("pending_create_claim = %q, want preserved so one-shot create intent retries", got)
+	}
+	if got := updated.Metadata["pending_create_started_at"]; got != "" {
+		t.Fatalf("pending_create_started_at = %q, want cleared with the in-flight attempt", got)
+	}
+	if got := updated.Metadata["wake_attempts"]; got != "1" {
+		t.Fatalf("wake_attempts = %q, want unchanged for transient launcher denial", got)
+	}
+	if pendingCreateStartInFlight(updated, clk, 0) {
+		t.Fatal("transient launcher denial left a start attempt marked in-flight")
+	}
+}
+
 // When the atomic start batch fails, NO state change lands: state stays
 // "creating", pending_create_claim stays "true", and the post-create marker
 // is absent. The reconciler's next tick retries via recoverRunningPendingCreate.
