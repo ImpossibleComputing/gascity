@@ -1580,6 +1580,37 @@ func clearPendingStartInFlightLease(session *beads.Bead, sessFront *sessionpkg.S
 	return nil
 }
 
+func retryTransientStartExecDenied(session *beads.Bead, sessFront *sessionpkg.Store, stderr io.Writer) error {
+	if session == nil || sessFront == nil {
+		return nil
+	}
+	patch := map[string]string{
+		"state":                     string(sessionpkg.StateStartPending),
+		"state_reason":              "transient-start-exec-denied",
+		"last_woke_at":              "",
+		"pending_create_started_at": "",
+	}
+	if err := sessFront.ApplyPatch(session.ID, patch); err != nil {
+		fmt.Fprintf(stderr, "session reconciler: preserving retry intent after transient start exec denial for %s: %v\n", session.Metadata["session_name"], err) //nolint:errcheck
+		return err
+	}
+	if session.Metadata == nil {
+		session.Metadata = make(map[string]string)
+	}
+	for k, v := range patch {
+		session.Metadata[k] = v
+	}
+	return nil
+}
+
+func isTransientStartExecDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "fork/exec") && strings.Contains(msg, "operation not permitted")
+}
+
 func stopStaleAsyncStartRuntime(result startResult, sp runtime.Provider, stderr io.Writer) {
 	if sp == nil || result.prepared.candidate.session == nil {
 		return
@@ -2082,6 +2113,19 @@ func commitStartFailure(result startResult, sessFront *sessionpkg.Store, clk clo
 		}
 		logLifecycleOutcome(stderr, "start", wave, name, tp.TemplateName, string(result.outcome), result.started, result.finished, result.err, result.phases)
 		return
+	}
+	if isTransientStartExecDenied(result.err) {
+		if err := retryTransientStartExecDenied(session, sessFront, stderr); err == nil {
+			if trace != nil {
+				trace.RecordOperation(TraceSiteLifecycleStartFailed, TraceReasonStart, result.outcome, "", tp.TemplateName, name, 0, traceRecordPayload{
+					"error":                   formatLifecycleError(result.err),
+					"retryable_exec_denied":   true,
+					"rollback_pending_create": result.rollbackPending,
+				})
+			}
+			logLifecycleOutcome(stderr, "start", wave, name, tp.TemplateName, string(result.outcome), result.started, result.finished, result.err, result.phases)
+			return
+		}
 	}
 	if result.rollbackPending {
 		if errors.Is(result.err, context.DeadlineExceeded) {
