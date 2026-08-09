@@ -8577,6 +8577,106 @@ func TestReconcileSessionBeads_IdleTimeoutRespectsUserHold(t *testing.T) {
 	}
 }
 
+func TestReconcileSessionBeads_IdleTimeoutRespectsPinAwake(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{Agents: []config.Agent{{Name: "mayor"}}}
+	env.addDesired("mayor", "mayor", true)
+	session := env.createSessionBead("mayor", "mayor")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"pin_awake": "true",
+	})
+	if err := env.sp.SetMeta("mayor", "GC_SESSION_ID", session.ID); err != nil {
+		t.Fatalf("SetMeta(GC_SESSION_ID): %v", err)
+	}
+
+	it := newFakeIdleTracker()
+	it.idle["mayor"] = true
+	rec := events.NewFake()
+	env.rec = rec
+
+	reconcileSessionBeads(
+		context.Background(), []beads.Bead{session}, env.desiredState, configuredSessionNames(env.cfg, "", env.store),
+		env.cfg, env.sp, env.store, nil, nil, nil, env.dt, map[string]int{}, false, nil, "",
+		it, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+	)
+
+	if !env.sp.IsRunning("mayor") {
+		t.Fatal("pin_awake session must not be idle-killed")
+	}
+	b, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Metadata["sleep_reason"] == "idle-timeout" {
+		t.Fatalf("sleep_reason = %q, must not be idle-timeout for pin_awake session", b.Metadata["sleep_reason"])
+	}
+	if b.Metadata["last_woke_at"] == "" {
+		t.Fatal("last_woke_at must not be cleared by an idle stop for pin_awake session")
+	}
+	if got := b.Metadata["pin_awake"]; got != "true" {
+		t.Fatalf("pin_awake = %q, want preserved true", got)
+	}
+	for _, e := range rec.Events {
+		if e.Type == events.SessionIdleKilled {
+			t.Fatal("SessionIdleKilled must not fire while pin_awake is true")
+		}
+	}
+}
+
+func TestReconcileSessionBeads_IdleTimeoutRespectsAlwaysNamedDirectTimer(t *testing.T) {
+	env := newReconcilerTestEnv()
+	env.cfg = &config.City{
+		Agents: []config.Agent{{Name: "mayor"}},
+		NamedSessions: []config.NamedSession{{
+			Name:     "mayor",
+			Template: "mayor",
+			Mode:     "always",
+		}},
+	}
+	env.addDesired("mayor", "mayor", true)
+	session := env.createSessionBead("mayor", "mayor")
+	env.markSessionActive(&session)
+	env.setSessionMetadata(&session, map[string]string{
+		"configured_named_session":  "true",
+		"configured_named_identity": "mayor",
+		"configured_named_mode":     "always",
+	})
+	if err := env.sp.SetMeta("mayor", "GC_SESSION_ID", session.ID); err != nil {
+		t.Fatalf("SetMeta(GC_SESSION_ID): %v", err)
+	}
+
+	it := newFakeIdleTracker()
+	it.idle["mayor"] = true
+	rec := events.NewFake()
+	env.rec = rec
+
+	reconcileSessionBeads(
+		context.Background(), []beads.Bead{session}, env.desiredState, configuredSessionNames(env.cfg, "", env.store),
+		env.cfg, env.sp, env.store, nil, nil, nil, env.dt, map[string]int{}, false, nil, "",
+		it, env.clk, env.rec, 0, 0, &env.stdout, &env.stderr,
+	)
+
+	if !env.sp.IsRunning("mayor") {
+		t.Fatal("mode=always named session must not be idle-killed")
+	}
+	b, err := env.store.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Metadata["sleep_reason"] == "idle-timeout" {
+		t.Fatalf("sleep_reason = %q, must not be idle-timeout for mode=always named session", b.Metadata["sleep_reason"])
+	}
+	if b.Metadata["last_woke_at"] == "" {
+		t.Fatal("last_woke_at must not be cleared by an idle stop for mode=always named session")
+	}
+	for _, e := range rec.Events {
+		if e.Type == events.SessionIdleKilled {
+			t.Fatal("SessionIdleKilled must not fire for mode=always named sessions")
+		}
+	}
+}
+
 func TestReconcileSessionBeads_IdleTimeoutSuspendedUserHoldStartsDrain(t *testing.T) {
 	env := newReconcilerTestEnv()
 	env.cfg = &config.City{Agents: []config.Agent{{Name: "worker"}}}

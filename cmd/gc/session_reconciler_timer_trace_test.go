@@ -8,7 +8,7 @@ import (
 
 // TestTimerTraceCodesTotal drives every reachable TimerDecision from
 // DecideMaxSessionAge and DecideIdleTimeout (all TimerFacts combinations,
-// including both blocker kinds) and asserts that timerTraceCodes (a) maps each
+// including every blocker kind) and asserts that timerTraceCodes (a) maps each
 // traced reason/outcome onto a NAMED constant — never falling through to the
 // identity default arm — and (b) round-trips to the exact producer strings.
 // When the timer ladders grow a new traced value, this test goes red instead
@@ -19,18 +19,22 @@ func TestTimerTraceCodesTotal(t *testing.T) {
 		TraceReasonIdleTimeout:   true,
 		TraceReasonUserHold:      true,
 		TraceReasonQuarantine:    true,
+		TraceReasonPinAwake:      true,
+		TraceReasonNamedAlways:   true,
 		TraceReasonPending:       true,
 		TraceReasonAssignedWork:  true,
 	}
 	namedOutcomes := map[TraceOutcomeCode]bool{
-		TraceOutcomeStop:               true,
-		TraceOutcomeDeferredUserHold:   true,
-		TraceOutcomeDeferredQuarantine: true,
-		TraceOutcomeDeferredPending:    true,
-		TraceOutcomeDeferredBusy:       true,
+		TraceOutcomeStop:                true,
+		TraceOutcomeDeferredUserHold:    true,
+		TraceOutcomeDeferredQuarantine:  true,
+		TraceOutcomeDeferredPinAwake:    true,
+		TraceOutcomeDeferredNamedAlways: true,
+		TraceOutcomeDeferredPending:     true,
+		TraceOutcomeDeferredBusy:        true,
 	}
 
-	blockers := []string{"", "user_hold", "quarantine"}
+	blockers := []string{"", "user_hold", "quarantine", "pin_awake", "named_always"}
 	pendings := []sessionpkg.PendingFact{
 		sessionpkg.PendingUnknown, sessionpkg.PendingNo, sessionpkg.PendingYes,
 	}

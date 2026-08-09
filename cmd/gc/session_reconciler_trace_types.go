@@ -194,6 +194,8 @@ const (
 	TraceReasonMaxSessionAge TraceReasonCode = "max_session_age"
 	TraceReasonUserHold      TraceReasonCode = "user_hold"
 	TraceReasonQuarantine    TraceReasonCode = "quarantine"
+	TraceReasonPinAwake      TraceReasonCode = "pin_awake"
+	TraceReasonNamedAlways   TraceReasonCode = "named_always"
 )
 
 type TraceOutcomeCode string
@@ -269,6 +271,8 @@ const (
 	TraceOutcomeStartEnqueued       TraceOutcomeCode = "start_enqueued"
 	TraceOutcomeDeferredUserHold    TraceOutcomeCode = "deferred_user_hold"
 	TraceOutcomeDeferredQuarantine  TraceOutcomeCode = "deferred_quarantine"
+	TraceOutcomeDeferredPinAwake    TraceOutcomeCode = "deferred_pin_awake"
+	TraceOutcomeDeferredNamedAlways TraceOutcomeCode = "deferred_named_always"
 	TraceOutcomeDeferredBusy        TraceOutcomeCode = "deferred_busy"
 
 	// TraceOutcomeSkippedLivenessError marks a destructive reconciler action
