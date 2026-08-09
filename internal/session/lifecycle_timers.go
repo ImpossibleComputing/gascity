@@ -62,8 +62,8 @@ type TimerFacts struct {
 	// with a valid anchor). When false no other fact is consulted.
 	Triggered bool
 	// Blocker is the active lifecycle timer blocker as reported by the
-	// caller (currently "user_hold" or "quarantine"), or empty when none
-	// applies. Any non-empty value defers the timer.
+	// caller, or empty when none applies. Any non-empty value defers the
+	// timer and becomes part of the trace vocabulary at the caller boundary.
 	Blocker string
 	// Pending is the pending-interaction fact, gathered on demand.
 	Pending PendingFact

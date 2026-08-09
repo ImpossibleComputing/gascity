@@ -66,6 +66,24 @@ func lifecycleTimerBlockerInfo(info sessionpkg.Info, now time.Time) string {
 	}
 }
 
+// lifecycleIdleTimerBlockerInfo adds keep-alive ownership blockers that are
+// specific to idle timeout. Max-session-age may still roll long-lived sessions
+// for hygiene, but the idle timer must not visibly sleep durable control-plane
+// sessions that another reconciler layer already treats as always-awake.
+func lifecycleIdleTimerBlockerInfo(info sessionpkg.Info, now time.Time) string {
+	if blocker := lifecycleTimerBlockerInfo(info, now); blocker != "" {
+		return blocker
+	}
+	switch {
+	case info.PinAwake == "true":
+		return string(TraceReasonPinAwake)
+	case isNamedSessionInfo(info) && strings.TrimSpace(info.ConfiguredNamedMode) == "always":
+		return string(TraceReasonNamedAlways)
+	default:
+		return ""
+	}
+}
+
 func isDrainAckStopPending(session beads.Bead) bool {
 	return strings.TrimSpace(session.Metadata["state"]) == string(sessionpkg.StateDraining) &&
 		strings.TrimSpace(session.Metadata["state_reason"]) == sessionpkg.DrainAckStopPendingReason
@@ -91,6 +109,10 @@ func timerTraceCodes(dec sessionpkg.TimerDecision) (TraceReasonCode, TraceOutcom
 		reason = TraceReasonUserHold
 	case string(TraceReasonQuarantine):
 		reason = TraceReasonQuarantine
+	case string(TraceReasonPinAwake):
+		reason = TraceReasonPinAwake
+	case string(TraceReasonNamedAlways):
+		reason = TraceReasonNamedAlways
 	case string(TraceReasonPending):
 		reason = TraceReasonPending
 	case string(TraceReasonAssignedWork):
@@ -107,6 +129,10 @@ func timerTraceCodes(dec sessionpkg.TimerDecision) (TraceReasonCode, TraceOutcom
 		outcome = TraceOutcomeDeferredUserHold
 	case string(TraceOutcomeDeferredQuarantine):
 		outcome = TraceOutcomeDeferredQuarantine
+	case string(TraceOutcomeDeferredPinAwake):
+		outcome = TraceOutcomeDeferredPinAwake
+	case string(TraceOutcomeDeferredNamedAlways):
+		outcome = TraceOutcomeDeferredNamedAlways
 	case string(TraceOutcomeDeferredPending):
 		outcome = TraceOutcomeDeferredPending
 	case string(TraceOutcomeDeferredBusy):
@@ -3150,7 +3176,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				Triggered: it.checkIdle(name, tp.TemplateName, sp, clk.Now()),
 			}
 			if facts.Triggered {
-				facts.Blocker = lifecycleTimerBlockerInfo(infoByID[session.ID], clk.Now())
+				facts.Blocker = lifecycleIdleTimerBlockerInfo(infoByID[session.ID], clk.Now())
 			}
 			dec := sessionpkg.DecideIdleTimeout(facts)
 			for dec.Action == sessionpkg.TimerActionGatherPending {
