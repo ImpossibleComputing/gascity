@@ -524,6 +524,7 @@ func startFailingCircuitResetController(t *testing.T, cityDir string) net.Listen
 func TestCmdSessionReset_RequestsFreshRestartWithController(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_SESSION", "fake")
+	t.Setenv("GC_ALIAS", "operator")
 
 	cityDir := shortSocketTempDir(t, "gc-session-reset-")
 	t.Setenv("GC_CITY", cityDir)
@@ -646,6 +647,184 @@ func TestCmdSessionReset_RequestsFreshRestartWithController(t *testing.T) {
 	if got.Metadata["started_config_hash"] != "hash-before-reset" {
 		t.Fatalf("started_config_hash = %q, want original hash preserved until reconcile", got.Metadata["started_config_hash"])
 	}
+
+	recorded, err := events.ReadFiltered(filepath.Join(cityDir, ".gc", "events.jsonl"), events.Filter{Type: events.SessionResetRequested})
+	if err != nil {
+		t.Fatalf("ReadFiltered(SessionResetRequested): %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("SessionResetRequested events = %d, want 1", len(recorded))
+	}
+	if recorded[0].Actor != "operator" || recorded[0].Subject != bead.ID || recorded[0].SessionID != bead.ID {
+		t.Fatalf("SessionResetRequested event = %+v, want actor operator and subject/session %s", recorded[0], bead.ID)
+	}
+}
+
+func TestCmdSessionReset_BlocksThirdDistinctRecentResetWithoutForce(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_SESSION", "fake")
+	t.Setenv("GC_ALIAS", "operator")
+
+	cityDir := shortSocketTempDir(t, "gc-session-reset-loop-guard-")
+	t.Setenv("GC_CITY", cityDir)
+	writeGenericNamedSessionCityTOML(t, cityDir)
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gc): %v", err)
+	}
+	seedSessionResetRequestedEvent(t, cityDir, "old-session-a")
+	seedSessionResetRequestedEvent(t, cityDir, "old-session-b")
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	bead, err := store.Create(beads.Bead{
+		Title:  "manual session",
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession, "template:worker"},
+		Metadata: map[string]string{
+			"alias":        "third",
+			"template":     "worker",
+			"session_name": "s-gc-reset-loop-guard-third",
+			"state":        "awake",
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create(session bead): %v", err)
+	}
+
+	lis, err := startControllerSocket(
+		cityDir,
+		func() {},
+		nil,
+		nil,
+		make(chan reloadRequest),
+		make(chan convergenceRequest, 1),
+		make(chan struct{}, 1),
+		make(chan struct{}, 1),
+	)
+	if err != nil {
+		t.Fatalf("startControllerSocket: %v", err)
+	}
+	defer lis.Close()                              //nolint:errcheck
+	defer os.Remove(controllerSocketPath(cityDir)) //nolint:errcheck
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdSessionReset([]string{"third"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("cmdSessionReset = %d, want 1; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "refusing to queue another reset") || !strings.Contains(got, "use --force") {
+		t.Fatalf("stderr = %q, want reset-loop guard with force hint", got)
+	}
+
+	got, err := store.Get(bead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(%s): %v", bead.ID, err)
+	}
+	if got.Metadata["restart_requested"] == "true" {
+		t.Fatal("restart_requested = true, want blocked reset to leave no restart request")
+	}
+
+	recorded, err := events.ReadFiltered(filepath.Join(cityDir, ".gc", "events.jsonl"), events.Filter{Type: events.SessionResetRequested})
+	if err != nil {
+		t.Fatalf("ReadFiltered(SessionResetRequested): %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("SessionResetRequested events = %d, want only the two seeded events after blocked reset", len(recorded))
+	}
+}
+
+func TestCmdSessionReset_ForceBypassesRecentResetLoopGuard(t *testing.T) {
+	t.Setenv("GC_BEADS", "file")
+	t.Setenv("GC_SESSION", "fake")
+	t.Setenv("GC_ALIAS", "operator")
+
+	cityDir := shortSocketTempDir(t, "gc-session-reset-loop-force-")
+	t.Setenv("GC_CITY", cityDir)
+	writeGenericNamedSessionCityTOML(t, cityDir)
+	if err := os.MkdirAll(filepath.Join(cityDir, ".gc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gc): %v", err)
+	}
+	seedSessionResetRequestedEvent(t, cityDir, "old-session-a")
+	seedSessionResetRequestedEvent(t, cityDir, "old-session-b")
+
+	store, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	bead, err := store.Create(beads.Bead{
+		Title:  "manual session",
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession, "template:worker"},
+		Metadata: map[string]string{
+			"alias":                      "third",
+			"template":                   "worker",
+			"session_name":               "s-gc-reset-loop-force-third",
+			"state":                      "awake",
+			"session_key":                "original-key",
+			"started_config_hash":        "hash-before-reset",
+			"continuation_reset_pending": "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("store.Create(session bead): %v", err)
+	}
+
+	lis, err := startControllerSocket(
+		cityDir,
+		func() {},
+		nil,
+		nil,
+		make(chan reloadRequest),
+		make(chan convergenceRequest, 1),
+		make(chan struct{}, 1),
+		make(chan struct{}, 1),
+	)
+	if err != nil {
+		t.Fatalf("startControllerSocket: %v", err)
+	}
+	defer lis.Close()                              //nolint:errcheck
+	defer os.Remove(controllerSocketPath(cityDir)) //nolint:errcheck
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdSessionResetWithForce([]string{"third"}, &stdout, &stderr, true); code != 0 {
+		t.Fatalf("cmdSessionResetWithForce = %d, want 0; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	got, err := store.Get(bead.ID)
+	if err != nil {
+		t.Fatalf("store.Get(%s): %v", bead.ID, err)
+	}
+	if got.Metadata["restart_requested"] != "true" {
+		t.Fatalf("restart_requested = %q, want true", got.Metadata["restart_requested"])
+	}
+
+	recorded, err := events.ReadFiltered(filepath.Join(cityDir, ".gc", "events.jsonl"), events.Filter{Type: events.SessionResetRequested})
+	if err != nil {
+		t.Fatalf("ReadFiltered(SessionResetRequested): %v", err)
+	}
+	if len(recorded) != 3 {
+		t.Fatalf("SessionResetRequested events = %d, want seeded two plus forced request", len(recorded))
+	}
+	if recorded[2].Subject != bead.ID || recorded[2].Actor != "operator" {
+		t.Fatalf("forced SessionResetRequested event = %+v, want subject %s actor operator", recorded[2], bead.ID)
+	}
+}
+
+func seedSessionResetRequestedEvent(t *testing.T, cityDir, subject string) {
+	t.Helper()
+	rec, err := events.NewFileRecorder(filepath.Join(cityDir, ".gc", "events.jsonl"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("NewFileRecorder(events): %v", err)
+	}
+	defer rec.Close() //nolint:errcheck
+	rec.Record(events.Event{
+		Type:      events.SessionResetRequested,
+		Actor:     "operator",
+		Subject:   subject,
+		Ts:        time.Now().UTC(),
+		SessionID: subject,
+	})
 }
 
 func TestCmdSessionReset_ControllerClearFailureDoesNotQueueRestart(t *testing.T) {

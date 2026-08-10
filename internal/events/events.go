@@ -59,6 +59,12 @@ const (
 	SessionMaxAgeKilled = "session.max_age_killed"
 	SessionSuspended    = "session.suspended"
 	SessionUpdated      = "session.updated"
+	// SessionResetRequested fires when an operator/agent explicitly requests
+	// `gc session reset` for a session. It is distinct from
+	// SessionResetStalled: this records the operator intent before the
+	// controller-owned restart lifecycle completes, so reset-loop guards can
+	// reason over recent explicit reset requests instead of waiting for damage.
+	SessionResetRequested = "session.reset_requested"
 	// SessionDrainAckedWithAssignedWork fires when a session acknowledges
 	// drain (via `gc runtime drain-ack`) while still holding the assignee
 	// on an open or in-progress work bead. Distinguishes a worker that
@@ -222,6 +228,7 @@ var KnownEventTypes = []string{
 	SessionWoke, SessionStopped, SessionCrashed,
 	SessionDraining, SessionUndrained, SessionQuarantined,
 	SessionIdleKilled, SessionMaxAgeKilled, SessionSuspended, SessionUpdated,
+	SessionResetRequested,
 	SessionDrainAckedWithAssignedWork,
 	SessionStranded,
 	SessionResetStalled,
