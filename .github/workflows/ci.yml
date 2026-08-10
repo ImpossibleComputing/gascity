@@ -382,6 +382,11 @@ jobs:
           bd-version: "" # build bd from source below
           install-claude-cli: "true"
       - name: Build bd from beads main HEAD
+        env:
+          # beads main may require a newer patch toolchain than gascity's pinned
+          # go.mod version; this advisory radar should follow the live bd head
+          # instead of failing before it reaches the compatibility test.
+          GOTOOLCHAIN: auto
         run: |
           set -euo pipefail
           src="${RUNNER_TEMP}/beads-src"
