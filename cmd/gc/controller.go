@@ -581,19 +581,25 @@ var debounceDelay = 200 * time.Millisecond
 // Returns a cleanup function. If the watcher cannot be created, returns a
 // no-op cleanup (degraded to tick-only, no file watching).
 type configWatchRegistrar struct {
-	watcher        *fsnotify.Watcher
+	watcher        configPathWatcher
 	stderr         io.Writer
 	mu             sync.Mutex
 	recursiveRoots map[string]struct{}
 	discoveryRoots map[string]struct{}
+	watchedPaths   map[string]struct{}
 }
 
-func newConfigWatchRegistrar(watcher *fsnotify.Watcher, stderr io.Writer) *configWatchRegistrar {
+type configPathWatcher interface {
+	Add(string) error
+}
+
+func newConfigWatchRegistrar(watcher configPathWatcher, stderr io.Writer) *configWatchRegistrar {
 	return &configWatchRegistrar{
 		watcher:        watcher,
 		stderr:         stderr,
 		recursiveRoots: make(map[string]struct{}),
 		discoveryRoots: make(map[string]struct{}),
+		watchedPaths:   make(map[string]struct{}),
 	}
 }
 
@@ -655,7 +661,14 @@ func (r *configWatchRegistrar) addOne(path string, done <-chan struct{}) bool {
 		return false
 	default:
 	}
+	key := normalizePathForCompare(path)
+	r.mu.Lock()
+	if _, ok := r.watchedPaths[key]; ok {
+		r.mu.Unlock()
+		return true
+	}
 	if err := r.watcher.Add(path); err != nil {
+		r.mu.Unlock()
 		if errors.Is(err, syscall.ENOSPC) {
 			fmt.Fprintf(r.stderr, "config watcher: cannot watch %s: inotify watch limit reached; increase fs.inotify.max_user_watches or reduce watched pack size: %v\n", path, err) //nolint:errcheck // best-effort stderr
 			return false
@@ -663,6 +676,8 @@ func (r *configWatchRegistrar) addOne(path string, done <-chan struct{}) bool {
 		fmt.Fprintf(r.stderr, "config watcher: cannot watch %s: %v\n", path, err) //nolint:errcheck // best-effort stderr
 		return false
 	}
+	r.watchedPaths[key] = struct{}{}
+	r.mu.Unlock()
 	return true
 }
 
@@ -682,6 +697,17 @@ func (r *configWatchRegistrar) markDiscoveryRoot(root string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.discoveryRoots[normalizePathForCompare(root)] = struct{}{}
+}
+
+func (r *configWatchRegistrar) forgetWatchedPathPrefix(root string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	root = normalizePathForCompare(root)
+	for path := range r.watchedPaths {
+		if pathIsWithin(root, path) {
+			delete(r.watchedPaths, path)
+		}
+	}
 }
 
 func (r *configWatchRegistrar) watchesRecursively(path string) bool {
@@ -810,6 +836,9 @@ func watchConfigTargets(targets []config.WatchTarget, dirty *atomic.Bool, pokeCh
 							enqueueRecursiveWatch(event.Name, false)
 						}
 					}
+				}
+				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+					registrar.forgetWatchedPathPrefix(event.Name)
 				}
 				// Debounce: reset timer on each event, fire after quiet period.
 				if debounce != nil {
