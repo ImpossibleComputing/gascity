@@ -1021,6 +1021,86 @@ func TestWatchConfigDirs_RecreatedRecursiveSubdirStillWatched(t *testing.T) {
 	}
 }
 
+type recordingConfigPathWatcher struct {
+	mu   sync.Mutex
+	adds []string
+}
+
+func (w *recordingConfigPathWatcher) Add(path string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.adds = append(w.adds, path)
+	return nil
+}
+
+func (w *recordingConfigPathWatcher) addCount(path string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var count int
+	for _, add := range w.adds {
+		if samePath(add, path) {
+			count++
+		}
+	}
+	return count
+}
+
+func TestConfigWatchRegistrarDedupesRecursiveAdds(t *testing.T) {
+	dir := t.TempDir()
+	nestedDir := filepath.Join(dir, "agents", "sample-agent", "overlay")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll nested recursive dir: %v", err)
+	}
+
+	watcher := &recordingConfigPathWatcher{}
+	registrar := newConfigWatchRegistrar(watcher, &bytes.Buffer{})
+	done := make(chan struct{})
+	if ok := registrar.addPath(dir, true, done); !ok {
+		t.Fatal("initial recursive addPath returned false")
+	}
+	if ok := registrar.addPath(dir, true, done); !ok {
+		t.Fatal("duplicate recursive addPath returned false")
+	}
+
+	for _, path := range []string{
+		dir,
+		filepath.Join(dir, "agents"),
+		filepath.Join(dir, "agents", "sample-agent"),
+		nestedDir,
+	} {
+		if got := watcher.addCount(path); got != 1 {
+			t.Fatalf("watcher.Add(%q) called %d times, want 1; all adds=%v", path, got, watcher.adds)
+		}
+	}
+}
+
+func TestConfigWatchRegistrarForgetsRemovedSubtreeForReadd(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agents", "sample-agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll agent dir: %v", err)
+	}
+
+	watcher := &recordingConfigPathWatcher{}
+	registrar := newConfigWatchRegistrar(watcher, &bytes.Buffer{})
+	done := make(chan struct{})
+	if ok := registrar.addPath(dir, true, done); !ok {
+		t.Fatal("initial recursive addPath returned false")
+	}
+
+	registrar.forgetWatchedPathPrefix(agentDir)
+	if ok := registrar.addPath(agentDir, true, done); !ok {
+		t.Fatal("re-add after forgotten subtree returned false")
+	}
+
+	if got := watcher.addCount(dir); got != 1 {
+		t.Fatalf("root watcher.Add(%q) called %d times, want 1; all adds=%v", dir, got, watcher.adds)
+	}
+	if got := watcher.addCount(agentDir); got != 2 {
+		t.Fatalf("forgotten subtree watcher.Add(%q) called %d times, want 2; all adds=%v", agentDir, got, watcher.adds)
+	}
+}
+
 // Regression for gastownhall/gascity#780:
 // fsnotify watches are non-recursive — watcher.Add(dir) covers only the
 // immediate directory. Pack v2's convention layout pushes agent prompts,
