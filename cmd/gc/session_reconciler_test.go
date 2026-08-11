@@ -4306,7 +4306,7 @@ func TestReconcileSessionBeads_RateLimitScreenQuarantinesBeforeHeal(t *testing.T
 		t.Fatalf("Start(worker): %v", err)
 	}
 	env.sp.Zombies["worker"] = true
-	env.sp.SetPeekOutput("worker", "You've hit your limit, Pro plan\n\n/rate-limit-options")
+	env.sp.SetPeekOutput("worker", "Claude Code\n\nAdjust monthly spend limit\n\nEsc to dismiss")
 	session := env.createSessionBead("worker", "worker")
 	env.setSessionMetadata(&session, map[string]string{
 		"state":               "active",
