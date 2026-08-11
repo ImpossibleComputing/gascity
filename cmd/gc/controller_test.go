@@ -1045,6 +1045,64 @@ func (w *recordingConfigPathWatcher) addCount(path string) int {
 	return count
 }
 
+func TestShouldIgnoreConfigWatchEvent_BuildAndArtifactDirs(t *testing.T) {
+	root := t.TempDir()
+	cases := map[string]bool{
+		filepath.Join(root, "agents", "magellan", "target"):                          true,
+		filepath.Join(root, "agents", "magellan", "target", "debug", "incremental"):  true,
+		filepath.Join(root, "agents", "magellan", "debug", "incremental"):            true,
+		filepath.Join(root, "agents", "spock", "worktrees"):                          true,
+		filepath.Join(root, "agents", "spock", "worktrees", "branch-a", "city.toml"): true,
+		filepath.Join(root, "agents", "george", "artifacts"):                         true,
+		filepath.Join(root, "agents", "george", "artifacts", "run.log"):              true,
+		filepath.Join(root, "agents", "loki", "node_modules", "pkg"):                 true,
+		filepath.Join(root, "agents", "freya", ".git", "objects"):                    true,
+		filepath.Join(root, "agents", "freya", "prompt.template.md"):                 false,
+		filepath.Join(root, "agents", "freya", "overlay", "settings.json"):           false,
+		filepath.Join(root, "packs", "core", "agents", "mayor", "prompt.md"):         false,
+		filepath.Join(root, "worktrees", "not-agent-worktree"):                       false,
+	}
+	for path, want := range cases {
+		if got := shouldIgnoreConfigWatchEvent(path); got != want {
+			t.Fatalf("shouldIgnoreConfigWatchEvent(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestConfigWatchRegistrarSkipsBuildArtifactSubtrees(t *testing.T) {
+	root := t.TempDir()
+	watchedAgentDir := filepath.Join(root, "agents", "freya", "overlay")
+	ignoredDirs := []string{
+		filepath.Join(root, "agents", "magellan", "target", "debug", "incremental"),
+		filepath.Join(root, "agents", "magellan", "debug", "incremental"),
+		filepath.Join(root, "agents", "spock", "worktrees", "branch-a"),
+		filepath.Join(root, "agents", "george", "artifacts", "E001"),
+		filepath.Join(root, "agents", "loki", "node_modules", "pkg"),
+		filepath.Join(root, "agents", "thor", ".git", "objects"),
+	}
+	for _, dir := range append(ignoredDirs, watchedAgentDir) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	watcher := &recordingConfigPathWatcher{}
+	registrar := newConfigWatchRegistrar(watcher, &bytes.Buffer{})
+	done := make(chan struct{})
+	if ok := registrar.addPath(filepath.Join(root, "agents"), true, done); !ok {
+		t.Fatal("recursive addPath returned false")
+	}
+
+	if got := watcher.addCount(watchedAgentDir); got != 1 {
+		t.Fatalf("watcher.Add(%q) called %d times, want 1; all adds=%v", watchedAgentDir, got, watcher.adds)
+	}
+	for _, dir := range ignoredDirs {
+		if got := watcher.addCount(dir); got != 0 {
+			t.Fatalf("ignored watcher.Add(%q) called %d times, want 0; all adds=%v", dir, got, watcher.adds)
+		}
+	}
+}
+
 func TestConfigWatchRegistrarDedupesRecursiveAdds(t *testing.T) {
 	dir := t.TempDir()
 	nestedDir := filepath.Join(dir, "agents", "sample-agent", "overlay")
