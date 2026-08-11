@@ -1027,9 +1027,11 @@ func TestContainsProviderRateLimitScreen(t *testing.T) {
 		{name: "gemini usage limit", content: "Usage limit reached for gemini-3-flash-preview.", want: true},
 		{name: "claude hit limit", content: "You've hit your limit, Pro plan", want: true},
 		{name: "claude rate limit options", content: "/rate-limit-options", want: true},
+		{name: "claude spend-limit modal action", content: "Claude Code\n\nAdjust monthly spend limit\n\nEsc to dismiss", want: true},
 		{name: "provider menu shape", content: "Rate limit reached\n1. Keep trying\n2. Stop", want: true},
 		{name: "generic crash output", content: "worker failed while parsing rate limit config", want: false},
 		{name: "generic lower-case mention", content: "rate limit exceeded", want: false},
+		{name: "spend limit prose without modal action", content: "operator notes mention a monthly spend limit for budgeting", want: false},
 		{name: "normal output", content: "Hello world", want: false},
 	}
 	for _, tt := range tests {

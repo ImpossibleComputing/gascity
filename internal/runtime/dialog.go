@@ -1028,9 +1028,23 @@ func ContainsProviderRateLimitScreen(content string) bool {
 		strings.Contains(content, "/rate-limit-options") {
 		return true
 	}
+	if containsSpendLimitModal(content) {
+		return true
+	}
 	return strings.Contains(strings.ToLower(content), "rate limit") &&
 		strings.Contains(content, "Keep trying") &&
 		strings.Contains(content, "Stop")
+}
+
+// containsSpendLimitModal matches the Claude Code account-spend dialog seen in
+// City Hardening P3: an interactive pane offering "Adjust monthly spend limit".
+// It is intentionally narrower than ContainsRateLimitDialog: this classifier is
+// used against arbitrary scrollback when deciding whether a dead/frozen session
+// should be quarantined as a provider-limit condition instead of recorded as an
+// ordinary crash.
+func containsSpendLimitModal(content string) bool {
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "adjust monthly spend limit")
 }
 
 // ProviderTerminalErrorReason classifies high-confidence provider errors that
