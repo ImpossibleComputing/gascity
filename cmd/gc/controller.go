@@ -874,12 +874,36 @@ func shouldIgnoreConfigWatchEvent(path string) bool {
 	}
 	sepGC := string(filepath.Separator) + ".gc"
 	sepBeads := string(filepath.Separator) + ".beads"
-	return clean == ".gc" ||
+	if clean == ".gc" ||
 		clean == ".beads" ||
 		strings.HasSuffix(clean, sepGC) ||
 		strings.HasSuffix(clean, sepBeads) ||
 		strings.Contains(clean, sepGC+string(filepath.Separator)) ||
-		strings.Contains(clean, sepBeads+string(filepath.Separator))
+		strings.Contains(clean, sepBeads+string(filepath.Separator)) {
+		return true
+	}
+	return hasConfigWatchIgnoredSegment(clean)
+}
+
+func hasConfigWatchIgnoredSegment(path string) bool {
+	segments := strings.FieldsFunc(path, func(r rune) bool {
+		return r == os.PathSeparator
+	})
+	for i, segment := range segments {
+		// Recursive config watching exists to notice authored pack/agent
+		// config. Regenerable dependency/build/artifact trees can contain
+		// tens of thousands of files and are not configuration sources; on
+		// Darwin/kqueue they can exhaust the supervisor's per-process FD cap.
+		switch segment {
+		case ".git", "node_modules", "target", "incremental", "artifacts":
+			return true
+		case "agents":
+			if i+2 < len(segments) && segments[i+2] == "worktrees" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reloadResult holds the result of a config reload attempt.
