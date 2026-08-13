@@ -232,6 +232,7 @@ func (f *tmuxFetcher) FetchState(ctx context.Context) (runtimeStateSnapshot, err
 	out, err := f.tm.runCtx(ctx, "list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}\t#{pane_current_command}\t#{pane_pid}")
 	if err != nil {
 		if isNoServerError(err) {
+			err = f.tm.annotateNoServerError(err)
 			// An unreachable tmux server is an observation FAILURE, not the
 			// fact "no sessions exist". Returning an empty *success* here let
 			// refresh() overwrite the cache's last-known-good and instantly
