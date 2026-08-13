@@ -65,6 +65,9 @@ func TestProviderListRunningReportsPartialOnNoServer(t *testing.T) {
 	if !errors.Is(err, ErrNoServer) {
 		t.Fatalf("ListRunning err = %v, want wrapped ErrNoServer cause", err)
 	}
+	if !strings.Contains(err.Error(), "socket=x") {
+		t.Fatalf("ListRunning err = %q, want socket name in diagnostic", err.Error())
+	}
 }
 
 func TestProviderListRunningPropagatesNonServerError(t *testing.T) {

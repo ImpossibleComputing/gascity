@@ -24,6 +24,7 @@ import (
 	"github.com/gastownhall/gascity/internal/runtime"
 	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
+	"github.com/gastownhall/gascity/internal/suspensionstate"
 )
 
 type sweepLivenessProvider struct {
@@ -45,6 +46,22 @@ type sweepIsRunningFalseNegativeProvider struct {
 
 func (p *sweepIsRunningFalseNegativeProvider) IsRunning(name string) bool {
 	_ = p.Fake.IsRunning(name)
+	return false
+}
+
+type countingNoServerProvider struct {
+	*runtime.Fake
+	listRunningCalls int
+	isRunningCalls   int
+}
+
+func (p *countingNoServerProvider) ListRunning(string) ([]string, error) {
+	p.listRunningCalls++
+	return nil, &runtime.PartialListError{Err: runtime.ErrRuntimeUnavailable}
+}
+
+func (p *countingNoServerProvider) IsRunning(string) bool {
+	p.isRunningCalls++
 	return false
 }
 
@@ -3812,6 +3829,68 @@ func TestCityRuntimeTickSkipsOnDeathWhenSessionListingIsPartial(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "pool death check skipped due to partial session listing") {
 		t.Fatalf("stderr = %q, want partial-list warning", stderr.String())
+	}
+}
+
+func TestCityRuntimeTickSkipsRuntimeProbeForSuspendedCityWithNoLiveSessions(t *testing.T) {
+	cityPath := t.TempDir()
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:  "mayor",
+		Type:   sessionBeadType,
+		Status: "open",
+		Labels: []string{sessionBeadLabel},
+		Metadata: map[string]string{
+			"template":     "mayor",
+			"session_name": "mayor",
+			"state":        string(sessionpkg.StateAsleep),
+		},
+	}); err != nil {
+		t.Fatalf("Create asleep session bead: %v", err)
+	}
+	suspended := true
+	if err := suspensionstate.SetCitySuspended(fsys.OSFS{}, cityPath, &suspended); err != nil {
+		t.Fatalf("SetCitySuspended: %v", err)
+	}
+
+	sp := &countingNoServerProvider{Fake: runtime.NewFake()}
+	var stderr bytes.Buffer
+	cr := &CityRuntime{
+		cityPath:            cityPath,
+		cityName:            "hobby",
+		logPrefix:           "gc supervisor",
+		cfg:                 &config.City{Workspace: config.Workspace{Name: "hobby"}},
+		sp:                  sp,
+		standaloneCityStore: store,
+		sessionDrains:       newDrainTracker(),
+		poolDeathHandlers: map[string]poolDeathInfo{
+			"worker-1": {Command: "true", Dir: cityPath},
+		},
+		rec:    events.Discard,
+		stdout: io.Discard,
+		stderr: &stderr,
+		buildFnWithSessionBeads: func(*config.City, runtime.Provider, beads.Store, map[string]beads.Store, *sessionBeadSnapshot, *sessionReconcilerTraceCycle) DesiredStateResult {
+			t.Fatal("suspended/no-live-runtime tick should not build desired state")
+			return DesiredStateResult{}
+		},
+	}
+
+	dirty := &atomic.Bool{}
+	var lastProviderName string
+	prevPoolRunning := map[string]bool{"worker-1": true}
+	cr.tick(context.Background(), dirty, &lastProviderName, cityPath, &prevPoolRunning, "test")
+
+	if sp.listRunningCalls != 0 {
+		t.Fatalf("ListRunning calls = %d, want 0 for suspended city with no live sessions", sp.listRunningCalls)
+	}
+	if sp.isRunningCalls != 0 {
+		t.Fatalf("IsRunning calls = %d, want 0 for suspended city with no live sessions", sp.isRunningCalls)
+	}
+	if len(prevPoolRunning) != 0 {
+		t.Fatalf("prevPoolRunning = %v, want cleared when suspended city has no live runtimes", prevPoolRunning)
+	}
+	if strings.Contains(stderr.String(), "tmux server unreachable") || strings.Contains(stderr.String(), "runtime unavailable") {
+		t.Fatalf("stderr = %q, want no runtime-unavailable noise", stderr.String())
 	}
 }
 

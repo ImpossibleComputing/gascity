@@ -924,6 +924,22 @@ func convergenceStartupComplete(cr *CityRuntime) bool {
 	return true
 }
 
+func sessionSnapshotMayHaveLiveRuntime(snapshot *sessionBeadSnapshot) bool {
+	if snapshot == nil || snapshot.LoadError() != nil {
+		return true
+	}
+	for _, info := range snapshot.OpenInfos() {
+		if info.Closed {
+			continue
+		}
+		switch info.State {
+		case "", sessionpkg.StateActive, sessionpkg.StateAwake, sessionpkg.StateStartPending, sessionpkg.StateCreating, sessionpkg.StateDraining, sessionpkg.StateQuarantined:
+			return true
+		}
+	}
+	return false
+}
+
 // tick performs one reconciliation tick: pool death detection, config
 // reload (if dirty), agent reconciliation, wisp GC, and order
 // dispatch.
@@ -956,8 +972,17 @@ func (cr *CityRuntime) tick(
 			trace.end(completion, traceRecordPayload{"phase": "tick", "trigger": traceTrigger})
 		}
 	}()
+	var sessionBeads *sessionBeadSnapshot
+	suspendedWithoutRuntime := false
+	if citySuspendedWithState(cr.cfg, loadSuspensionStateBestEffort(cr.cityPath)) {
+		sessionBeads = cr.loadSessionBeadSnapshot()
+		suspendedWithoutRuntime = !sessionSnapshotMayHaveLiveRuntime(sessionBeads)
+		if suspendedWithoutRuntime && prevPoolRunning != nil {
+			*prevPoolRunning = map[string]bool{}
+		}
+	}
 	// Detect pool instance deaths since last tick.
-	if len(cr.poolDeathHandlers) > 0 {
+	if len(cr.poolDeathHandlers) > 0 && !suspendedWithoutRuntime {
 		currentRunning, listErr := cr.sp.ListRunning("")
 		if listErr != nil {
 			if runtime.IsPartialListError(listErr) {
@@ -1075,6 +1100,18 @@ func (cr *CityRuntime) tick(
 	if ctx.Err() != nil {
 		return
 	}
+	if sessionBeads == nil || configChanged {
+		sessionBeads = cr.loadSessionBeadSnapshot()
+	}
+	if citySuspendedWithState(cr.cfg, loadSuspensionStateBestEffort(cr.cityPath)) && !sessionSnapshotMayHaveLiveRuntime(sessionBeads) {
+		phaseStart = time.Now()
+		cr.processConvergenceRequests(ctx)
+		recordPhase(TraceSiteControllerTickPhase, "process_convergence_requests.suspended", phaseStart, nil)
+		completeManualReload()
+		completion = TraceCompletionCompleted
+		tickCompleted = true
+		return
+	}
 
 	// Order dispatch is intentionally before the expensive session reconcile
 	// phases so due formulas are not starved by slow startup/config drift work,
@@ -1099,7 +1136,9 @@ func (cr *CityRuntime) tick(
 	}
 
 	phaseStart = time.Now()
-	sessionBeads := cr.loadSessionBeadSnapshot()
+	if sessionBeads == nil {
+		sessionBeads = cr.loadSessionBeadSnapshot()
+	}
 	recordPhase(TraceSiteSessionSnapshot, "load_session_snapshot.initial", phaseStart, traceSessionSnapshotFields(sessionBeads))
 	if trace != nil && sessionBeads != nil {
 		trace.RecordSessionBaseline("", "", traceRecordPayload{

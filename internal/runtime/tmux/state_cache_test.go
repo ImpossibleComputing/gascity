@@ -334,6 +334,37 @@ func TestTmuxFetcher_NoServerMapsToRuntimeUnavailable(t *testing.T) {
 	}
 }
 
+func TestTmuxFetcher_NoServerIncludesSocketAndUsesSocketFlag(t *testing.T) {
+	fe := &fakeExecutor{err: ErrNoServer}
+	f := &tmuxFetcher{tm: &Tmux{cfg: Config{SocketName: "gt"}, exec: fe}}
+
+	_, err := f.FetchState(context.Background())
+	if err == nil {
+		t.Fatal("FetchState() err = nil, want no-server observation failure")
+	}
+	if !errors.Is(err, gcruntime.ErrRuntimeUnavailable) {
+		t.Fatalf("FetchState() err = %v, want runtime.ErrRuntimeUnavailable chain", err)
+	}
+	if !isNoServerError(err) {
+		t.Fatalf("FetchState() err = %v, want ErrNoServer semantics preserved", err)
+	}
+	if !strings.Contains(err.Error(), "socket=gt") {
+		t.Fatalf("FetchState() err = %q, want socket name in diagnostic", err.Error())
+	}
+	want := []string{"-u", "-L", "gt", "list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}\t#{pane_current_command}\t#{pane_pid}"}
+	if len(fe.calls) != 1 {
+		t.Fatalf("tmux calls = %d, want 1", len(fe.calls))
+	}
+	if len(fe.calls[0]) != len(want) {
+		t.Fatalf("tmux args = %v, want %v", fe.calls[0], want)
+	}
+	for i := range want {
+		if fe.calls[0][i] != want[i] {
+			t.Fatalf("tmux arg %d = %q, want %q; call=%v", i, fe.calls[0][i], want[i], fe.calls[0])
+		}
+	}
+}
+
 // End to end at the cache: after a good prime, an ErrNoServer refresh must
 // preserve last-known-good (within staleTTL) instead of collapsing to empty.
 func TestStateCache_NoServerRefreshPreservesLastKnownGood(t *testing.T) {
