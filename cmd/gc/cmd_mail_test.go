@@ -4031,6 +4031,17 @@ func okMailCheckHandler(_ *testing.T) http.Handler {
 	})
 }
 
+func okMailInboxEmptyHandler(_ *testing.T) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-GC-Cache-Age-S", "2")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"items": []map[string]any{},
+			"total": 0,
+		})
+	})
+}
+
 func partialStoreSlowMailCheckHandler(_ *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-GC-Cache-Age-S", "2")
@@ -4162,6 +4173,147 @@ func assertMailRouteLog(t *testing.T, stderrStr, wantRoute, wantReason string) {
 	}
 	if n := strings.Count(stderrStr, "route="); n != 1 {
 		t.Errorf("route=... lines = %d, want 1:\n%s", n, stderrStr)
+	}
+}
+
+func TestRouteMailInbox_SixRowMatrix(t *testing.T) {
+	tests := []struct {
+		name         string
+		handler      mailMatrixHandler
+		useNilClient bool
+		nilReason    string
+		wantExit     int
+		wantRoute    string
+		wantReason   string
+		wantStderr   string
+		wantStdout   string
+	}{
+		{
+			name:       "api-happy-path",
+			handler:    okMailCheckHandler,
+			wantExit:   0,
+			wantRoute:  "api",
+			wantStdout: "msg-1",
+		},
+		{
+			name:       "api-empty-path",
+			handler:    okMailInboxEmptyHandler,
+			wantExit:   0,
+			wantRoute:  "api",
+			wantStdout: "No unread messages for mayor",
+		},
+		{
+			name:       "api-cache-not-live",
+			handler:    mailProblemHandler(http.StatusServiceUnavailable, "cache_not_live: supervisor cache is priming"),
+			wantExit:   0, // fallback hits empty fake provider; inbox empty is success
+			wantRoute:  "fallback",
+			wantReason: "cache-not-live",
+			wantStdout: "No unread messages for mayor",
+		},
+		{
+			name:       "api-500-fallback",
+			handler:    mailProblemHandler(http.StatusInternalServerError, "internal: something exploded"),
+			wantExit:   0,
+			wantRoute:  "fallback",
+			wantReason: "conn-refused",
+			wantStdout: "No unread messages for mayor",
+		},
+		{
+			name:       "api-404-error",
+			handler:    mailProblemHandler(http.StatusNotFound, "not_found: no such recipient"),
+			wantExit:   1,
+			wantStderr: "not_found",
+		},
+		{
+			name:         "controller-down",
+			useNilClient: true,
+			nilReason:    "controller-down",
+			wantExit:     0,
+			wantRoute:    "fallback",
+			wantReason:   "controller-down",
+			wantStdout:   "No unread messages for mayor",
+		},
+		{
+			name:         "escape-hatch",
+			useNilClient: true,
+			nilReason:    "escape-hatch",
+			wantExit:     0,
+			wantRoute:    "fallback",
+			wantReason:   "escape-hatch",
+			wantStdout:   "No unread messages for mayor",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cityPath := writeMailTestCity(t)
+			t.Setenv("GC_DEBUG", "1")
+
+			var c *api.Client
+			if !tc.useNilClient {
+				srv := httptest.NewServer(tc.handler(t))
+				defer srv.Close()
+				c = api.NewCityScopedClient(srv.URL, "test-city")
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := routeMailInbox(cityPath, []string{"mayor"}, c, tc.nilReason, false, &stdout, &stderr)
+			if code != tc.wantExit {
+				t.Fatalf("exit = %d, want %d; stderr=%q stdout=%q", code, tc.wantExit, stderr.String(), stdout.String())
+			}
+			assertMailRouteLog(t, stderr.String(), tc.wantRoute, tc.wantReason)
+			if tc.wantStderr != "" && !strings.Contains(stderr.String(), tc.wantStderr) {
+				t.Errorf("stderr missing %q:\n%s", tc.wantStderr, stderr.String())
+			}
+			if tc.wantStdout != "" && !strings.Contains(stdout.String(), tc.wantStdout) {
+				t.Errorf("stdout missing %q:\n%s", tc.wantStdout, stdout.String())
+			}
+		})
+	}
+}
+
+func TestRouteMailInboxStoreSlowDoesNotFallback(t *testing.T) {
+	cityPath := writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	srv := httptest.NewServer(mailProblemHandler(http.StatusServiceUnavailable, "store_slow: mail read timed out after 8s")(t))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailInbox(cityPath, []string{"mayor"}, c, "", false, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "error")
+	if strings.Contains(stderr.String(), "route=fallback") {
+		t.Fatalf("store_slow inbox fell back to local store:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "store_slow: mail read timed out after 8s") {
+		t.Fatalf("stderr missing store_slow detail:\n%s", stderr.String())
+	}
+}
+
+func TestRouteMailInboxPartialStoreSlowReturnsError(t *testing.T) {
+	cityPath := writeMailTestCity(t)
+	t.Setenv("GC_DEBUG", "1")
+	srv := httptest.NewServer(partialStoreSlowMailCheckHandler(t))
+	defer srv.Close()
+	c := api.NewCityScopedClient(srv.URL, "test-city")
+
+	var stdout, stderr bytes.Buffer
+	code := routeMailInbox(cityPath, []string{"mayor"}, c, "", false, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	assertMailRouteLog(t, stderr.String(), "api", "error")
+	if !strings.Contains(stderr.String(), "store_slow: mail read timed out after 8s") {
+		t.Fatalf("stderr missing store_slow partial detail:\n%s", stderr.String())
 	}
 }
 

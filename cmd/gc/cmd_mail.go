@@ -2083,6 +2083,95 @@ func cmdMailInbox(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdMailInboxWithJSON(args []string, jsonOut bool, stdout, stderr io.Writer) int {
+	cityPath, err := resolveCity()
+	if err != nil {
+		return doMailInboxFallback(args, jsonOut, stdout, stderr)
+	}
+	c, reason := mailInboxAPIClient(cityPath)
+	return routeMailInbox(cityPath, args, c, reason, jsonOut, stdout, stderr)
+}
+
+// mailInboxAPIClient returns (client, "") when the API path is available,
+// or (nil, reason) when the caller should fall back. Indirected through a
+// var so tests can inject a client pointed at httptest.Server.
+var mailInboxAPIClient = func(cityPath string) (*api.Client, string) {
+	if c := apiClient(cityPath); c != nil {
+		return c, ""
+	}
+	return nil, apiClientFallbackReason(cityPath)
+}
+
+// routeMailInbox dispatches `mail inbox` to the supervisor API when a
+// controller is up; otherwise falls back to the local mail-provider path. A
+// typed store_slow API response is an authoritative degraded-read result, not a
+// reason to hit the same contended local store again.
+func routeMailInbox(_ string, args []string, c *api.Client, nilReason string, jsonOut bool, stdout, stderr io.Writer) int {
+	const cmdName = "mail inbox"
+	recipient := defaultMailIdentity()
+	if len(args) > 0 {
+		recipient = strings.TrimSpace(args[0])
+	}
+	if c != nil {
+		cr, err := c.ListMailInbox(recipient, "")
+		if err == nil {
+			if mailListHasPartial(cr.Body) {
+				logRoute(stderr, cmdName, "api", "error")
+				fmt.Fprintf(stderr, "gc mail inbox: %s\n", mailListPartialErrorDetail(cr.Body)) //nolint:errcheck // best-effort stderr
+				return 1
+			}
+			logRoute(stderr, cmdName, "api", "")
+			return renderMailInboxFromAPI(cr, recipient, jsonOut, stdout, stderr)
+		}
+		if !api.ShouldFallbackForRead(err) {
+			logRoute(stderr, cmdName, "api", "error")
+			fmt.Fprintf(stderr, "gc mail inbox: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		logRoute(stderr, cmdName, "fallback", api.FallbackReason(err))
+	} else {
+		logRoute(stderr, cmdName, "fallback", nilReason)
+	}
+	return doMailInboxFallback(args, jsonOut, stdout, stderr)
+}
+
+func renderMailInboxFromAPI(cr api.CachedRead[api.MailListView], recipient string, jsonOut bool, stdout, stderr io.Writer) int {
+	messages := cr.Body.Items
+	if messages == nil {
+		messages = []mail.Message{}
+	}
+	if jsonOut {
+		if err := writeCLIJSONLine(stdout, mailInboxJSONResult{
+			SchemaVersion: "1",
+			Recipient:     recipient,
+			Recipients:    []string{recipient},
+			Messages:      messages,
+		}); err != nil {
+			fmt.Fprintf(stderr, "gc mail inbox: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		return 0
+	}
+	if len(messages) == 0 {
+		fmt.Fprintf(stdout, "No unread messages for %s\n", recipient) //nolint:errcheck // best-effort stdout
+		if cr.AgeSeconds > cacheAgeBannerThresholdSeconds {
+			fmt.Fprintf(stdout, "(cache age: %.0fs — reconciler may be lagging)\n", cr.AgeSeconds) //nolint:errcheck // best-effort stdout
+		}
+		return 0
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tFROM\tSUBJECT\tBODY") //nolint:errcheck // best-effort stdout
+	for _, m := range messages {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.ID, m.From, m.Subject, truncate(m.Body, 60)) //nolint:errcheck // best-effort stdout
+	}
+	tw.Flush() //nolint:errcheck // best-effort stdout
+	if cr.AgeSeconds > cacheAgeBannerThresholdSeconds {
+		fmt.Fprintf(stdout, "(cache age: %.0fs — reconciler may be lagging)\n", cr.AgeSeconds) //nolint:errcheck // best-effort stdout
+	}
+	return 0
+}
+
+// doMailInboxFallback is the direct-bd path for `gc mail inbox`.
+func doMailInboxFallback(args []string, jsonOut bool, stdout, stderr io.Writer) int {
 	mp, target, code := openCityMailProviderAndTarget(args, stderr, "gc mail inbox")
 	if mp == nil {
 		return code
