@@ -336,6 +336,18 @@ func TestRunInjectsSocketFlag(t *testing.T) {
 	}
 }
 
+func TestWrapErrorNoServerPreservesTmuxStderr(t *testing.T) {
+	stderr := "error connecting to /private/tmp/tmux-501/hobby (No such file or directory)"
+	err := wrapError(errors.New("exit status 1"), stderr, []string{"list-sessions"})
+
+	if !errors.Is(err, ErrNoServer) {
+		t.Fatalf("wrapError() = %v, want ErrNoServer chain", err)
+	}
+	if !strings.Contains(err.Error(), "/private/tmp/tmux-501/hobby") {
+		t.Fatalf("wrapError() = %q, want stderr socket path preserved", err.Error())
+	}
+}
+
 func TestRunNoSocketFlagWhenEmpty(t *testing.T) {
 	fe := &fakeExecutor{}
 	tm := &Tmux{cfg: DefaultConfig(), exec: fe}
