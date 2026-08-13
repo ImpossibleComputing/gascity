@@ -1053,6 +1053,8 @@ func TestShouldIgnoreConfigWatchEvent_BuildAndArtifactDirs(t *testing.T) {
 		filepath.Join(root, "agents", "magellan", "debug", "incremental"):            true,
 		filepath.Join(root, "agents", "spock", "worktrees"):                          true,
 		filepath.Join(root, "agents", "spock", "worktrees", "branch-a", "city.toml"): true,
+		filepath.Join(root, "agents", "drake", "workroots"):                          true,
+		filepath.Join(root, "agents", "drake", "workroots", "branch-a", "city.toml"): true,
 		filepath.Join(root, "agents", "george", "artifacts"):                         true,
 		filepath.Join(root, "agents", "george", "artifacts", "run.log"):              true,
 		filepath.Join(root, "agents", "loki", "node_modules", "pkg"):                 true,
@@ -1061,6 +1063,7 @@ func TestShouldIgnoreConfigWatchEvent_BuildAndArtifactDirs(t *testing.T) {
 		filepath.Join(root, "agents", "freya", "overlay", "settings.json"):           false,
 		filepath.Join(root, "packs", "core", "agents", "mayor", "prompt.md"):         false,
 		filepath.Join(root, "worktrees", "not-agent-worktree"):                       false,
+		filepath.Join(root, "workroots", "not-agent-workroot"):                       false,
 	}
 	for path, want := range cases {
 		if got := shouldIgnoreConfigWatchEvent(path); got != want {
@@ -1076,6 +1079,7 @@ func TestConfigWatchRegistrarSkipsBuildArtifactSubtrees(t *testing.T) {
 		filepath.Join(root, "agents", "magellan", "target", "debug", "incremental"),
 		filepath.Join(root, "agents", "magellan", "debug", "incremental"),
 		filepath.Join(root, "agents", "spock", "worktrees", "branch-a"),
+		filepath.Join(root, "agents", "drake", "workroots", "branch-a"),
 		filepath.Join(root, "agents", "george", "artifacts", "E001"),
 		filepath.Join(root, "agents", "loki", "node_modules", "pkg"),
 		filepath.Join(root, "agents", "thor", ".git", "objects"),
