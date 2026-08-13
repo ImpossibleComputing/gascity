@@ -320,6 +320,9 @@ func wrapError(err error, stderr string, args []string) error {
 		strings.Contains(stderr, "error connecting to") ||
 		strings.Contains(stderr, "no current target") ||
 		strings.Contains(stderr, "server exited unexpectedly") {
+		if stderr != "" {
+			return fmt.Errorf("%w: %s", ErrNoServer, stderr)
+		}
 		return ErrNoServer
 	}
 	if strings.Contains(stderr, "duplicate session") {
@@ -335,6 +338,16 @@ func wrapError(err error, stderr string, args []string) error {
 		return fmt.Errorf("tmux %s: %s", args[0], stderr)
 	}
 	return fmt.Errorf("tmux %s: %w", args[0], err)
+}
+
+func (t *Tmux) annotateNoServerError(err error) error {
+	if err == nil {
+		err = ErrNoServer
+	}
+	if t == nil || t.cfg.SocketName == "" || strings.Contains(err.Error(), "socket=") {
+		return err
+	}
+	return fmt.Errorf("socket=%s: %w", t.cfg.SocketName, err)
 }
 
 // probeServerAlive verifies the tmux server bound to SocketName is responsive
