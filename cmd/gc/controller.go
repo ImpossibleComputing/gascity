@@ -898,7 +898,7 @@ func hasConfigWatchIgnoredSegment(path string) bool {
 		case ".git", "node_modules", "target", "incremental", "artifacts":
 			return true
 		case "agents":
-			if i+2 < len(segments) && segments[i+2] == "worktrees" {
+			if i+2 < len(segments) && (segments[i+2] == "worktrees" || segments[i+2] == "workroots") {
 				return true
 			}
 		}
