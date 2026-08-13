@@ -107,6 +107,7 @@ var (
 	supervisorProcessGroupPollPeriod                    = 20 * time.Millisecond
 	supervisorRuntimeGOOS                               = goruntime.GOOS
 	supervisorWorkspaceServiceCleanupWarnings io.Writer = os.Stderr
+	supervisorDarwinMaxfilesperproc                     = readDarwinMaxfilesperproc
 	// supervisorInstallForce is set true by --force on 'gc supervisor install'.
 	// It permits overwriting an existing service unit that references a
 	// different gc binary. Exposed as a var so tests can override it directly.
@@ -1016,9 +1017,13 @@ type supervisorServiceData struct {
 	LaunchdLabel  string
 	LaunchdSystem bool
 	UserName      string
-	SafeName      string
-	Path          string
-	ExtraEnv      []supervisorServiceEnvVar
+	// LaunchdNumberOfFilesLimit is written to SoftResourceLimits and
+	// HardResourceLimits on macOS so launchd does not silently lower the
+	// supervisor's FD headroom below the host kern.maxfilesperproc value.
+	LaunchdNumberOfFilesLimit int
+	SafeName                  string
+	Path                      string
+	ExtraEnv                  []supervisorServiceEnvVar
 	// PortInUseExitCode is the exit code the supervisor returns on a duplicate
 	// API-port collision; the systemd unit lists it in RestartPreventExitStatus
 	// so a duplicate install does not crash-loop on the shared port.
@@ -1046,19 +1051,44 @@ func buildSupervisorServiceData() (*supervisorServiceData, error) {
 	if supervisor.UsesIsolatedGCHomeOverride() {
 		xdgRuntimeDir = ""
 	}
+	launchdNumberOfFilesLimit := 0
+	if supervisorRuntimeGOOS == "darwin" {
+		limit, err := supervisorDarwinMaxfilesperproc()
+		if err != nil {
+			return nil, fmt.Errorf("reading kern.maxfilesperproc for launchd NumberOfFiles limit: %w", err)
+		}
+		launchdNumberOfFilesLimit = limit
+	}
 	return &supervisorServiceData{
-		GCPath:            gcPath,
-		LogPath:           supervisorLogPath(),
-		GCHome:            home,
-		XDGRuntimeDir:     xdgRuntimeDir,
-		LaunchdLabel:      supervisorLaunchdLabel(),
-		LaunchdSystem:     supervisorLaunchdSystemDomain(),
-		UserName:          userName,
-		SafeName:          sanitizeServiceName(filepath.Base(home)),
-		Path:              searchpath.ExpandPath(homeDir, goruntime.GOOS, os.Getenv("PATH")),
-		ExtraEnv:          supervisorServiceExtraEnv(),
-		PortInUseExitCode: supervisorExitCodePortInUse,
+		GCPath:                    gcPath,
+		LogPath:                   supervisorLogPath(),
+		GCHome:                    home,
+		XDGRuntimeDir:             xdgRuntimeDir,
+		LaunchdLabel:              supervisorLaunchdLabel(),
+		LaunchdSystem:             supervisorLaunchdSystemDomain(),
+		UserName:                  userName,
+		LaunchdNumberOfFilesLimit: launchdNumberOfFilesLimit,
+		SafeName:                  sanitizeServiceName(filepath.Base(home)),
+		Path:                      searchpath.ExpandPath(homeDir, goruntime.GOOS, os.Getenv("PATH")),
+		ExtraEnv:                  supervisorServiceExtraEnv(),
+		PortInUseExitCode:         supervisorExitCodePortInUse,
 	}, nil
+}
+
+func readDarwinMaxfilesperproc() (int, error) {
+	out, err := exec.Command("/usr/sbin/sysctl", "-n", "kern.maxfilesperproc").Output()
+	if err != nil {
+		return 0, err
+	}
+	raw := strings.TrimSpace(string(out))
+	limit, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parsing sysctl output %q: %w", raw, err)
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("sysctl returned non-positive limit %d", limit)
+	}
+	return limit, nil
 }
 
 const (
@@ -1378,6 +1408,18 @@ const supervisorLaunchdTemplate = `<?xml version="1.0" encoding="UTF-8"?>
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    {{if .LaunchdNumberOfFilesLimit}}
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>{{.LaunchdNumberOfFilesLimit}}</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>{{.LaunchdNumberOfFilesLimit}}</integer>
+    </dict>
+    {{end}}
     <key>StandardOutPath</key>
     <string>{{xmlesc .LogPath}}</string>
     <key>StandardErrorPath</key>
