@@ -222,6 +222,132 @@ func TestInstallSupervisorLaunchdBinaryMismatchGuard(t *testing.T) {
 	}
 }
 
+func TestInstallSupervisorLaunchdRefusesInactiveExistingServiceWithPriorSupervisorEvidence(t *testing.T) {
+	homeDir := t.TempDir()
+	gcHome := filepath.Join(homeDir, ".gc")
+	currentBinary := filepath.Join(homeDir, "bin", "gc")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	setSupervisorInstallForceForTest(t, false)
+
+	data := supervisorInstallGuardServiceData(gcHome, currentBinary)
+	plistPath := supervisorLaunchdPlistPath()
+	original := supervisorInstallGuardLaunchdPlist(currentBinary)
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(supervisorLockPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(supervisorLockPath(), []byte("prior\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAlive := supervisorAliveHook
+	oldActive := supervisorLaunchdActive
+	oldRun := supervisorLaunchctlRun
+	supervisorAliveHook = func() int { return 0 }
+	supervisorLaunchdActive = func(string) bool { return false }
+	var calls []string
+	supervisorLaunchctlRun = func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		supervisorLaunchdActive = oldActive
+		supervisorLaunchctlRun = oldRun
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := installSupervisorLaunchd(data, &stdout, &stderr); code != 1 {
+		t.Fatalf("installSupervisorLaunchd code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if len(calls) != 0 {
+		t.Fatalf("launchctl calls = %v, want none during transition guard", calls)
+	}
+	got, err := os.ReadFile(plistPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", plistPath, err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("guarded install rewrote plist:\n got: %q\nwant: %q", got, original)
+	}
+	for _, want := range []string{"bootout/bootstrap transition", "prior supervisor state", "--force"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestInstallSupervisorSystemdRefusesInactiveExistingServiceWithPriorSupervisorEvidence(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("systemd path only applies on linux")
+	}
+	homeDir := t.TempDir()
+	gcHome := filepath.Join(homeDir, ".gc")
+	currentBinary := filepath.Join(homeDir, "bin", "gc")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", gcHome)
+	setSupervisorInstallForceForTest(t, false)
+	stubSupervisorSystemctlUserAvailable(t, true)
+
+	data := supervisorInstallGuardServiceData(gcHome, currentBinary)
+	unitPath := supervisorSystemdServicePath()
+	original := []byte("[Unit]\nDescription=test\n\n[Service]\nExecStart=" + currentBinary + " supervisor run\n")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(supervisorLockPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(supervisorLockPath(), []byte("prior\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAlive := supervisorAliveHook
+	oldActive := supervisorSystemctlActive
+	oldRun := supervisorSystemctlRun
+	supervisorAliveHook = func() int { return 0 }
+	supervisorSystemctlActive = func(string) bool { return false }
+	var calls []string
+	supervisorSystemctlRun = func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	t.Cleanup(func() {
+		supervisorAliveHook = oldAlive
+		supervisorSystemctlActive = oldActive
+		supervisorSystemctlRun = oldRun
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := installSupervisorSystemd(data, &stdout, &stderr); code != 1 {
+		t.Fatalf("installSupervisorSystemd code = %d, want 1; stderr=%q", code, stderr.String())
+	}
+	if len(calls) != 0 {
+		t.Fatalf("systemctl calls = %v, want none during transition guard", calls)
+	}
+	got, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", unitPath, err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("guarded install rewrote unit:\n got: %q\nwant: %q", got, original)
+	}
+	for _, want := range []string{"bootout/bootstrap transition", "prior supervisor state", "--force"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+		}
+	}
+}
+
 func TestSupervisorSystemdExecStartBinaryParsesQuotedAndUnquotedPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name string
