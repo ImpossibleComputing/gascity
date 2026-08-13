@@ -178,6 +178,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 	if cfg == nil {
 		return snapshot
 	}
+	skipRuntimeObservations := suspended && !sessionSnapshotMayHaveLiveRuntime(statusSnapshot)
 
 	suspState, _ := loadSuspensionState(fsys.OSFS{}, cityPath)
 	suspendedRigs := buildEffectiveSuspendedRigNames(cfg, suspState)
@@ -219,13 +220,17 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 		}
 
 		if a.SupportsInstanceExpansion() {
+			poolDiscoveryProvider := sp
+			if skipRuntimeObservations {
+				poolDiscoveryProvider = nil
+			}
 			maxDisplay := fmt.Sprintf("max=%d", sp0.Max)
 			if sp0.Max < 0 {
 				maxDisplay = "max=unlimited"
 			}
 			scaleLabel := fmt.Sprintf("scaled (min=%d, %s)", sp0.Min, maxDisplay)
 			headerShown := false
-			for _, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, snapshot.CityName, cfg.Workspace.SessionTemplate, sp) {
+			for _, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, snapshot.CityName, cfg.Workspace.SessionTemplate, poolDiscoveryProvider) {
 				target := statusObservationTargetForIdentity(statusSnapshot, snapshot.CityName, qualifiedInstance, cfg.Workspace.SessionTemplate)
 				_, instanceName := config.ParseQualifiedName(qualifiedInstance)
 				row := cityStatusAgentRow{
@@ -264,12 +269,17 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 
 	// Phase 2: fan out runtime observations across the worker pool. This is
 	// the long pole on multi-rig cities; running the probes serially used to
-	// dominate gc status wall time.
+	// dominate gc status wall time. A fully suspended city with no active-ish
+	// session bead cannot have a live managed tmux server; skip those probes so
+	// dormant cities do not spam default-socket/no-server diagnostics.
 	targets := make([]statusObservationTarget, len(plans))
 	for i, p := range plans {
 		targets[i] = p.target
 	}
-	observations := observeStatusTargetsParallel(sp, cfg, cityPath, store, targets, stderr)
+	observations := make([]worker.LiveObservation, len(targets))
+	if !skipRuntimeObservations {
+		observations = observeStatusTargetsParallel(sp, cfg, cityPath, store, targets, stderr)
+	}
 
 	if statusProviderPartial(sp) {
 		snapshot.Partial = true

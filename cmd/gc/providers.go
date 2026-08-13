@@ -58,12 +58,12 @@ func sessionProviderContextForCity(cfg *config.City, cityPath, providerOverride 
 		providerName: providerOverride,
 		cfg:          cfg,
 		cityPath:     cityPath,
+		cityName:     loadedCityName(cfg, cityPath),
 	}
 	if cfg == nil {
 		return ctx
 	}
 	ctx.sc = cfg.Session
-	ctx.cityName = loadedCityName(cfg, cityPath)
 	ctx.agents = cfg.Agents
 	ctx.sessionTemplate = cfg.Workspace.SessionTemplate
 	if ctx.providerName == "" {

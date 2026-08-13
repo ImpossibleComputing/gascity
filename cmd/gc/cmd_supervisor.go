@@ -1234,10 +1234,64 @@ func notifySdState(stderr io.Writer, state string) {
 	}
 }
 
+// supervisorNofileLimit is intentionally raised by the supervisor process
+// itself on macOS. launchd user LaunchAgents can report plist
+// NumberOfFiles limits while still spawning children with the default 10k
+// soft cap; self-raising before watcher/runtime setup is the durable path.
+var (
+	supervisorReadDarwinMaxfilesperproc = readDarwinMaxfilesperproc
+	supervisorGetrlimit                 = syscall.Getrlimit
+	supervisorSetrlimit                 = syscall.Setrlimit
+)
+
+func readDarwinMaxfilesperproc() (uint64, error) {
+	out, err := exec.Command("/usr/sbin/sysctl", "-n", "kern.maxfilesperproc").Output()
+	if err != nil {
+		return 0, err
+	}
+	limit, err := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if limit == 0 {
+		return 0, fmt.Errorf("kern.maxfilesperproc returned zero")
+	}
+	return limit, nil
+}
+
+func raiseSupervisorNofileLimit(stderr io.Writer) {
+	if supervisorRuntimeGOOS != "darwin" {
+		return
+	}
+	desired, err := supervisorReadDarwinMaxfilesperproc()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: reading kern.maxfilesperproc for RLIMIT_NOFILE: %v\n", err) //nolint:errcheck
+		return
+	}
+	var current syscall.Rlimit
+	if err := supervisorGetrlimit(syscall.RLIMIT_NOFILE, &current); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: reading RLIMIT_NOFILE: %v\n", err) //nolint:errcheck
+		return
+	}
+	if current.Cur >= desired && current.Max >= desired {
+		return
+	}
+	next := current
+	next.Cur = desired
+	next.Max = desired
+	if err := supervisorSetrlimit(syscall.RLIMIT_NOFILE, &next); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: raising RLIMIT_NOFILE to %d failed: %v (current soft=%d hard=%d)\n", desired, err, current.Cur, current.Max) //nolint:errcheck
+		return
+	}
+	fmt.Fprintf(stderr, "gc supervisor: raised RLIMIT_NOFILE soft=%d hard=%d (was soft=%d hard=%d)\n", next.Cur, next.Max, current.Cur, current.Max) //nolint:errcheck
+}
+
 // runSupervisor is the main supervisor loop. It acquires the lock,
 // starts a control socket, reads the registry, starts CityRuntimes,
 // and runs until canceled.
 func runSupervisor(stdout, stderr io.Writer) int {
+	raiseSupervisorNofileLimit(stderr)
+
 	if pid := supervisorAlive(); pid != 0 {
 		fmt.Fprintf(stderr, "gc supervisor: supervisor already running (PID %d)\n", pid) //nolint:errcheck
 		return 1

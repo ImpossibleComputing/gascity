@@ -137,6 +137,8 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 	partialErrors := append([]string(nil), sessionSnapshot.partialErrors...)
 
 	citySt, _ := suspensionstate.Load(fsys.OSFS{}, s.state.CityPath())
+	citySuspended := suspensionstate.EffectiveCitySuspended(citySt, cfg.Workspace.EffectiveSuspendedOnStart())
+	skipRuntimeStatusProbes := citySuspended && !statusSessionSnapshotMayHaveLiveRuntime(sessionSnapshot)
 
 	// Count agents by state and collect per-agent detail rows in a single
 	// pass. Pool expansion emits one detail row per instance with a
@@ -159,7 +161,11 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 		if rigName != "" {
 			scope = "rig"
 		}
-		expanded := expandAgent(a, cityName, sessTmpl, sp)
+		expansionSP := sp
+		if skipRuntimeStatusProbes {
+			expansionSP = nil
+		}
+		expanded := expandAgent(a, cityName, sessTmpl, expansionSP)
 		expanded = appendUnlimitedPoolSessionBeads(expanded, a, cityName, sessTmpl, sessionSnapshot)
 		isPool := len(expanded) > 1 || a.SupportsInstanceExpansion()
 		groupName := a.QualifiedName()
@@ -171,7 +177,10 @@ func (s *Server) buildStatusBody(ctx context.Context, lite bool) StatusBody {
 			}
 			sessName := agentSessionName(cityName, ea.qualifiedName, sessTmpl)
 			info, hasInfo := sessionSnapshot.bySessionName[sessName]
-			running := statusProviderRunning(sp, sessName)
+			running := false
+			if !skipRuntimeStatusProbes {
+				running = statusProviderRunning(sp, sessName)
+			}
 			if running {
 				rawRunning++
 			}
@@ -759,6 +768,19 @@ func statusSessionState(b beads.Bead) session.State {
 	default:
 		return state
 	}
+}
+
+func statusSessionSnapshotMayHaveLiveRuntime(snapshot statusSessionSnapshot) bool {
+	if len(snapshot.partialErrors) > 0 {
+		return true
+	}
+	for _, info := range snapshot.bySessionName {
+		switch info.state {
+		case "", session.StateActive, session.StateAwake, session.StateStartPending, session.StateCreating, session.StateDraining, session.StateQuarantined:
+			return true
+		}
+	}
+	return false
 }
 
 func statusProviderRunning(sp interface{ IsRunning(string) bool }, sessionName string) bool {

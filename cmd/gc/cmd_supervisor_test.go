@@ -6844,3 +6844,97 @@ func TestRunSupervisorNoWarningForLowAPIPort(t *testing.T) {
 		t.Errorf("stdout = %q, want API listening message for low port", stdout.String())
 	}
 }
+
+func TestRaiseSupervisorNofileLimitDarwinSetsKernelLimit(t *testing.T) {
+	oldGOOS := supervisorRuntimeGOOS
+	oldRead := supervisorReadDarwinMaxfilesperproc
+	oldGet := supervisorGetrlimit
+	oldSet := supervisorSetrlimit
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorReadDarwinMaxfilesperproc = oldRead
+		supervisorGetrlimit = oldGet
+		supervisorSetrlimit = oldSet
+	})
+
+	supervisorRuntimeGOOS = "darwin"
+	supervisorReadDarwinMaxfilesperproc = func() (uint64, error) { return 245760, nil }
+	supervisorGetrlimit = func(resource int, rlim *syscall.Rlimit) error {
+		if resource != syscall.RLIMIT_NOFILE {
+			t.Fatalf("Getrlimit resource = %d, want RLIMIT_NOFILE", resource)
+		}
+		*rlim = syscall.Rlimit{Cur: 10000, Max: 10000}
+		return nil
+	}
+	var set syscall.Rlimit
+	setCalled := false
+	supervisorSetrlimit = func(resource int, rlim *syscall.Rlimit) error {
+		if resource != syscall.RLIMIT_NOFILE {
+			t.Fatalf("Setrlimit resource = %d, want RLIMIT_NOFILE", resource)
+		}
+		set = *rlim
+		setCalled = true
+		return nil
+	}
+
+	var stderr bytes.Buffer
+	raiseSupervisorNofileLimit(&stderr)
+	if !setCalled {
+		t.Fatal("Setrlimit was not called")
+	}
+	if set.Cur != 245760 || set.Max != 245760 {
+		t.Fatalf("Setrlimit = soft %d hard %d, want 245760/245760", set.Cur, set.Max)
+	}
+	if !strings.Contains(stderr.String(), "raised RLIMIT_NOFILE") {
+		t.Fatalf("stderr = %q, want raised message", stderr.String())
+	}
+}
+
+func TestRaiseSupervisorNofileLimitSkipsNonDarwin(t *testing.T) {
+	oldGOOS := supervisorRuntimeGOOS
+	oldRead := supervisorReadDarwinMaxfilesperproc
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorReadDarwinMaxfilesperproc = oldRead
+	})
+
+	supervisorRuntimeGOOS = "linux"
+	called := false
+	supervisorReadDarwinMaxfilesperproc = func() (uint64, error) {
+		called = true
+		return 0, errors.New("should not be called")
+	}
+
+	var stderr bytes.Buffer
+	raiseSupervisorNofileLimit(&stderr)
+	if called {
+		t.Fatal("read kern.maxfilesperproc called on non-darwin")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want no output", stderr.String())
+	}
+}
+
+func TestRaiseSupervisorNofileLimitWarnsOnSetFailure(t *testing.T) {
+	oldGOOS := supervisorRuntimeGOOS
+	oldRead := supervisorReadDarwinMaxfilesperproc
+	oldGet := supervisorGetrlimit
+	oldSet := supervisorSetrlimit
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorReadDarwinMaxfilesperproc = oldRead
+		supervisorGetrlimit = oldGet
+		supervisorSetrlimit = oldSet
+	})
+
+	supervisorRuntimeGOOS = "darwin"
+	supervisorReadDarwinMaxfilesperproc = func() (uint64, error) { return 245760, nil }
+	supervisorGetrlimit = func(int, *syscall.Rlimit) error { return nil }
+	supervisorSetrlimit = func(int, *syscall.Rlimit) error { return errors.New("denied") }
+
+	var stderr bytes.Buffer
+	raiseSupervisorNofileLimit(&stderr)
+	if !strings.Contains(stderr.String(), "raising RLIMIT_NOFILE to 245760 failed") {
+		t.Fatalf("stderr = %q, want Setrlimit warning", stderr.String())
+	}
+}

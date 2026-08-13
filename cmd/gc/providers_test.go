@@ -1100,6 +1100,30 @@ func TestStatusSessionProviderSkipsSessionSnapshot(t *testing.T) {
 	}
 }
 
+func TestStatusSessionProviderWithoutConfigUsesCityPathName(t *testing.T) {
+	oldBuild := buildSessionProviderByName
+	t.Cleanup(func() { buildSessionProviderByName = oldBuild })
+
+	var gotCityName, gotCityPath string
+	buildSessionProviderByName = func(_ *config.City, _ string, _ config.SessionConfig, cityName, cityPath string) (runtime.Provider, error) {
+		gotCityName = cityName
+		gotCityPath = cityPath
+		return runtime.NewFake(), nil
+	}
+
+	cityPath := filepath.Join(t.TempDir(), "gt")
+	sp := newStatusSessionProviderForCityWithSnapshot(nil, cityPath, nil)
+	if sp == nil {
+		t.Fatal("newStatusSessionProviderForCityWithSnapshot() = nil")
+	}
+	if gotCityName != "gt" {
+		t.Fatalf("cityName = %q, want fallback basename %q so tmux uses -L <city>", gotCityName, "gt")
+	}
+	if gotCityPath != cityPath {
+		t.Fatalf("cityPath = %q, want %q", gotCityPath, cityPath)
+	}
+}
+
 func TestStatusSessionProviderUsesProvidedSnapshotToWrapObservedACPSessions(t *testing.T) {
 	oldBuild := buildSessionProviderByName
 	t.Cleanup(func() { buildSessionProviderByName = oldBuild })

@@ -77,6 +77,35 @@ func TestCityStatusSnapshotNilConfigUsesCityPathName(t *testing.T) {
 	}
 }
 
+func TestCityStatusSuspendedCityWithoutLiveRuntimeSkipsRuntimeObservation(t *testing.T) {
+	oldObserve := observeSessionTargetForStatus
+	t.Cleanup(func() { observeSessionTargetForStatus = oldObserve })
+
+	called := 0
+	observeSessionTargetForStatus = func(string, beads.Store, runtime.Provider, *config.City, string) (worker.LiveObservation, error) {
+		called++
+		return worker.LiveObservation{Running: true}, nil
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "city", SuspendedOnStart: true},
+		Agents:    []config.Agent{{Name: "mayor", MaxActiveSessions: intPtr(1)}},
+	}
+	snapshot := collectCityStatusSnapshot(runtime.NewFake(), cfg, filepath.Join(t.TempDir(), "city"), beads.NewMemStore(), io.Discard)
+	if called != 0 {
+		t.Fatalf("runtime observations = %d, want 0 for suspended city with no active-ish sessions", called)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("agents = %d, want 1", len(snapshot.Agents))
+	}
+	if snapshot.Agents[0].Agent.Running {
+		t.Fatal("agent running = true, want false when runtime observation is skipped")
+	}
+	if !snapshot.Suspended {
+		t.Fatal("city suspended = false, want true from workspace suspension")
+	}
+}
+
 func TestCityStatusJSONUsesEmptyCollectionsWhenEmpty(t *testing.T) {
 	status := cityStatusJSONFromSnapshot(cityStatusSnapshot{CityName: "city"}, StatusSummaryJSON{})
 	if status.Agents == nil {
