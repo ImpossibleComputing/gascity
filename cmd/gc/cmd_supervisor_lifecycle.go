@@ -1020,7 +1020,7 @@ type supervisorServiceData struct {
 	// LaunchdNumberOfFilesLimit is written to SoftResourceLimits and
 	// HardResourceLimits on macOS so launchd does not silently lower the
 	// supervisor's FD headroom below the host kern.maxfilesperproc value.
-	LaunchdNumberOfFilesLimit int
+	LaunchdNumberOfFilesLimit uint64
 	SafeName                  string
 	Path                      string
 	ExtraEnv                  []supervisorServiceEnvVar
@@ -1051,7 +1051,7 @@ func buildSupervisorServiceData() (*supervisorServiceData, error) {
 	if supervisor.UsesIsolatedGCHomeOverride() {
 		xdgRuntimeDir = ""
 	}
-	launchdNumberOfFilesLimit := 0
+	var launchdNumberOfFilesLimit uint64
 	if supervisorRuntimeGOOS == "darwin" {
 		limit, err := supervisorDarwinMaxfilesperproc()
 		if err != nil {
@@ -1073,22 +1073,6 @@ func buildSupervisorServiceData() (*supervisorServiceData, error) {
 		ExtraEnv:                  supervisorServiceExtraEnv(),
 		PortInUseExitCode:         supervisorExitCodePortInUse,
 	}, nil
-}
-
-func readDarwinMaxfilesperproc() (int, error) {
-	out, err := exec.Command("/usr/sbin/sysctl", "-n", "kern.maxfilesperproc").Output()
-	if err != nil {
-		return 0, err
-	}
-	raw := strings.TrimSpace(string(out))
-	limit, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("parsing sysctl output %q: %w", raw, err)
-	}
-	if limit <= 0 {
-		return 0, fmt.Errorf("sysctl returned non-positive limit %d", limit)
-	}
-	return limit, nil
 }
 
 const (

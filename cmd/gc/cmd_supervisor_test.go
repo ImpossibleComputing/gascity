@@ -406,7 +406,7 @@ func TestBuildSupervisorServiceDataReadsDarwinMaxfilesperproc(t *testing.T) {
 	oldGOOS := supervisorRuntimeGOOS
 	oldRead := supervisorDarwinMaxfilesperproc
 	supervisorRuntimeGOOS = "darwin"
-	supervisorDarwinMaxfilesperproc = func() (int, error) { return 245760, nil }
+	supervisorDarwinMaxfilesperproc = func() (uint64, error) { return 245760, nil }
 	t.Cleanup(func() {
 		supervisorRuntimeGOOS = oldGOOS
 		supervisorDarwinMaxfilesperproc = oldRead
