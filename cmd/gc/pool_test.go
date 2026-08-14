@@ -394,6 +394,14 @@ func TestDiscoverPoolInstancesUnlimited(t *testing.T) {
 	}
 }
 
+func TestDiscoverPoolInstancesUnlimitedWithoutProviderReturnsNil(t *testing.T) {
+	pool := scaleParams{Min: 0, Max: -1}
+	instances := discoverPoolInstances("worker", "", pool, nil, "city", "", nil)
+	if len(instances) != 0 {
+		t.Fatalf("instances = %v, want none when runtime provider is unavailable", instances)
+	}
+}
+
 func TestDiscoverPoolInstancesUnlimitedFailsClosedOnPartialResults(t *testing.T) {
 	sp := &partialListPoolProvider{
 		Fake:    runtime.NewFake(),

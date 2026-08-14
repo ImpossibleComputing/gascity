@@ -661,6 +661,26 @@ func TestBuildStatusBodyFullIncludesExpensiveBlocks(t *testing.T) {
 	}
 }
 
+func TestBuildStatusBodySuspendedCityWithoutLiveRuntimeSkipsRuntimeProbe(t *testing.T) {
+	state := newFakeState(t)
+	state.cfg.Workspace.SuspendedOnStart = true
+	state.cityBeadStore = beads.NewMemStore()
+	s := &Server{state: state}
+
+	body := s.buildStatusBody(context.Background(), true)
+	for _, call := range state.sp.Calls {
+		if call.Method == "IsRunning" {
+			t.Fatalf("unexpected runtime IsRunning probe for suspended city with no active-ish sessions: %+v", call)
+		}
+	}
+	if body.Agents.Running != 0 {
+		t.Fatalf("running agents = %d, want 0", body.Agents.Running)
+	}
+	if body.Running != 0 {
+		t.Fatalf("legacy running count = %d, want 0", body.Running)
+	}
+}
+
 // TestBuildStatusBodyLiteOmitsExpensiveBlocks verifies the lite variant drops
 // the three expensive per-request blocks while keeping the cheap fleet
 // overview (agent/rig counts) intact.

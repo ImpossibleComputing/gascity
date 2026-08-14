@@ -1880,6 +1880,19 @@ func supervisorLaunchdOppositeDomainConflict(data *supervisorServiceData) (strin
 	return "", false
 }
 
+func supervisorPriorInstanceEvidence() bool {
+	_, err := os.Stat(supervisorLockPath())
+	return err == nil
+}
+
+func refuseSupervisorInstallDuringTransition(kind, path string, active bool, stderr io.Writer) bool {
+	if supervisorInstallForce || active || supervisorAliveHook() != 0 || !supervisorPriorInstanceEvidence() {
+		return false
+	}
+	fmt.Fprintf(stderr, "gc supervisor install: existing %s %q is installed, but the supervisor control socket is unavailable, the service manager reports it inactive, and prior supervisor state exists at %s. A supervisor bootout/bootstrap transition may be active or just completed; refusing to install to avoid colliding with an operator-owned transition. Retry after deploy-done or pass --force to override.\n", kind, path, supervisorLockPath()) //nolint:errcheck // best-effort stderr
+	return true
+}
+
 func installSupervisorLaunchd(data *supervisorServiceData, stdout, stderr io.Writer) int {
 	sweepStaleIsolatedSupervisorServices(stderr)
 	if data.LaunchdSystem {
@@ -1921,6 +1934,9 @@ func installSupervisorLaunchd(data *supervisorServiceData, stdout, stderr io.Wri
 				path, existingBinary, data.GCPath)
 			return 1
 		}
+	}
+	if hadCurrent && refuseSupervisorInstallDuringTransition("launchd plist", path, supervisorLaunchdActive(data.LaunchdLabel), stderr) {
+		return 1
 	}
 	if contentUnchanged && supervisorAliveHook() != 0 {
 		fmt.Fprintf(stdout, "Installed launchd service: %s\n", path) //nolint:errcheck // best-effort stdout
@@ -2102,6 +2118,9 @@ func installSupervisorSystemd(data *supervisorServiceData, stdout, stderr io.Wri
 	}
 	contentChanged := string(existing) != content
 	active := supervisorSystemctlActive(service)
+	if hadCurrent && refuseSupervisorInstallDuringTransition("systemd unit", path, active, stderr) {
+		return 1
+	}
 	if contentChanged && active {
 		pid, ready, err := supervisorRunningPreserveSignalReady()
 		if err != nil {

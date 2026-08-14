@@ -449,6 +449,9 @@ func discoverPoolInstances(agentName, agentDir string, sp0 scaleParams, a *confi
 	}
 
 	// Unlimited pool: discover running instances via session prefix.
+	if sp == nil {
+		return nil
+	}
 	// TODO(Phase 2): This uses legacy SessionNameFor for prefix matching.
 	// When bead-derived session names ("s-{beadID}") are active, this prefix
 	// match will fail. Migrate to bead store query by template metadata.
