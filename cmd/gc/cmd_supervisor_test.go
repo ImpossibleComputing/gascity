@@ -331,12 +331,13 @@ func TestReloadSupervisorFallsBackToDefaultHomeSocket(t *testing.T) {
 
 func TestRenderSupervisorLaunchdTemplate(t *testing.T) {
 	data := &supervisorServiceData{
-		GCPath:        "/usr/local/bin/gc",
-		LogPath:       "/home/user/.gc/supervisor.log",
-		GCHome:        "/home/user/.gc",
-		XDGRuntimeDir: "/tmp/gc-run",
-		LaunchdLabel:  defaultSupervisorLaunchdLabel,
-		Path:          "/usr/local/bin:/usr/bin:/bin",
+		GCPath:                    "/usr/local/bin/gc",
+		LogPath:                   "/home/user/.gc/supervisor.log",
+		GCHome:                    "/home/user/.gc",
+		XDGRuntimeDir:             "/tmp/gc-run",
+		LaunchdLabel:              defaultSupervisorLaunchdLabel,
+		LaunchdNumberOfFilesLimit: 245760,
+		Path:                      "/usr/local/bin:/usr/bin:/bin",
 		ExtraEnv: []supervisorServiceEnvVar{
 			{Name: "ANTHROPIC_API_KEY", Value: `sk-&<"'>`},
 			{Name: "OPENAI_API_KEY", Value: "sk-openai-123"},
@@ -364,6 +365,10 @@ func TestRenderSupervisorLaunchdTemplate(t *testing.T) {
 		"<string>sk-openai-123</string>",
 		"<key>GC_SUPERVISOR_PRESERVE_SESSIONS_ON_SIGNAL</key>",
 		"<string>1</string>",
+		"<key>SoftResourceLimits</key>",
+		"<key>HardResourceLimits</key>",
+		"<key>NumberOfFiles</key>",
+		"<integer>245760</integer>",
 	} {
 		if !strings.Contains(content, check) {
 			t.Fatalf("launchd template missing %q", check)
@@ -388,6 +393,44 @@ func TestRenderSupervisorLaunchdTemplateUsesPreserveEnvFromData(t *testing.T) {
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("launchd template missing preserve env %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestBuildSupervisorServiceDataReadsDarwinMaxfilesperproc(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", filepath.Join(homeDir, ".gc"))
+	t.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+
+	oldGOOS := supervisorRuntimeGOOS
+	oldRead := supervisorDarwinMaxfilesperproc
+	supervisorRuntimeGOOS = "darwin"
+	supervisorDarwinMaxfilesperproc = func() (uint64, error) { return 245760, nil }
+	t.Cleanup(func() {
+		supervisorRuntimeGOOS = oldGOOS
+		supervisorDarwinMaxfilesperproc = oldRead
+	})
+
+	data, err := buildSupervisorServiceData()
+	if err != nil {
+		t.Fatalf("buildSupervisorServiceData: %v", err)
+	}
+	if data.LaunchdNumberOfFilesLimit != 245760 {
+		t.Fatalf("LaunchdNumberOfFilesLimit = %d, want 245760", data.LaunchdNumberOfFilesLimit)
+	}
+
+	content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<key>SoftResourceLimits</key>",
+		"<key>HardResourceLimits</key>",
+		"<integer>245760</integer>",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("launchd template missing %q:\n%s", want, content)
 		}
 	}
 }
