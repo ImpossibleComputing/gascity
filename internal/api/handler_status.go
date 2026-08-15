@@ -41,6 +41,19 @@ var statusStoreReadTimeout = time.Second
 // change. Var, not const, so tests can pin index-driven invalidation behavior.
 var statusResponseTTLFloor = 3 * time.Second
 
+// statusResponseBuildTimeout is the whole-handler budget for constructing a
+// cold /status response. Individual store/mail reads have their own shorter
+// per-backend guards, but the dashboard must never hang indefinitely when an
+// unanticipated status sub-probe blocks under store pressure. On timeout the
+// handler serves a recent cached response if one exists, otherwise a minimal
+// partial status body.
+var statusResponseBuildTimeout = 3 * time.Second
+
+// statusResponseStaleFallbackMaxAge is wider than statusResponseTTLFloor:
+// it is only used after a live rebuild times out, so a boundedly stale status
+// view is better than an HTTP 000 / dashboard hang.
+var statusResponseStaleFallbackMaxAge = 30 * time.Second
+
 // statusWorkExcludedTypes are bead types counted as infrastructure, not
 // work, by the status endpoint's work-count buckets.
 var statusWorkExcludedTypes = []string{"message", "convoy", "convergence"}
@@ -110,12 +123,66 @@ func (s *Server) humaHandleStatus(ctx context.Context, input *StatusInput) (*Ind
 		}
 	}
 
-	resp := s.buildStatusBody(ctx, input.Lite)
-	if !blocking {
+	resp, timedOut := s.buildStatusBodyWithDeadline(ctx, input.Lite)
+	if timedOut {
+		detail := fmt.Sprintf("status: live status rebuild timed out after %s", statusResponseBuildTimeout)
+		if !blocking {
+			if body, ok := cachedResponseWithinAgeAs[StatusBody](s, cacheKey, statusResponseStaleFallbackMaxAge); ok {
+				return &IndexOutput[StatusBody]{Index: index, CacheAgeS: cacheAgeSeconds(store), Body: markStatusBodyPartial(body, detail+"; serving cached status")}, nil
+			}
+		}
+		resp = s.statusTimeoutPartialBody(detail)
+	} else if !blocking {
 		s.storeResponse(cacheKey, bucket, resp)
 	}
 
 	return &IndexOutput[StatusBody]{Index: index, CacheAgeS: cacheAgeSeconds(store), Body: resp}, nil
+}
+
+func (s *Server) buildStatusBodyWithDeadline(ctx context.Context, lite bool) (StatusBody, bool) {
+	if statusResponseBuildTimeout <= 0 {
+		return s.buildStatusBody(ctx, lite), false
+	}
+	buildCtx, cancel := context.WithTimeout(ctx, statusResponseBuildTimeout)
+	defer cancel()
+	done := make(chan StatusBody, 1)
+	go func() {
+		done <- s.buildStatusBody(buildCtx, lite)
+	}()
+	select {
+	case resp := <-done:
+		return resp, false
+	case <-buildCtx.Done():
+		return StatusBody{}, true
+	}
+}
+
+func markStatusBodyPartial(body StatusBody, detail string) StatusBody {
+	body.Partial = true
+	body.PartialErrors = append(body.PartialErrors, detail)
+	return body
+}
+
+func (s *Server) statusTimeoutPartialBody(detail string) StatusBody {
+	cfg := s.state.Config()
+	citySt, _ := suspensionstate.Load(fsys.OSFS{}, s.state.CityPath())
+	uptime := int(time.Since(s.state.StartedAt()).Seconds())
+	body := StatusBody{
+		Name:          s.state.CityName(),
+		Path:          s.state.CityPath(),
+		Version:       s.state.Version(),
+		UptimeSec:     uptime,
+		Partial:       true,
+		PartialErrors: []string{detail},
+	}
+	if cfg != nil {
+		body.Suspended = suspensionstate.EffectiveCitySuspended(citySt, cfg.Workspace.EffectiveSuspendedOnStart())
+		body.AgentCount = len(cfg.Agents)
+		body.RigCount = len(cfg.Rigs)
+		body.Agents.Total = len(cfg.Agents)
+		body.Rigs.Total = len(cfg.Rigs)
+	}
+	return body
 }
 
 // buildStatusBody constructs the status response body. ctx bounds the

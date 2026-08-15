@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -799,4 +800,115 @@ func statusPartialErrorsContain(errors []string, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestHandleStatusBuildTimeoutReturnsPartialWithoutHanging(t *testing.T) {
+	oldBuildTimeout := statusResponseBuildTimeout
+	statusResponseBuildTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { statusResponseBuildTimeout = oldBuildTimeout })
+
+	state := newFakeState(t)
+	block := make(chan struct{})
+	srv := &Server{
+		state:                  state,
+		componentVersionsProbe: func() componentVersions { return componentVersions{} },
+		storeHealthComputer: func(context.Context) *StatusStoreHealth {
+			<-block
+			return &StatusStoreHealth{}
+		},
+	}
+	t.Cleanup(func() { close(block) })
+	h := newTestCityHandlerWith(t, state, srv)
+
+	start := time.Now()
+	req := httptest.NewRequest("GET", cityURL(state, "/status"), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("/status blocked for %s; want bounded by statusResponseBuildTimeout", elapsed)
+	}
+	var resp statusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Partial {
+		t.Fatalf("Partial = false, want timeout partial; resp=%+v", resp)
+	}
+	if !statusPartialErrorsContain(resp.PartialErrors, "live status rebuild timed out") {
+		t.Fatalf("PartialErrors = %#v, want timeout diagnostic", resp.PartialErrors)
+	}
+	if resp.AgentCount != 1 || resp.RigCount != 1 {
+		t.Fatalf("counts = agents:%d rigs:%d, want config-level counts 1/1", resp.AgentCount, resp.RigCount)
+	}
+}
+
+func TestHandleStatusBuildTimeoutServesCachedStatus(t *testing.T) {
+	oldBucketTTL := timeBucketResponseCacheTTL
+	oldFloor := statusResponseTTLFloor
+	oldBuildTimeout := statusResponseBuildTimeout
+	oldStaleMax := statusResponseStaleFallbackMaxAge
+	timeBucketResponseCacheTTL = time.Nanosecond
+	statusResponseTTLFloor = time.Nanosecond
+	statusResponseBuildTimeout = 20 * time.Millisecond
+	statusResponseStaleFallbackMaxAge = time.Minute
+	t.Cleanup(func() {
+		timeBucketResponseCacheTTL = oldBucketTTL
+		statusResponseTTLFloor = oldFloor
+		statusResponseBuildTimeout = oldBuildTimeout
+		statusResponseStaleFallbackMaxAge = oldStaleMax
+	})
+
+	state := newFakeState(t)
+	counter := &counterBeadStore{
+		Store:         beads.NewMemStore(),
+		t:             t,
+		counts:        map[string]int{"open": 2},
+		listForbidden: true,
+	}
+	state.stores["myrig"] = counter
+	block := make(chan struct{})
+	var blockStoreHealth atomic.Bool
+	srv := &Server{
+		state:                  state,
+		componentVersionsProbe: func() componentVersions { return componentVersions{} },
+		storeHealthComputer: func(context.Context) *StatusStoreHealth {
+			if blockStoreHealth.Load() {
+				<-block
+			}
+			return &StatusStoreHealth{Path: "/tmp/test-city"}
+		},
+	}
+	t.Cleanup(func() { close(block) })
+	h := newTestCityHandlerWith(t, state, srv)
+
+	first := getStatusFrom(t, h, state)
+	if first.Work.Open != 2 || first.Partial {
+		t.Fatalf("first response = %+v, want clean cached open=2", first)
+	}
+
+	// Force the handler past the normal bucket/floor cache checks so it attempts
+	// a live rebuild, then time that rebuild out. The wider stale-fallback cache
+	// should serve the last good body instead of hanging or returning empty data.
+	time.Sleep(time.Millisecond)
+	counter.counts["open"] = 7
+	blockStoreHealth.Store(true)
+	srv.storeHealthMu.Lock()
+	srv.storeHealthExpires = time.Now().Add(-time.Second)
+	srv.storeHealthMu.Unlock()
+
+	second := getStatusFrom(t, h, state)
+	if second.Work.Open != 2 {
+		t.Fatalf("second Work.Open = %d, want stale cached 2", second.Work.Open)
+	}
+	if !second.Partial {
+		t.Fatalf("second Partial = false, want cached-timeout partial marker; resp=%+v", second)
+	}
+	if !statusPartialErrorsContain(second.PartialErrors, "serving cached status") {
+		t.Fatalf("PartialErrors = %#v, want cached timeout diagnostic", second.PartialErrors)
+	}
 }
