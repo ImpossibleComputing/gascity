@@ -216,6 +216,7 @@
               "runbooks/worker-credential-isolation-phase2",
               "runbooks/worker-credential-authority-phase3",
               "runbooks/gws-auth-liveness-watchdog",
+              "runbooks/gws-file-backend-fleet-default",
               "runbooks/supervisor-isolation-feasibility-20260714"
             ]
           }
