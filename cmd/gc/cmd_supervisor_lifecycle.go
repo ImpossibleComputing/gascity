@@ -1548,6 +1548,13 @@ func supervisorLaunchdServiceDomain() string {
 	return "gui/" + strconv.Itoa(os.Getuid())
 }
 
+func supervisorLaunchdServiceDomainForDomain(system bool) string {
+	if system {
+		return "system"
+	}
+	return "gui/" + strconv.Itoa(os.Getuid())
+}
+
 func supervisorLaunchdServiceTargetForDomain(label string, system bool) string {
 	if label == "" {
 		label = supervisorLaunchdLabel()
