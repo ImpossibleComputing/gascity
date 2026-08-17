@@ -179,6 +179,32 @@ func (p *multiRecipientInboxMailProvider) InboxRecipients(recipients []string) (
 	return []mail.Message{{ID: "multi-1", To: strings.Join(recipients, ",")}}, nil
 }
 
+type routeAwareMailProvider struct {
+	multiRecipientInboxMailProvider
+	inboxRoutes         [][]string
+	countRoutes         [][]string
+	countRecipientCalls [][]string
+}
+
+func (p *routeAwareMailProvider) InboxRecipients(recipients []string) ([]mail.Message, error) {
+	return nil, fmt.Errorf("InboxRecipients(%v) should not be called when InboxRoutes is available", recipients)
+}
+
+func (p *routeAwareMailProvider) InboxRoutes(routes []string) ([]mail.Message, error) {
+	p.inboxRoutes = append(p.inboxRoutes, append([]string(nil), routes...))
+	return []mail.Message{{ID: "route-1", To: strings.Join(routes, ",")}}, nil
+}
+
+func (p *routeAwareMailProvider) CountRecipients(recipients []string) (int, int, error) {
+	p.countRecipientCalls = append(p.countRecipientCalls, append([]string(nil), recipients...))
+	return 0, 0, fmt.Errorf("CountRecipients(%v) should not be called when CountRoutes is available", recipients)
+}
+
+func (p *routeAwareMailProvider) CountRoutes(routes []string) (int, int, error) {
+	p.countRoutes = append(p.countRoutes, append([]string(nil), routes...))
+	return len(routes) + 10, len(routes), nil
+}
+
 type multiProviderFakeState struct {
 	*fakeState
 	providers map[string]mail.Provider
@@ -208,6 +234,50 @@ func TestMailInboxForRecipientsUsesMultiRecipientProvider(t *testing.T) {
 	want := []string{"sky", "mayor"}
 	if fmt.Sprint(mp.calls[0]) != fmt.Sprint(want) {
 		t.Fatalf("InboxRecipients recipients = %#v, want %#v", mp.calls[0], want)
+	}
+}
+
+func TestMailInboxForRecipientsPrefersResolvedRoutes(t *testing.T) {
+	mp := &routeAwareMailProvider{}
+
+	msgs, err := mailInboxForRecipients(mp, []string{"sky", "mayor", "sky"})
+	if err != nil {
+		t.Fatalf("mailInboxForRecipients: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].ID != "route-1" {
+		t.Fatalf("messages = %#v, want route result", msgs)
+	}
+	if len(mp.inboxRoutes) != 1 {
+		t.Fatalf("InboxRoutes calls = %d, want 1", len(mp.inboxRoutes))
+	}
+	want := []string{"sky", "mayor"}
+	if fmt.Sprint(mp.inboxRoutes[0]) != fmt.Sprint(want) {
+		t.Fatalf("InboxRoutes routes = %#v, want %#v", mp.inboxRoutes[0], want)
+	}
+	if len(mp.calls) != 0 {
+		t.Fatalf("InboxRecipients was called despite InboxRoutes: %#v", mp.calls)
+	}
+}
+
+func TestMailCountForRecipientsPrefersResolvedRoutes(t *testing.T) {
+	mp := &routeAwareMailProvider{}
+
+	total, unread, err := mailCountForRecipients(mp, []string{"sky", "mayor", "sky"})
+	if err != nil {
+		t.Fatalf("mailCountForRecipients: %v", err)
+	}
+	if total != 12 || unread != 2 {
+		t.Fatalf("count = (%d, %d), want (12, 2)", total, unread)
+	}
+	if len(mp.countRoutes) != 1 {
+		t.Fatalf("CountRoutes calls = %d, want 1", len(mp.countRoutes))
+	}
+	want := []string{"sky", "mayor"}
+	if fmt.Sprint(mp.countRoutes[0]) != fmt.Sprint(want) {
+		t.Fatalf("CountRoutes routes = %#v, want %#v", mp.countRoutes[0], want)
+	}
+	if len(mp.countRecipientCalls) != 0 {
+		t.Fatalf("CountRecipients was called despite CountRoutes: %#v", mp.countRecipientCalls)
 	}
 }
 

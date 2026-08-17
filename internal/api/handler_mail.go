@@ -292,8 +292,31 @@ func (s *Server) configuredMailRecipientAddress(store beads.Store, identifier st
 	return spec.Identity, true, nil
 }
 
+type routeMailInboxer interface {
+	InboxRoutes([]string) ([]mail.Message, error)
+}
+
+type routeMailCounter interface {
+	CountRoutes([]string) (int, int, error)
+}
+
 func mailInboxForRecipients(mp mail.Provider, recipients []string) ([]mail.Message, error) {
 	recipients = uniqueMailRecipients(recipients)
+	// Multiple recipients here means the API already expanded an operator
+	// target into concrete mailbox routes. Use the route-exact provider seam so
+	// beadmail does not repeat session-topology expansion before its targeted
+	// message query. A single recipient may still be an unresolved historical
+	// alias, so keep that on the provider-side expansion path.
+	if len(recipients) > 1 {
+		if inboxer, ok := mp.(routeMailInboxer); ok {
+			msgs, err := inboxer.InboxRoutes(recipients)
+			if err != nil {
+				return nil, err
+			}
+			mail.SortMessagesNewestFirst(msgs)
+			return msgs, nil
+		}
+	}
 	if inboxer, ok := mp.(mail.MultiRecipientInboxer); ok {
 		msgs, err := inboxer.InboxRecipients(recipients)
 		if err != nil {
@@ -334,6 +357,13 @@ func mailMessagesForRecipients(fetch func(string) ([]mail.Message, error), recip
 
 func mailCountForRecipients(mp mail.Provider, recipients []string) (int, int, error) {
 	recipients = uniqueMailRecipients(recipients)
+	// See mailInboxForRecipients: only already-expanded route sets bypass
+	// provider-side recipient expansion.
+	if len(recipients) > 1 {
+		if counter, ok := mp.(routeMailCounter); ok {
+			return counter.CountRoutes(recipients)
+		}
+	}
 	if counter, ok := mp.(interface {
 		CountRecipients([]string) (int, int, error)
 	}); ok {
