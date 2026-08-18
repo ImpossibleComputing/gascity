@@ -79,6 +79,12 @@ type PreflightResult struct {
 	// from DEGRADED to ELIGIBLE solely because identity_match independently
 	// PASSED while bd context was unreachable.
 	NativeEligibleViaIdentityFallback bool `json:"native_eligible_via_identity_fallback,omitempty"`
+	// NativeEligibleViaServerVerify records that the verdict was upgraded from
+	// DEGRADED to ELIGIBLE because a direct probe confirmed the Dolt backend is
+	// reachable in SERVER MODE while bd context was unreachable and identity_match
+	// could not confirm project_id — project identity is then re-verified
+	// fail-closed by beadslib at native-open time.
+	NativeEligibleViaServerVerify bool `json:"native_eligible_via_server_verify,omitempty"`
 }
 
 // NewPreflightResult returns result with all nested diagnostic details redacted.

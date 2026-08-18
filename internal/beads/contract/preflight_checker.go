@@ -41,6 +41,20 @@ type PreflightChecker struct {
 	// _project_id beadslib still verifies at open time — refusing to connect, and
 	// falling back to BdStore, on mismatch. Nil defaults to no deferral (Warn).
 	DeferIdentityToNativeOpen func(scope string) bool
+	// DoltServerReachable verifies, by a direct SQL probe to the configured Dolt
+	// server (host:port), that the scope's backend is reachable IN SERVER MODE
+	// with a responsive schema — a trivial SELECT 1 / schema-version query that
+	// succeeds only against a live server. It is the fail-closed evidence used to
+	// activate the native store when bd context is unreachable AND the direct
+	// root/plaintext identity probe cannot CONFIRM project_id (the metadata
+	// _project_id row is unset, or an endpoint the control-plane probe cannot
+	// authenticate): a TCP MySQL connection proves server mode — an embedded Dolt
+	// exposes no listener, so the probe cannot succeed against one — while
+	// beadslib still re-verifies project identity fail-closed at native-open time
+	// (verifyProjectIdentity), refusing to connect and dropping to BdStore on a
+	// mismatch. Nil, or a (false, _) / (_, non-nil error) return, yields no
+	// upgrade: the scope stays DEGRADED on the per-call BdStore.
+	DoltServerReachable func(scope string) (bool, error)
 	// BeadsLibraryVersion is the linked github.com/steveyegge/beads module
 	// version. Empty means infer it from build info.
 	BeadsLibraryVersion string
@@ -76,10 +90,32 @@ func (c PreflightChecker) Check(scope string) (PreflightResult, error) {
 	// project_id. That direct verification is stronger evidence than bd
 	// context's cross-check, so an inability to also cross-verify via bd's
 	// cwd-sensitive context command must not force the per-call bd fallback.
+	//
+	// When the identity_match check could not CONFIRM project_id (it WARNs
+	// rather than PASSes — the root/plaintext probe cannot read a _project_id the
+	// server has not been stamped with, and the scope is not an external endpoint
+	// that defers to native-open), the upgrade above does not fire. But an
+	// inability to read project_id is not evidence the native store cannot serve
+	// the scope: the property the degraded bd cross-checks were proxying is that
+	// the Dolt backend is reachable IN SERVER MODE with a live schema. So gc
+	// verifies exactly that, directly — a SELECT 1 / schema probe to the
+	// configured dolt server that can only answer in server mode — and, when it
+	// does, activates the native store, leaving beadslib to re-verify project
+	// identity fail-closed at native-open time. This never activates on an
+	// embedded Dolt, an unreachable server, or a genuine FAIL: the probe cannot
+	// succeed without a live server, and any FAIL (identity MISMATCH included) or
+	// any non-bd-context, non-identity WARN keeps the per-call bd fallback.
 	eligibleViaIdentityFallback := false
-	if verdict == PreflightVerdictDegraded && bdCtxErr != nil && degradedOnlyByUnreachableBDContext(checks) {
-		verdict = PreflightVerdictEligible
-		eligibleViaIdentityFallback = true
+	eligibleViaServerVerify := false
+	if verdict == PreflightVerdictDegraded && bdCtxErr != nil {
+		switch {
+		case degradedOnlyByUnreachableBDContext(checks):
+			verdict = PreflightVerdictEligible
+			eligibleViaIdentityFallback = true
+		case degradedOnlyByBDContextWithUnconfirmedIdentity(checks) && c.doltServerVerified(scope):
+			verdict = PreflightVerdictEligible
+			eligibleViaServerVerify = true
+		}
 	}
 	result := PreflightResult{
 		Verdict:                           verdict,
@@ -88,6 +124,7 @@ func (c PreflightChecker) Check(scope string) (PreflightResult, error) {
 		RepairSteps:                       preflightRepairSteps(checks),
 		NativeStoreEligible:               verdict == PreflightVerdictEligible,
 		NativeEligibleViaIdentityFallback: eligibleViaIdentityFallback,
+		NativeEligibleViaServerVerify:     eligibleViaServerVerify,
 	}
 	if verdict != PreflightVerdictEligible {
 		result.Fallback = PreflightFallbackBdStore
@@ -161,6 +198,19 @@ func (c PreflightChecker) readBDContext(scope string) (PreflightBDContext, error
 	ctx.DoltMode = strings.TrimSpace(ctx.DoltMode)
 	ctx.BDVersion = strings.TrimSpace(ctx.BDVersion)
 	return ctx, err
+}
+
+// doltServerVerified reports whether a direct probe confirmed the scope's Dolt
+// backend is reachable in server mode. It is deliberately conservative: a nil
+// reader, a false result, or any error all mean "not verified" so the caller
+// keeps the per-call bd fallback. Only a clean (true, nil) — a SELECT 1 / schema
+// probe that a live server answered — clears the native store for activation.
+func (c PreflightChecker) doltServerVerified(scope string) bool {
+	if c.DoltServerReachable == nil {
+		return false
+	}
+	ok, err := c.DoltServerReachable(scope)
+	return ok && err == nil
 }
 
 func (c PreflightChecker) checkBDContextAgreement(metadata preflightMetadata, ctx PreflightBDContext, err error) PreflightCheckResult {
@@ -443,6 +493,34 @@ func isBDContextDependentCheck(id PreflightCheckID) bool {
 	default:
 		return false
 	}
+}
+
+// degradedOnlyByBDContextWithUnconfirmedIdentity reports whether a DEGRADED
+// verdict is caused solely by unreachable-bd-context WARNs and, at most, an
+// identity_match WARN — the direct root/plaintext probe could not CONFIRM
+// project_id but found no MISMATCH. It is the gate for the direct server-mode
+// verification upgrade: identity is left to be re-proven fail-closed by
+// native-open, but every OTHER cause of the degrade must be a mere inability to
+// cross-verify via bd context. Any FAIL (an identity MISMATCH included), or any
+// WARN from a check that is neither bd-context-dependent nor identity_match,
+// makes it false so the per-call bd fallback is preserved. It is strictly weaker
+// than degradedOnlyByUnreachableBDContext (which additionally requires
+// identity_match to have PASSED), so callers try that stronger upgrade first and
+// only fall to this one — gated on a real server probe — when identity is merely
+// unconfirmed.
+func degradedOnlyByBDContextWithUnconfirmedIdentity(checks []PreflightCheckResult) bool {
+	for _, check := range checks {
+		switch check.State {
+		case PreflightCheckFail:
+			return false
+		case PreflightCheckWarn:
+			if isBDContextDependentCheck(check.ID) || check.ID == PreflightCheckIdentityMatch {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func preflightRepairSteps(checks []PreflightCheckResult) []PreflightRepairStep {
