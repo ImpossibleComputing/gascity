@@ -249,6 +249,172 @@ func TestPreflightWarnsWhenDatabaseIdentityUnavailable(t *testing.T) {
 	assertCheckState(t, result, PreflightCheckIdentityMatch, PreflightCheckWarn)
 }
 
+// unreachableBDContextDoltChecker builds a checker for a dolt scope whose
+// `bd context` cannot run (the non-git store root that motivates the whole
+// server-verify path). Callers set DatabaseProjectID / DoltServerReachable to
+// pick the identity + server-probe outcome under test.
+func unreachableBDContextDoltChecker(scope string) PreflightChecker {
+	fs := fsys.NewFake()
+	fs.Dirs[filepath.Join(scope, ".beads")] = true
+	fs.Files[filepath.Join(scope, ".beads", "metadata.json")] = []byte(`{
+		"backend": "dolt",
+		"dolt_mode": "server",
+		"dolt_database": "gascity",
+		"project_id": "gc-local"
+	}`)
+	return PreflightChecker{
+		FS:                  fs,
+		Provider:            "bd",
+		BeadsLibraryVersion: "1.0.4",
+		BDContext: func(string) (PreflightBDContext, error) {
+			return PreflightBDContext{}, errors.New("bd context unavailable: not a git repository")
+		},
+	}
+}
+
+// TestPreflightEligibleViaServerVerifyWhenIdentityUnconfirmed is the RED→GREEN
+// guard for the native-store restore: bd context is unreachable AND the direct
+// project_id probe cannot CONFIRM project_id (it WARNs — the server has no
+// _project_id row for the probe to read), so no identity-PASS upgrade is
+// available. A direct SELECT 1 probe nonetheless proves the Dolt backend is
+// reachable in SERVER MODE, which is the real safety property the bd
+// cross-checks proxy, so the scope is ELIGIBLE (native identity is re-verified
+// fail-closed at native-open). Before the fix this scope was INELIGIBLE
+// (DEGRADED → per-call bd).
+func TestPreflightEligibleViaServerVerifyWhenIdentityUnconfirmed(t *testing.T) {
+	scope := "/city"
+	checker := unreachableBDContextDoltChecker(scope)
+	// The project_id probe reaches nothing it can confirm project_id from.
+	checker.DatabaseProjectID = func(string) (string, bool, error) {
+		return "", false, nil
+	}
+	// ...but a direct SELECT 1 probe answers, which only a live SERVER-mode Dolt
+	// can do (an embedded Dolt exposes no listener).
+	checker.DoltServerReachable = func(string) (bool, error) {
+		return true, nil
+	}
+
+	result, err := checker.Check(scope)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	assertPreflightVerdict(t, result, PreflightVerdictEligible, true)
+	// The bd-context cross-checks and identity_match still WARN; the verdict is
+	// upgraded on the strength of the direct server-mode probe.
+	assertCheckState(t, result, PreflightCheckBDContextAgreement, PreflightCheckWarn)
+	assertCheckState(t, result, PreflightCheckDoltModeSafe, PreflightCheckWarn)
+	assertCheckState(t, result, PreflightCheckVersionCompat, PreflightCheckWarn)
+	assertCheckState(t, result, PreflightCheckIdentityMatch, PreflightCheckWarn)
+	if !result.NativeEligibleViaServerVerify {
+		t.Errorf("NativeEligibleViaServerVerify = false, want true on the server-verified upgrade")
+	}
+}
+
+// TestPreflightServerVerifyIsFailClosed pins the blast-radius crux: the direct
+// server-mode upgrade fires ONLY on a clean (true, nil) probe. A nil reader, an
+// unreachable server, a probe that declines to verify, or a late error all keep
+// the scope DEGRADED on the per-call bd store — the native store is never
+// activated against an embedded or unreachable Dolt.
+func TestPreflightServerVerifyIsFailClosed(t *testing.T) {
+	cases := []struct {
+		name  string
+		probe func(string) (bool, error)
+	}{
+		{name: "no probe configured", probe: nil},
+		{name: "server unreachable", probe: func(string) (bool, error) { return false, errors.New("dial dolt: connection refused") }},
+		{name: "server not verified", probe: func(string) (bool, error) { return false, nil }},
+		{name: "verified but late error", probe: func(string) (bool, error) { return true, errors.New("probe closed mid-verify") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := "/city"
+			checker := unreachableBDContextDoltChecker(scope)
+			checker.DatabaseProjectID = func(string) (string, bool, error) { return "", false, nil }
+			checker.DoltServerReachable = tc.probe
+
+			result, err := checker.Check(scope)
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			assertPreflightVerdict(t, result, PreflightVerdictDegraded, false)
+			if result.NativeEligibleViaServerVerify {
+				t.Errorf("NativeEligibleViaServerVerify = true, want false when the server probe did not cleanly verify")
+			}
+		})
+	}
+}
+
+// TestPreflightServerVerifyNeverOverridesGenuineFail proves a reachable server
+// cannot rescue a scope with a real blocker: a postgres backend gc does not
+// implement FAILs metadata_backend/contract_shape, so the verdict is BLOCKED and
+// the server-mode upgrade — which only ever acts on a DEGRADED verdict — never
+// runs.
+func TestPreflightServerVerifyNeverOverridesGenuineFail(t *testing.T) {
+	scope := "/city"
+	fs := fsys.NewFake()
+	fs.Dirs[filepath.Join(scope, ".beads")] = true
+	fs.Files[filepath.Join(scope, ".beads", "metadata.json")] = []byte(`{
+		"backend": "postgres",
+		"project_id": "gc-local"
+	}`)
+	checker := PreflightChecker{
+		FS:                  fs,
+		Provider:            "bd",
+		BeadsLibraryVersion: "1.0.4",
+		BDContext: func(string) (PreflightBDContext, error) {
+			return PreflightBDContext{}, errors.New("bd context unavailable: not a git repository")
+		},
+		DoltServerReachable: func(string) (bool, error) { return true, nil },
+	}
+
+	result, err := checker.Check(scope)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	assertPreflightVerdict(t, result, PreflightVerdictBlocked, false)
+	if result.NativeEligibleViaServerVerify {
+		t.Errorf("NativeEligibleViaServerVerify = true, want false when a genuine FAIL blocks the scope")
+	}
+}
+
+// TestPreflightServerVerifyStillBlocksOnIdentityMismatch guards the one identity
+// outcome that must never be deferred to native-open: a CONFIRMED project_id
+// MISMATCH is a genuine cross-project FAIL, so even a reachable server keeps the
+// scope BLOCKED. (An unconfirmed identity is a WARN and may defer; a mismatch is
+// a FAIL and may not.)
+func TestPreflightServerVerifyStillBlocksOnIdentityMismatch(t *testing.T) {
+	scope := "/city"
+	fs := fsys.NewFake()
+	fs.Dirs[filepath.Join(scope, ".beads")] = true
+	fs.Files[filepath.Join(scope, ".beads", "metadata.json")] = []byte(`{
+		"backend": "dolt",
+		"dolt_mode": "server",
+		"dolt_database": "gascity",
+		"project_id": "metadata-id"
+	}`)
+	checker := PreflightChecker{
+		FS:                  fs,
+		Provider:            "bd",
+		BeadsLibraryVersion: "1.0.4",
+		BDContext: func(string) (PreflightBDContext, error) {
+			return PreflightBDContext{}, errors.New("bd context unavailable: not a git repository")
+		},
+		DatabaseProjectID:   func(string) (string, bool, error) { return "database-id", true, nil },
+		DoltServerReachable: func(string) (bool, error) { return true, nil },
+	}
+
+	result, err := checker.Check(scope)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	assertPreflightVerdict(t, result, PreflightVerdictBlocked, false)
+	assertCheckState(t, result, PreflightCheckIdentityMatch, PreflightCheckFail)
+	if result.NativeEligibleViaServerVerify {
+		t.Errorf("NativeEligibleViaServerVerify = true, want false on a confirmed identity mismatch")
+	}
+}
+
 func TestPreflightUnreadableScopeReturnsError(t *testing.T) {
 	scope := "/city"
 	fs := fsys.NewFake()
