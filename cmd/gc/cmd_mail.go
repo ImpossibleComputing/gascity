@@ -558,20 +558,31 @@ func routeMailCheck(_ string, args []string, inject bool, hookFormat string, c *
 	}
 	if inject {
 		if c != nil {
+			if mailCheckBackoffShouldSkip(recipient) {
+				// Store is in a known-slow backoff window: skip the read to stop
+				// the fleet-wide self-DoS, and re-emit the cached degraded notice.
+				// The window elapsing lets the next check probe for recovery.
+				logRoute(stderr, cmdName, "backoff", "store-slow-skip")
+				_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", formatMailCheckDegradedNotice())
+				return 0
+			}
 			cr, err := c.ListMailInbox(recipient, "")
 			if err == nil {
 				if mailListHasPartial(cr.Body) {
 					logRoute(stderr, cmdName, "api", "error")
 					notice := formatMailCheckPartialDegradedNotice()
 					if mailListHasStoreSlowPartial(cr.Body) {
+						mailCheckBackoffRecordSlow(recipient)
 						notice = formatMailCheckDegradedNotice()
 					}
 					_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", notice)
 					return 0
 				}
+				mailCheckBackoffReset(recipient)
 			} else if !api.ShouldFallbackForRead(err) {
 				logRoute(stderr, cmdName, "api", "error")
 				if api.IsStoreSlowError(err) {
+					mailCheckBackoffRecordSlow(recipient)
 					_ = writeProviderHookContextForEvent(stdout, hookFormat, "UserPromptSubmit", formatMailCheckDegradedNotice())
 				}
 				return 0
