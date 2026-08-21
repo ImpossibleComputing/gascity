@@ -70,7 +70,8 @@ func TestSweepStaleIsolatedSupervisorLaunchdRemovesOnlyStale(t *testing.T) {
 	liveHome := t.TempDir()
 
 	// The default (unsuffixed) agent must never be swept, even when its
-	// GC_HOME is gone.
+	// GC_HOME is gone. If stale isolated services are removed, the sweep
+	// may repair this plist in place to restore the canonical supervisor.
 	defaultPath := writeStaleSweepLaunchdPlist(t, launchAgents, defaultSupervisorLaunchdLabel, staleHome)
 	// The current process's own suffixed agent must never be swept.
 	ownPath := writeStaleSweepLaunchdPlist(t, launchAgents, supervisorLaunchdLabel(), ownGCHome)
@@ -97,6 +98,14 @@ func TestSweepStaleIsolatedSupervisorLaunchdRemovesOnlyStale(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { supervisorLaunchctlRun = oldRun })
+	oldBuild := supervisorBuildServiceDataForRepair
+	supervisorBuildServiceDataForRepair = func() (*supervisorServiceData, error) {
+		return &supervisorServiceData{
+			GCPath: "/tmp/gc-canonical",
+			Path:   "/usr/bin:/bin",
+		}, nil
+	}
+	t.Cleanup(func() { supervisorBuildServiceDataForRepair = oldBuild })
 
 	var stderr bytes.Buffer
 	sweepStaleIsolatedSupervisorServices(&stderr)
@@ -106,7 +115,21 @@ func TestSweepStaleIsolatedSupervisorLaunchdRemovesOnlyStale(t *testing.T) {
 	}
 	for _, keep := range []string{defaultPath, ownPath, livePath, junkPath, otherPath} {
 		if _, err := os.Stat(keep); err != nil {
-			t.Fatalf("plist %q should be untouched: %v", keep, err)
+			t.Fatalf("plist %q should still exist: %v", keep, err)
+		}
+	}
+	defaultContent, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<string>" + defaultSupervisorLaunchdLabel + "</string>",
+		"<key>RunAtLoad</key>",
+		"<key>KeepAlive</key>",
+		filepath.Join(homeDir, ".gc"),
+	} {
+		if !strings.Contains(string(defaultContent), want) {
+			t.Fatalf("default plist after repair missing %q:\n%s", want, string(defaultContent))
 		}
 	}
 
@@ -117,13 +140,68 @@ func TestSweepStaleIsolatedSupervisorLaunchdRemovesOnlyStale(t *testing.T) {
 			t.Fatalf("launchctl calls = %v, want %q", calls, want)
 		}
 	}
-	for _, path := range []string{defaultPath, ownPath, livePath, junkPath, otherPath} {
+	canonicalTarget := "gui/" + strconv.Itoa(os.Getuid()) + "/" + defaultSupervisorLaunchdLabel
+	for _, want := range []string{
+		"load " + defaultPath,
+		"enable " + canonicalTarget,
+		"kickstart -p " + canonicalTarget,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("launchctl calls = %v, want canonical repair call %q", calls, want)
+		}
+	}
+	for _, forbidden := range []string{
+		"unload " + defaultPath,
+		"disable " + canonicalTarget,
+	} {
+		for _, call := range calls {
+			if call == forbidden {
+				t.Fatalf("launchctl calls %v must not include %q", calls, forbidden)
+			}
+		}
+	}
+	for _, path := range []string{ownPath, livePath, junkPath, otherPath} {
 		if strings.Contains(joined, path) {
 			t.Fatalf("launchctl calls %v must not reference %q", calls, path)
 		}
 	}
 	if !strings.Contains(stderr.String(), staleLabel) {
 		t.Fatalf("stderr = %q, want removal notice for %q", stderr.String(), staleLabel)
+	}
+}
+
+func TestSweepStaleIsolatedSupervisorLaunchdNoStaleMakesNoLaunchctlCalls(t *testing.T) {
+	homeDir := t.TempDir()
+	ownGCHome := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("GC_HOME", ownGCHome)
+	oldGOOS := supervisorRuntimeGOOS
+	supervisorRuntimeGOOS = "darwin"
+	t.Cleanup(func() { supervisorRuntimeGOOS = oldGOOS })
+
+	launchAgents := filepath.Join(homeDir, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	liveHome := t.TempDir()
+	writeStaleSweepLaunchdPlist(t, launchAgents, defaultSupervisorLaunchdLabel+".live-abcd1234", liveHome)
+
+	oldRun := supervisorLaunchctlRun
+	var calls []string
+	supervisorLaunchctlRun = func(args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	t.Cleanup(func() { supervisorLaunchctlRun = oldRun })
+
+	var stderr bytes.Buffer
+	sweepStaleIsolatedSupervisorServices(&stderr)
+
+	if len(calls) != 0 {
+		t.Fatalf("launchctl calls = %v, want none when nothing is stale", calls)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty when nothing is stale", stderr.String())
 	}
 }
 

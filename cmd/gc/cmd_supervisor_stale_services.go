@@ -29,6 +29,8 @@ import (
 // supervisorSystemdServiceName.
 const supervisorSystemdUnitPrefix = "gascity-supervisor-"
 
+var supervisorBuildServiceDataForRepair = buildSupervisorServiceData
+
 // sweepStaleIsolatedSupervisorServices removes leaked isolated-home
 // supervisor services for the active platform. Failures are warnings
 // on stderr; the sweep never blocks the caller.
@@ -55,7 +57,11 @@ func supervisorServiceGCHomeMissing(gcHome string) bool {
 
 // sweepStaleIsolatedSupervisorLaunchd boots out and removes suffixed
 // com.gascity.supervisor.* launch agents whose GC_HOME no longer
-// exists.
+// exists. If it mutates any leaked launchd service, it finishes by
+// re-writing and re-starting the canonical unsuffixed user LaunchAgent.
+// That final repair is intentionally one-way: it never unloads or
+// disables com.gascity.supervisor, because this sweep can run from the
+// only live operator able to recover the machine supervisor.
 func sweepStaleIsolatedSupervisorLaunchd(stderr io.Writer) {
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
@@ -68,6 +74,7 @@ func sweepStaleIsolatedSupervisorLaunchd(stderr io.Writer) {
 		return
 	}
 	ownPath := supervisorLaunchdPlistPath()
+	mutated := false
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -92,6 +99,7 @@ func sweepStaleIsolatedSupervisorLaunchd(stderr io.Writer) {
 		if !ok || !supervisorServiceGCHomeMissing(gcHome) {
 			continue
 		}
+		mutated = true
 		_ = supervisorLaunchctlRun("unload", path)
 		_ = supervisorLaunchctlRun("disable", supervisorLaunchdServiceTarget(label))
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -100,6 +108,89 @@ func sweepStaleIsolatedSupervisorLaunchd(stderr io.Writer) {
 		}
 		fmt.Fprintf(stderr, "gc supervisor: removed stale isolated supervisor service %s (GC_HOME %s no longer exists)\n", label, gcHome) //nolint:errcheck // best-effort stderr
 	}
+	if mutated {
+		repairCanonicalSupervisorLaunchdAfterStaleSweep(home, stderr)
+	}
+}
+
+func repairCanonicalSupervisorLaunchdAfterStaleSweep(home string, stderr io.Writer) {
+	data, err := supervisorBuildServiceDataForRepair()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: re-bootstrap canonical launchd supervisor after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	canonicalHome := filepath.Join(home, ".gc")
+	data.GCHome = canonicalHome
+	data.LogPath = filepath.Join(canonicalHome, "supervisor.log")
+	data.LaunchdLabel = defaultSupervisorLaunchdLabel
+	data.LaunchdSystem = false
+	data.SafeName = sanitizeServiceName(filepath.Base(canonicalHome))
+
+	content, err := renderSupervisorTemplate(supervisorLaunchdTemplate, data)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: rendering canonical launchd supervisor plist after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	if !supervisorLaunchdPlistHasRunAtLoadAndKeepAlive(content) {
+		fmt.Fprintf(stderr, "gc supervisor: warning: canonical launchd supervisor plist missing RunAtLoad/KeepAlive after render; not re-bootstrapping\n") //nolint:errcheck // best-effort stderr
+		return
+	}
+	path := filepath.Join(home, "Library", "LaunchAgents", defaultSupervisorLaunchdLabel+".plist")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: creating canonical launchd supervisor dir after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	if err := ensureSupervisorServiceLogDir(data.LogPath); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: creating canonical launchd supervisor log dir after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	if err := writeSupervisorServiceFile(path, []byte(content)); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: writing canonical launchd supervisor plist after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	if err := ensureSupervisorLaunchdLoadedAndStartedNoStop(path, defaultSupervisorLaunchdLabel, false); err != nil {
+		fmt.Fprintf(stderr, "gc supervisor: warning: re-bootstrap canonical launchd supervisor after stale sweep: %v\n", err) //nolint:errcheck // best-effort stderr
+		return
+	}
+	fmt.Fprintf(stderr, "gc supervisor: re-bootstrapped canonical launchd supervisor %s after stale isolated supervisor sweep\n", defaultSupervisorLaunchdLabel) //nolint:errcheck // best-effort stderr
+}
+
+func supervisorLaunchdPlistHasRunAtLoadAndKeepAlive(content string) bool {
+	return strings.Contains(content, "<key>RunAtLoad</key>\n    <true/>") &&
+		strings.Contains(content, "<key>KeepAlive</key>\n    <dict>")
+}
+
+func ensureSupervisorLaunchdLoadedAndStartedNoStop(path, label string, system bool) error {
+	target := supervisorLaunchdServiceTargetForDomain(label, system)
+	domain := supervisorLaunchdServiceDomainForDomain(system)
+	loadErr := supervisorLaunchctlRun("load", path)
+	enableErr := supervisorLaunchctlRun("enable", target)
+	kickstartErr := supervisorLaunchctlRun("kickstart", "-p", target)
+	if enableErr == nil && kickstartErr == nil {
+		return nil
+	}
+	bootstrapErr := supervisorLaunchctlRun("bootstrap", domain, path)
+	if bootstrapErr == nil {
+		enableErr = supervisorLaunchctlRun("enable", target)
+		kickstartErr = supervisorLaunchctlRun("kickstart", "-p", target)
+		if enableErr == nil && kickstartErr == nil {
+			return nil
+		}
+	}
+	var errs []error
+	if loadErr != nil {
+		errs = append(errs, fmt.Errorf("load %s: %w", path, loadErr))
+	}
+	if enableErr != nil {
+		errs = append(errs, fmt.Errorf("enable %s: %w", target, enableErr))
+	}
+	if kickstartErr != nil {
+		errs = append(errs, fmt.Errorf("kickstart -p %s: %w", target, kickstartErr))
+	}
+	if bootstrapErr != nil {
+		errs = append(errs, fmt.Errorf("bootstrap %s %s: %w", domain, path, bootstrapErr))
+	}
+	return fmt.Errorf("ensure launchd service %s loaded and started: %w", target, errors.Join(errs...))
 }
 
 // sweepStaleIsolatedSupervisorSystemd stops, disables, and removes
