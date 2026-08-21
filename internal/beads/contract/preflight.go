@@ -73,8 +73,14 @@ type PreflightResult struct {
 	Checks              []PreflightCheckResult `json:"checks"`
 	RepairSteps         []PreflightRepairStep  `json:"repair_steps,omitempty"`
 	NativeStoreEligible bool                   `json:"native_store_eligible"`
-	Fallback            PreflightFallback      `json:"fallback,omitempty"`
-	FallbackReason      string                 `json:"fallback_reason,omitempty"`
+	// NativeEligibleViaServerVerify records that the verdict was upgraded from
+	// DEGRADED to ELIGIBLE because a direct probe confirmed the Dolt backend is
+	// reachable in SERVER MODE while bd context was unreachable and identity_match
+	// could not confirm project_id — project identity is then re-verified
+	// fail-closed by beadslib at native-open time.
+	NativeEligibleViaServerVerify bool              `json:"native_eligible_via_server_verify,omitempty"`
+	Fallback                      PreflightFallback `json:"fallback,omitempty"`
+	FallbackReason                string            `json:"fallback_reason,omitempty"`
 }
 
 // NewPreflightResult returns result with all nested diagnostic details redacted.
